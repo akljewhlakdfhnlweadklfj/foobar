@@ -54,7 +54,7 @@ HIDE_CSS = """
   /* Snapshot: stories and watched phrases only. */
   .scrape button, #sub_tabs a[href^="#settings/"]:not([href="#settings/phrases"]) { display: none !important; }
   /* Artifact pages can't load images from other sites. */
-  .thumb { display: none !important; }
+  .thumb, .vthumb { display: none !important; }
   .snapnote { font-size: 12px; color: var(--muted); }
 """
 
