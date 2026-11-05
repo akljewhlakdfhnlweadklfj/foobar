@@ -1,0 +1,30 @@
+# Seed feeds: major video game news outlets.
+# Load with:  python3 app.py --import feeds.txt
+#
+# NOTE: these were meant to mirror the publications https://www.overworld.vg/ aggregates,
+# but that site couldn't be reached while building this, so the list below is NOT verified
+# against Overworld's actual sources. The RSS URLs are the publications' standard feed
+# endpoints and also weren't live-tested. Any that fail show a red dot and the error in the UI.
+
+https://www.ign.com/rss/articles/feed                 # IGN
+https://www.gamespot.com/feeds/mashup/                # GameSpot
+https://kotaku.com/rss                                # Kotaku
+https://www.polygon.com/rss/index.xml                 # Polygon
+https://www.eurogamer.net/feed                        # Eurogamer
+https://www.videogameschronicle.com/feed/             # VGC
+https://www.pcgamer.com/rss/                          # PC Gamer
+https://www.rockpapershotgun.com/feed                 # Rock Paper Shotgun
+https://www.gamesradar.com/rss/                       # GamesRadar+
+https://www.theverge.com/rss/games/index.xml          # The Verge (Games)
+https://www.engadget.com/gaming/rss.xml               # Engadget (Gaming)
+https://www.gamedeveloper.com/rss.xml                 # Game Developer
+https://www.gamesindustry.biz/feed                    # GamesIndustry.biz
+https://www.destructoid.com/feed/                     # Destructoid
+https://www.gematsu.com/feed                          # Gematsu
+https://www.siliconera.com/feed/                      # Siliconera
+https://www.nintendolife.com/feeds/latest             # Nintendo Life
+https://www.pushsquare.com/feeds/latest               # Push Square
+https://www.purexbox.com/feeds/latest                 # Pure Xbox
+https://insider-gaming.com/feed/                      # Insider Gaming
+https://aftermath.site/feed                           # Aftermath
+https://www.giantbomb.com/feeds/news/                 # Giant Bomb

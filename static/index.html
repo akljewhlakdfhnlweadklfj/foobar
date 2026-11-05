@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Consensus News</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1c1c1e; --muted: #6b6b70; --border: #e3e1dc;
+    --accent: #b4441f; --accent-soft: #f6e6df; --ok: #2f7d4f; --err: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --panel: #1d1d20; --text: #ececee; --muted: #9a9aa2; --border: #2e2e33;
+      --accent: #ee7a50; --accent-soft: #3a241c; --ok: #6cc290; --err: #f2867d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+           padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
+           position: sticky; top: 0; z-index: 2; }
+  header h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
+  header h1 span { color: var(--accent); }
+  .layout { display: grid; grid-template-columns: 340px 1fr; gap: 20px; max-width: 1200px;
+            margin: 20px auto; padding: 0 16px; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } main { order: -1; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .panel h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  aside { align-self: start; display: flex; flex-direction: column; gap: 20px; }
+  form.add { display: flex; gap: 8px; }
+  input[type=url], input[type=number], select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font: inherit; }
+  button { padding: 8px 14px; border: 0; border-radius: 6px; background: var(--accent); color: #fff;
+           font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); font-weight: 500; }
+  button:disabled { opacity: .5; cursor: default; }
+  .msg { font-size: 13px; margin-top: 8px; min-height: 1em; }
+  .msg.err { color: var(--err); } .msg.ok { color: var(--ok); }
+  ul.feeds { list-style: none; margin: 12px 0 0; padding: 0; }
+  ul.feeds li { display: flex; align-items: flex-start; gap: 8px; padding: 9px 0; border-top: 1px solid var(--border); }
+  ul.feeds .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 7px; flex: none; background: var(--ok); }
+  ul.feeds .dot.err { background: var(--err); } ul.feeds .dot.pending { background: var(--muted); }
+  ul.feeds .info { flex: 1; min-width: 0; }
+  ul.feeds .name { font-weight: 600; overflow-wrap: anywhere; }
+  ul.feeds .sub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  ul.feeds .sub.err { color: var(--err); }
+  ul.feeds button { padding: 2px 8px; font-size: 18px; line-height: 1; }
+  .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .controls label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+  .controls .full { grid-column: 1 / -1; }
+  .controls output { color: var(--text); font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .summary { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .story { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .story-head { display: flex; gap: 12px; align-items: flex-start; }
+  .badge { flex: none; min-width: 44px; text-align: center; padding: 4px 8px; border-radius: 6px;
+           background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13px; }
+  .badge small { display: block; font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+  .story h3 { margin: 0; font-size: 17px; line-height: 1.35; }
+  .story .when { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+  .sources { list-style: none; padding: 0; margin: 8px 0 0; }
+  .sources li { padding: 6px 0; border-top: 1px dashed var(--border); font-size: 14px; }
+  .sources .src { font-size: 12px; font-weight: 600; color: var(--accent); }
+  .sources a { color: var(--text); text-decoration: none; }
+  .sources a:hover { text-decoration: underline; }
+  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Consensus <span>News</span></h1>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span id="status" class="summary" style="margin:0"></span>
+    <button id="refresh" class="ghost">Refresh feeds</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside>
+    <section class="panel">
+      <h2>Filter</h2>
+      <div class="controls">
+        <label>Reported by at least
+          <input type="number" id="min_feeds" min="1" value="2">
+        </label>
+        <label>Time window
+          <select id="hours">
+            <option value="6">6 hours</option>
+            <option value="12">12 hours</option>
+            <option value="24">24 hours</option>
+            <option value="48" selected>48 hours</option>
+            <option value="72">3 days</option>
+            <option value="168">7 days</option>
+          </select>
+        </label>
+        <label class="full">Title match strictness: <output id="threshold_out"></output>
+          <input type="range" id="threshold" min="0.15" max="0.9" step="0.05" value="0.4">
+          <span style="font-size:11px">Lower = groups loosely-related headlines; higher = near-identical only.</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Feeds (<span id="feed_count">0</span>)</h2>
+      <form class="add" id="add_form">
+        <input type="url" id="feed_url" placeholder="https://example.com/rss.xml" required>
+        <button type="submit" id="add_btn">Add</button>
+      </form>
+      <div class="msg" id="add_msg"></div>
+      <ul class="feeds" id="feeds"></ul>
+    </section>
+  </aside>
+
+  <main>
+    <p class="summary" id="summary"></p>
+    <div id="stories"></div>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : "#";
+
+function ago(ts) {
+  if (!ts) return "never";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+
+// Persist filter settings.
+const SETTINGS = ["min_feeds", "hours", "threshold"];
+try {
+  const saved = JSON.parse(localStorage.getItem("news-settings") || "{}");
+  SETTINGS.forEach((k) => { if (saved[k] != null) $(k).value = saved[k]; });
+} catch {}
+function saveSettings() {
+  try { localStorage.setItem("news-settings", JSON.stringify(Object.fromEntries(SETTINGS.map((k) => [k, $(k).value])))); } catch {}
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+let feedCount = 0;
+let wasRefreshing = false;
+
+async function loadFeeds() {
+  const { feeds, refreshing, last_run } = await api("/api/feeds");
+  feedCount = feeds.length;
+  $("feed_count").textContent = feeds.length;
+  $("status").textContent = refreshing ? "Refreshing…" : (last_run ? "Updated " + ago(last_run) : "");
+  $("refresh").disabled = refreshing;
+  $("feeds").innerHTML = feeds.map((f) => {
+    const state = f.last_error ? "err" : (f.last_fetched ? "" : "pending");
+    const sub = f.last_error
+      ? `<div class="sub err">${esc(f.last_error)}</div>`
+      : `<div class="sub">${f.item_count} items · fetched ${ago(f.last_fetched)}</div>`;
+    return `<li>
+      <span class="dot ${state}"></span>
+      <div class="info"><div class="name">${esc(f.title || f.url)}</div>
+        <div class="sub">${esc(f.url)}</div>${sub}</div>
+      <button class="ghost" title="Remove feed" data-del="${f.id}">×</button>
+    </li>`;
+  }).join("") || `<li class="sub">No feeds yet — add a few RSS/Atom URLs above.</li>`;
+  if (wasRefreshing && !refreshing) loadStories();
+  wasRefreshing = refreshing;
+}
+
+async function loadStories() {
+  saveSettings();
+  $("threshold_out").textContent = Number($("threshold").value).toFixed(2);
+  const params = new URLSearchParams(Object.fromEntries(SETTINGS.map((k) => [k, $(k).value])));
+  let data;
+  try { data = await api("/api/stories?" + params); }
+  catch (e) { $("summary").textContent = "Error: " + e.message; return; }
+  const n = $("min_feeds").value;
+  $("summary").textContent = `${data.stories.length} stories reported by ≥ ${n} feed${n == 1 ? "" : "s"} · ${data.items_considered} headlines scanned`;
+  if (!data.stories.length) {
+    $("stories").innerHTML = `<div class="empty">${
+      feedCount < Number(n)
+        ? `You have ${feedCount} feed${feedCount == 1 ? "" : "s"}; add at least ${n} to see stories reported by ${n} sources.`
+        : "No stories meet the threshold yet. Try lowering “reported by”, widening the time window, or loosening match strictness."
+    }</div>`;
+    return;
+  }
+  $("stories").innerHTML = data.stories.map((s) => `
+    <article class="story">
+      <div class="story-head">
+        <div class="badge">${s.coverage}<small>feeds</small></div>
+        <div>
+          <h3>${esc(s.title)}</h3>
+          <div class="when">First seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</div>
+        </div>
+      </div>
+      <details>
+        <summary>${s.sources.map((x) => esc(x.feed)).join(" · ")}</summary>
+        <ul class="sources">${s.sources.map((x) => `
+          <li><div class="src">${esc(x.feed)} · ${ago(x.published)}</div>
+            <a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener noreferrer">${esc(x.title)}</a></li>`).join("")}
+        </ul>
+      </details>
+    </article>`).join("");
+}
+
+$("add_form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const url = $("feed_url").value.trim();
+  $("add_btn").disabled = true;
+  $("add_msg").className = "msg"; $("add_msg").textContent = "Checking feed…";
+  try {
+    const { feed } = await api("/api/feeds", { method: "POST", body: JSON.stringify({ url }) });
+    $("add_msg").className = "msg ok";
+    $("add_msg").textContent = `Added “${feed.title || feed.url}” (${feed.item_count} items).`;
+    $("feed_url").value = "";
+    await loadFeeds(); await loadStories();
+  } catch (err) {
+    $("add_msg").className = "msg err"; $("add_msg").textContent = err.message;
+  } finally { $("add_btn").disabled = false; }
+});
+
+$("feeds").addEventListener("click", async (e) => {
+  const id = e.target.dataset.del;
+  if (!id || !confirm("Remove this feed and its stored headlines?")) return;
+  await api("/api/feeds/" + id, { method: "DELETE" });
+  await loadFeeds(); await loadStories();
+});
+
+$("refresh").addEventListener("click", async () => {
+  await api("/api/refresh", { method: "POST" });
+  wasRefreshing = true; $("refresh").disabled = true; $("status").textContent = "Refreshing…";
+});
+
+let debounce;
+SETTINGS.forEach((k) => $(k).addEventListener("input", () => { clearTimeout(debounce); debounce = setTimeout(loadStories, 200); }));
+
+loadFeeds().then(loadStories);
+setInterval(loadFeeds, 5000);
+setInterval(loadStories, 60000);
+</script>
+</body>
+</html>
