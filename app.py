@@ -55,6 +55,66 @@ VERTICALS = [
 VERTICALS_BY_KEY = {v.key: v for v in VERTICALS}
 
 
+# --- per-vertical settings -------------------------------------------------------------------
+
+# name: (type, min, max). Stored per vertical (store.settings); query parameters override them.
+SETTING_SPECS = {
+    "min_feeds": (int, 1, 100),
+    "hours": (float, 1, 24 * RETENTION_DAYS),
+    "threshold": (float, 0.02, 1.0),
+    "min_score": (float, 0, 10_000),
+    "min_weight": (float, 0, MAX_WEIGHT),
+    "only_watched": (bool, None, None),
+    "watched_any": (bool, None, None),
+    "require_all": (bool, None, None),
+}
+
+
+def default_settings(v: Vertical) -> dict:
+    return {"min_feeds": v.default_min_feeds, "hours": 48.0, "threshold": matching.DEFAULT_THRESHOLD,
+            "min_score": 0.0, "min_weight": 0.0, "only_watched": False, "watched_any": False, "require_all": False}
+
+
+def coerce_setting(name: str, value, strict: bool = True):
+    """Validate one setting. strict=True (JSON bodies) rejects wrong types; strict=False (query
+    strings) parses text and clamps numbers into range."""
+    typ, lo, hi = SETTING_SPECS[name]
+    if typ is bool:
+        if isinstance(value, bool):
+            return value
+        if not strict and isinstance(value, str) and value.lower() in ("1", "true", "0", "false"):
+            return value.lower() in ("1", "true")
+        raise HTTPError(400, f"{name} must be true or false")
+    if isinstance(value, bool) or (strict and not isinstance(value, (int, float))):
+        raise HTTPError(400, f"{name} must be a number")
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        raise HTTPError(400, f"{name} must be a number")
+    if num != num:
+        raise HTTPError(400, f"{name} must be a number")
+    if not lo <= num <= hi:
+        if strict:
+            raise HTTPError(400, f"{name} must be between {lo:g} and {hi:g}")
+        num = min(hi, max(lo, num))
+    return int(num) if typ is int else num
+
+
+def effective_settings(v: Vertical, store: Store, overrides: dict | None = None) -> dict:
+    """Defaults, then the vertical's saved settings, then any query-string overrides."""
+    out = default_settings(v)
+    for k, val in store.get_settings().items():
+        if k in SETTING_SPECS:
+            try:
+                out[k] = coerce_setting(k, val)
+            except HTTPError:
+                pass  # ignore a bad stored value
+    for k, val in (overrides or {}).items():
+        if k in SETTING_SPECS:
+            out[k] = coerce_setting(k, val, strict=False)
+    return out
+
+
 # --- stories ---------------------------------------------------------------------------------
 
 def phrase_regex(phrase: str) -> re.Pattern:
@@ -268,6 +328,9 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             if self.command == "POST" and ctype != "application/json":
                 raise HTTPError(415, "Send changes as Content-Type: application/json")
 
+        def _vertical_key(self) -> str:
+            return urlparse(self.path).path.strip("/").split("/")[1]
+
         def _route(self) -> tuple[list[str], dict, Store | None]:
             """/api/<vertical>/<rest...> -> (rest parts, query, store)."""
             u = urlparse(self.path)
@@ -334,22 +397,16 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                             "last_run": last.get("finished_at"), "scrape": st})
             elif store and rest == ["phrases"]:
                 self._json({"phrases": store.list_phrases()})
+            elif store and rest == ["settings"]:
+                v = VERTICALS_BY_KEY[self._vertical_key()]
+                self._json({"settings": effective_settings(v, store), "defaults": default_settings(v)})
             elif store and rest == ["stories"]:
-                try:
-                    min_feeds = max(1, int(q.get("min_feeds", 2)))
-                    hours = min(24 * RETENTION_DAYS, max(1.0, float(q.get("hours", 48))))
-                    threshold = min(1.0, max(0.02, float(q.get("threshold", matching.DEFAULT_THRESHOLD))))
-                    min_score = max(0.0, float(q.get("min_score", 0) or 0))
-                    min_weight = max(0.0, float(q.get("min_weight", 0) or 0))
-                except ValueError:
-                    raise HTTPError(400, "Invalid parameters")
-                if any(x != x for x in (hours, threshold, min_score, min_weight)):
-                    raise HTTPError(400, "Invalid parameters")
-                self._json(build_stories(store, min_feeds, hours, threshold, min_score,
-                                         only_watched=q.get("only_watched") in ("1", "true"),
-                                         watched_any_coverage=q.get("watched_any") in ("1", "true"),
-                                         require_all=q.get("require_all") in ("1", "true"),
-                                         min_weight=min_weight))
+                v = VERTICALS_BY_KEY[self._vertical_key()]
+                cfg = effective_settings(v, store, {k: val for k, val in q.items() if val != ""})
+                res = build_stories(store, cfg["min_feeds"], cfg["hours"], cfg["threshold"], cfg["min_score"],
+                                    only_watched=cfg["only_watched"], watched_any_coverage=cfg["watched_any"],
+                                    require_all=cfg["require_all"], min_weight=cfg["min_weight"])
+                self._json({**res, "settings": cfg})
             else:
                 raise HTTPError(404, "Not found")
 
@@ -426,6 +483,16 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             /api/<v>/phrases/<id> {"bonus": 0..100}                    - change a phrase's bonus."""
             rest, _, store = self._route()
             body = self._body()
+            if store and rest == ["settings"]:
+                if body.get("reset") is True:
+                    store.reset_settings()
+                else:
+                    unknown = [k for k in body if k not in SETTING_SPECS]
+                    if unknown:
+                        raise HTTPError(400, f"unknown setting(s): {', '.join(unknown)}")
+                    store.set_settings({k: coerce_setting(k, val) for k, val in body.items()})
+                v = VERTICALS_BY_KEY[self._vertical_key()]
+                return self._json({"settings": effective_settings(v, store), "defaults": default_settings(v)})
             if store and len(rest) == 2 and rest[0] == "phrases" and rest[1].isdigit():
                 bonus = self._number(body.get("bonus"), "bonus", 0, MAX_BONUS)
                 if store.update_phrase(int(rest[1]), bonus):

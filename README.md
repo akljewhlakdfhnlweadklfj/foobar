@@ -48,20 +48,27 @@ unless you trust everyone with the link.
 
 ## Using it
 
-- **Tabs**: one per vertical; each remembers its own filter settings.
-- **Reported by at least N**: the core filter, counting distinct outlets.
-- **Only count outlets weighted at least**: outlets below this weight still help group headlines and
-  are listed (greyed out, "doesn't count"), but don't count toward "reported by" or the score.
-- **Minimum prestige score**: optional; stories are ranked by score (see weights below).
-- **Required outlets**: tick "Required" on outlets to only show stories that at least one of them
-  reports (or all of them: choose in the Filter panel). Applies to watched stories too.
-- **Time window** and **match strictness**: which headlines are compared, and how similar they must be.
-- **Watched phrases**: add a phrase and a bonus (0–100). Stories mentioning it in any outlet's title or
-  description are outlined, the phrase is highlighted, and the bonus is added to the score. Options:
-  only show watched stories, and show watched stories even if fewer outlets report them.
-- **Outlets**: switch each on or off (off = left out of stories, still fetched), set its weight
-  (0–10), search the list, or turn all on/off. Add any RSS/Atom URL; remove with ×.
-- **Scraping** (top right): progress while a refresh or backfill runs, Stop, Resume, and Auto (schedule).
+The app has two sections (top left):
+
+**Stories**: the reader. Pick **All** (every vertical, each using its own settings, with a label on
+each story) or a single vertical, and sort by **Top** (score) or **Latest**. Each story shows how many
+outlets reported it, its score, the lead outlet's headline and description, and (expanded) every
+outlet's headline. Watched phrases are highlighted.
+
+**Settings**: one sub-tab per vertical, plus **Scraping**.
+- **Which stories show** (saved on the server, per vertical): reported by at least N outlets, time
+  window, only count outlets weighted at least X (lower-weighted outlets still help group headlines
+  but don't count toward N or the score), minimum score, match strictness, and, when outlets are
+  marked required, whether stories need any or all of them. Changes save automatically.
+- **Watched phrases**: add a phrase and a bonus (0–100). Stories mentioning it in any outlet's title
+  or description are outlined and highlighted, and the bonus is added to the score. Options: only
+  show watched stories; show watched stories even if fewer outlets report them.
+- **Outlets**: add feeds; switch each on or off (off = left out of stories, still fetched); mark
+  **Required** (stories must include it); set its weight (0–10); search; all on / all off; remove.
+- **Scraping**: progress of the current run, Refresh all, Stop, Resume, Backfill N days, and the
+  automatic schedule (on/off and interval).
+
+The header always shows scraping status, with a quick Refresh / Stop.
 
 ## Verticals and data
 
@@ -73,7 +80,7 @@ unless you trust everyone with the link.
 | General News | `feeds/news.txt` | `data/news.db` |
 
 - **Separate databases**: each tab is one self-contained SQLite file (feeds, headlines, watched
-  phrases). To migrate, copy the `.db` file and point `--data` at its folder. Older databases are
+  phrases, story settings). To migrate, copy the `.db` file and point `--data` at its folder. Older databases are
   upgraded in place (schema version in `PRAGMA user_version`; history in `store.py`).
 - **Seed lists** are read once, when a tab's database is created. Format: `URL  # Display name | w=N | notes`.
   After that:
@@ -254,7 +261,9 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 | POST | `/api/<v>/phrases` `{"phrase": "Switch 2", "bonus": 5}` | watch a phrase |
 | PATCH | `/api/<v>/phrases/{id}` `{"bonus": 10}` | change its bonus |
 | DELETE | `/api/<v>/phrases/{id}` | stop watching it |
-| GET | `/api/<v>/stories?min_feeds=4&hours=48&threshold=0.12&min_score=0&min_weight=0&only_watched=0&watched_any=0&require_all=0` | stories, ranked by score |
+| GET | `/api/<v>/settings` | the vertical's story settings (and defaults) |
+| PATCH | `/api/<v>/settings` `{"min_feeds": 3, "hours": 72}` / `{"reset": true}` | change / reset them |
+| GET | `/api/<v>/stories` | stories ranked by score, using the saved settings; any of `min_feeds`, `hours`, `threshold`, `min_score`, `min_weight`, `only_watched`, `watched_any`, `require_all` as query parameters override them |
 | | `/api/scrape/...` | see [Scraping](#scraping-api-scheduling-and-resume) |
 
 ## Code layout

@@ -39,33 +39,29 @@ SHIM = r"""
     if (u.pathname === "/api/verticals") return reply(SNAP.meta);
     if (u.pathname === "/api/scrape/status") return reply(SNAP.scrape);
     const v = parts[1];
-    if (parts[2] === "feeds") return reply({ feeds: SNAP.feeds[v], refreshing: false, last_run: SNAP.taken, scrape: SNAP.scrape });
+    if (parts[2] === "settings") return reply({ settings: SNAP.settings[v], defaults: SNAP.settings[v] });
+    if (parts[2] === "feeds") return reply({ feeds: SNAP.feeds[v], refreshing: false, scrape: SNAP.scrape });
     if (parts[2] === "phrases") return reply({ phrases: SNAP.phrases[v] });
     if (parts[2] === "stories") {
-      const q = u.searchParams;
-      const minFeeds = Math.max(2, parseInt(q.get("min_feeds"), 10) || 2);
-      const minScore = Math.max(0, parseFloat(q.get("min_score")) || 0);
-      const onlyWatched = q.get("only_watched") === "1", watchedAny = q.get("watched_any") === "1";
+      // The viewer asks without parameters: apply the vertical's saved settings, as the server does.
+      const c = SNAP.settings[v];
       const required = new Set(SNAP.feeds[v].filter((f) => f.required === 1).map((f) => f.name || f.title || f.url));
-      const requireAll = q.get("require_all") === "1";
-      const minWeight = Math.max(0, parseFloat(q.get("min_weight")) || 0);
-      const recount = (s) => {  // apply "only count outlets weighted at least" to the embedded story
-        const sources = s.sources.map((x) => ({ ...x, counted: x.weight >= minWeight }));
+      const stories = SNAP.stories[v].map((s) => {
+        const sources = s.sources.map((x) => ({ ...x, counted: x.weight >= c.min_weight }));
         const counted = sources.filter((x) => x.counted);
         const base = counted.reduce((t, x) => t + x.weight, 0);
         return { ...s, sources, coverage: counted.length, base_score: base, score: base + s.bonus, outlets: s.sources.length };
-      };
-      const stories = SNAP.stories[v].map(recount).filter((s) => s.coverage > 0).filter((s) => {
+      }).filter((s) => {
+        if (!s.coverage) return false;
         if (required.size) {
           const have = s.sources.filter((x) => required.has(x.feed)).length;
-          if (!have || (requireAll && have < required.size)) return false;
+          if (!have || (c.require_all && have < required.size)) return false;
         }
-        if (onlyWatched && !s.watched.length) return false;
-        if (s.watched.length && watchedAny) return true;
-        return s.coverage >= minFeeds && s.score >= minScore;
+        if (c.only_watched && !s.watched.length) return false;
+        if (s.watched.length && c.watched_any) return true;
+        return s.coverage >= c.min_feeds && s.score >= c.min_score;
       });
-      stories.sort((a, b) => b.score - a.score || b.coverage - a.coverage || b.latest - a.latest);
-      return reply({ stories, items_considered: SNAP.items[v] });
+      return reply({ stories, items_considered: SNAP.items[v], settings: c });
     }
     return reply({ error: "Not available in this snapshot" }, 404);
   };
@@ -74,11 +70,9 @@ SHIM = r"""
 """
 
 HIDE_CSS = """
-  /* Read-only snapshot: hide the controls that change data. */
-  #add_form, #watch_form, #refresh, #stop, .scrape .auto, .feed-tools button, ul.feeds .switch,
-  ul.feeds button[data-del], ul.phrases button, ul.feeds .req, #clear_required { display: none !important; }
-  input.weight, ul.phrases input { pointer-events: none; border-color: transparent; background: transparent; }
-  .snapnote { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  /* Read-only snapshot: just the Stories viewer. */
+  #top_tabs, .scrape button { display: none !important; }
+  .snapnote { font-size: 12px; color: var(--muted); }
 """
 
 
@@ -93,13 +87,17 @@ def build(data_dir: Path, out: Path) -> dict:
                  "max_weight": app.MAX_WEIGHT, "default_bonus": app.DEFAULT_BONUS, "max_bonus": app.MAX_BONUS},
         "scrape": {"state": "idle", "run": None, "resumable": False, "auto": False, "interval_minutes": 0,
                    "last_run": {"finished_at": now}},
-        "feeds": {}, "phrases": {}, "stories": {}, "items": {},
+        "feeds": {}, "phrases": {}, "stories": {}, "items": {}, "settings": {},
     }
     for v in app.VERTICALS:
         st = stores[v.key]
         snap["feeds"][v.key] = [{k: f.get(k) for k in FEED_FIELDS} for f in st.list_feeds()]
         snap["phrases"][v.key] = st.list_phrases()
-        res = app.build_stories(st, 2, 48, matching.DEFAULT_THRESHOLD, watched_any_coverage=True)
+        cfg = app.effective_settings(v, st)
+        snap["settings"][v.key] = cfg
+        # Stories the viewer may show (the shim applies the saved filters); single-outlet stories are only
+        # kept when they're watched or the vertical's minimum is 1, to keep the page small.
+        res = app.build_stories(st, min(2, cfg["min_feeds"]), cfg["hours"], cfg["threshold"], 0, watched_any_coverage=True)
         snap["stories"][v.key] = res["stories"]
         snap["items"][v.key] = res["items_considered"]
 
@@ -118,14 +116,12 @@ def build(data_dir: Path, out: Path) -> dict:
                             "  @media (prefers-color-scheme: dark) {\n    :root:not([data-theme=\"light\"]) {" + dark
                             + " color-scheme: dark; }\n  }\n  :root[data-theme=\"dark\"] {" + dark + " color-scheme: dark; }\n")
     html = html.replace("</style>", HIDE_CSS + "</style>", 1)
-    html = html.replace('id="hours">', 'id="hours" disabled title="Fixed at 48 hours in this snapshot">', 1)
-    html = re.sub(r'(<input type="range" id="threshold"[^>]*?)>', r'\1 disabled title="Fixed in this snapshot">', html, count=1)
     taken = dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime("%b %-d, %Y %H:%M UTC")
-    html = html.replace('<div class="msg" id="add_msg"></div>',
-                        f'<p class="snapnote">Snapshot taken {taken}. Read-only.</p>\n      <div class="msg" id="add_msg"></div>', 1)
-    html = html.replace('<div class="msg" id="watch_msg"></div>',
-                        '<p class="snapnote">Phrases are added in the running app; this snapshot shows any that were '
-                        'watched when it was taken.</p>\n      <div class="msg" id="watch_msg"></div>', 1)
+    html = html.replace('<span id="status" aria-live="polite"></span>',
+                        f'<span class="snapnote">Read-only snapshot · {taken}</span><span id="status" hidden></span>', 1)
+    # Always open on the Stories view (settings aren't editable here).
+    html = html.replace('if (!location.hash) history.replaceState(null, "", "#stories/all");',
+                        'if (!location.hash.startsWith("#stories")) history.replaceState(null, "", "#stories/all");', 1)
     data = json.dumps(snap, separators=(",", ":")).replace("</", "<\\/")
     html = html.replace("<script>\nconst $ =",
                         f'<script type="application/json" id="snapshot-data">{data}</script>\n{SHIM}\n<script>\nconst $ =', 1)

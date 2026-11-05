@@ -6,9 +6,9 @@
   `report_preview_port` was tried; the user's app said "preview isn't available in this session"
   (it only works for local/SSH sessions). Don't offer it again from a cloud session.
 - **What works: a static snapshot published as a claude.ai Artifact.**
-  `tools/build_snapshot.py <data dir> <out.html>` renders the real UI with the current stories
-  embedded (tabs and the min-feeds / min-score filters work; the time window, match strictness and
-  feed editing are fixed or disabled). Publish it with the Artifact tool. To update the existing
+  `tools/build_snapshot.py <data dir> <out.html>` renders the real UI's Stories view (All + each
+  vertical, sort) with the current stories embedded and each vertical's saved settings applied;
+  the Settings section is hidden. Publish it with the Artifact tool. To update the existing
   snapshot, publish the same file path again (or pass the artifact's URL) so the link stays the same:
   https://claude.ai/artifact/WM6AWSgespPKpaW8r2JAcd
   Before building, refresh the data (a backfill into a scratch data dir works when sites are blocked).

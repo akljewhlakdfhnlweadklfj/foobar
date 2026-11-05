@@ -503,6 +503,31 @@ class PhraseTests(HttpTestCase):
         self.assertEqual(self.call("GET", "/api/games/phrases")[1]["phrases"], [])
 
 
+class SettingsApiTests(HttpTestCase):
+    def setUp(self):
+        self.store = app.Store(Path(tempfile.mkdtemp()) / "games.db")
+        now = time.time()
+        for n in (1, 2, 3):
+            fid = self.store.add_feed(f"https://{n}.example/rss", f"Outlet {n}", 3)
+            self.store.save_fetch(fid, feeds.ParsedFeed("x", [
+                feeds.ParsedEntry(f"a{n}", f"Valve announces Steam Machine hardware {n}", "", now)]), None)
+        self.start_server({"games": self.store})
+
+    def test_defaults_save_validate_reset(self):
+        code, d = self.call("GET", "/api/games/settings")
+        self.assertEqual((code, d["settings"]["min_feeds"], d["defaults"]["min_feeds"]), (200, 4, 4))
+        self.assertEqual(self.call("GET", "/api/games/stories")[1]["stories"], [])          # 3 outlets < 4
+        code, d = self.call("PATCH", "/api/games/settings", {"min_feeds": 3, "only_watched": False})
+        self.assertEqual((code, d["settings"]["min_feeds"]), (200, 3))
+        res = self.call("GET", "/api/games/stories")[1]
+        self.assertEqual((len(res["stories"]), res["settings"]["min_feeds"]), (1, 3))       # saved value used
+        self.assertEqual(len(self.call("GET", "/api/games/stories?min_feeds=9")[1]["stories"]), 0)  # query wins
+        for bad in ({"min_feeds": 0}, {"min_feeds": "3"}, {"threshold": 2}, {"only_watched": 1}, {"nope": 1}):
+            self.assertEqual(self.call("PATCH", "/api/games/settings", bad)[0], 400, bad)
+        self.assertEqual(self.call("PATCH", "/api/games/settings", {"reset": True})[1]["settings"]["min_feeds"], 4)
+        self.assertEqual(self.store.get_settings(), {})
+
+
 class ParserAndPagingTests(unittest.TestCase):
     def test_parser_details(self):
         future = time.time() + 30 * 86400

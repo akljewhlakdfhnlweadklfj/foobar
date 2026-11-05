@@ -22,85 +22,131 @@
   [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-           padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
-           position: sticky; top: 0; z-index: 2; }
-  header h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
-  header h1 span { color: var(--accent); }
-  nav.tabs { display: flex; gap: 4px; max-width: 1200px; margin: 0 auto; padding: 0 16px; overflow-x: auto;
-              border-bottom: 1px solid var(--border); background: var(--panel); }
-  nav.tabs a { padding: 10px 14px; color: var(--muted); text-decoration: none; font-weight: 600; white-space: nowrap;
-               border-bottom: 2px solid transparent; margin-bottom: -1px; }
-  nav.tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
-  .tabbar { background: var(--panel); border-bottom: 1px solid var(--border); }
-  .layout { display: grid; grid-template-columns: 340px 1fr; gap: 20px; max-width: 1200px;
-            margin: 20px auto; padding: 0 16px; }
-  /* Phones: filters, then stories, then the feed list. */
-  @media (max-width: 860px) {
-    .layout { display: flex; flex-direction: column; }
-    aside { display: contents; }
-    #filter_panel { order: 1; } main { order: 2; } #watch_panel { order: 3; } #feeds_panel { order: 4; }
-  }
+  a { color: inherit; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 2px; }
-  .story h3 a { color: inherit; text-decoration: none; }
-  .story h3 a:hover { text-decoration: underline; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
-  .panel h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-  aside { align-self: start; display: flex; flex-direction: column; gap: 20px; }
-  form.add { display: flex; gap: 8px; }
-  input[type=url], input[type=number], select {
-    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
-    background: var(--bg); color: var(--text); font: inherit; }
+
+  /* ---- Header: brand, top-level tabs, scrape status ---- */
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 12px 20px;
+           border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 3; }
+  header h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; white-space: nowrap; }
+  header h1 span { color: var(--accent); }
+  nav.top { display: flex; gap: 4px; }
+  nav.top a { padding: 6px 12px; border-radius: 6px; text-decoration: none; font-weight: 600; color: var(--muted); }
+  nav.top a.active { background: var(--accent-soft); color: var(--accent); }
+  .scrape { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+  .scrape button { padding: 4px 10px; font-size: 13px; }
+
+  /* ---- Sub-tabs ---- */
+  nav.sub { display: flex; gap: 4px; max-width: 1200px; margin: 0 auto; padding: 0 16px; overflow-x: auto; }
+  nav.sub a { padding: 10px 14px; color: var(--muted); text-decoration: none; font-weight: 600; white-space: nowrap;
+              border-bottom: 2px solid transparent; }
+  nav.sub a.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .subbar { background: var(--panel); border-bottom: 1px solid var(--border); }
+
+  main { max-width: 1200px; margin: 20px auto 48px; padding: 0 16px; }
   button { padding: 8px 14px; border: 0; border-radius: 6px; background: var(--btn); color: var(--btn-text);
            font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
   button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); font-weight: 500; }
   button:disabled { opacity: .5; cursor: default; }
-  .msg { font-size: 13px; margin-top: 8px; min-height: 1em; }
+  input[type=url], input[type=text], input[type=search], input[type=number], select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font: inherit; }
+  .muted { color: var(--muted); }
+  .msg { font-size: 13px; min-height: 1em; }
   .msg.err { color: var(--err); } .msg.ok { color: var(--ok); }
-  ul.feeds { list-style: none; margin: 12px 0 0; padding: 0; max-height: 60vh; overflow-y: auto; }
-  ul.feeds li { display: flex; align-items: flex-start; gap: 8px; padding: 9px 0; border-top: 1px solid var(--border); }
+
+  /* ---- Stories view ---- */
+  .viewbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .viewbar .summary { color: var(--muted); font-size: 13px; flex: 1; min-width: 200px; }
+  .viewbar label { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  .viewbar select { width: auto; padding: 4px 8px; }
+  .stories { max-width: 900px; }
+  .story { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .story.watched { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+  .story-head { display: flex; gap: 12px; align-items: flex-start; }
+  .badge { flex: none; min-width: 44px; text-align: center; padding: 4px 8px; border-radius: 6px;
+           background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13px; }
+  .badge small { display: block; font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+  .badge .score { display: block; margin-top: 3px; padding-top: 3px; border-top: 1px solid currentColor; font-size: 11px; opacity: .85; }
+  .story h3 { margin: 0; font-size: 17px; line-height: 1.35; }
+  .story h3 a { text-decoration: none; } .story h3 a:hover { text-decoration: underline; }
+  .meta { font-size: 13px; color: var(--muted); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .meta .lead { color: var(--accent); font-weight: 600; }
+  .vtag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px;
+          border-radius: 4px; border: 1px solid var(--border); color: var(--muted); }
+  .desc { font-size: 14px; color: var(--muted); margin: 6px 0 0; display: -webkit-box; -webkit-line-clamp: 3;
+          -webkit-box-orient: vertical; overflow: hidden; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--mark); color: var(--text); }
+  mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+  .sources { list-style: none; padding: 0; margin: 8px 0 0; }
+  .sources li { padding: 6px 0; border-top: 1px dashed var(--border); font-size: 14px; }
+  .sources .src { font-size: 12px; font-weight: 600; color: var(--accent); }
+  .sources a { text-decoration: none; } .sources a:hover { text-decoration: underline; }
+  .sources .snippet { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .sources li.hit .src::after { content: " · matched"; color: var(--muted); font-weight: 500; }
+  .sources li.nc { opacity: .55; }
+  .sources li.nc .src::after { content: " · doesn't count"; color: var(--muted); font-weight: 500; }
+  .w { display: inline-block; min-width: 18px; padding: 0 4px; border-radius: 4px; font-size: 11px; text-align: center;
+       background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+
+  /* ---- Settings view ---- */
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
+  .grid .wide { grid-column: 1 / -1; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+  .panel h2 { margin: 0 0 4px; font-size: 15px; }
+  .panel .intro { margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  .fields .full { grid-column: 1 / -1; }
+  .field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .field .hint { font-size: 11px; }
+  .field output { color: var(--text); font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--muted); }
+  .check input { margin-top: 3px; }
+  .saved { font-size: 12px; color: var(--ok); margin-left: 8px; font-weight: 500; }
+  .panel-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+  .panel-foot button { padding: 4px 10px; font-size: 13px; }
+  .required-note { margin-top: 14px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 6px;
+                   font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+  .required-note .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .required-note select { width: auto; padding: 3px 6px; font-size: 13px; }
+  .required-note button { padding: 3px 10px; font-size: 13px; }
+  .required-note .warn { color: var(--warn); }
+  form.row { display: flex; gap: 8px; }
+  form.row input[type=text], form.row input[type=url] { flex: 1; min-width: 0; }
+  form.row input[type=number] { width: 5em; text-align: right; }
+  ul.phrases { list-style: none; margin: 12px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  ul.phrases li { display: flex; align-items: center; gap: 8px; }
+  ul.phrases .p { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  ul.phrases input { width: 5em; padding: 4px 8px; text-align: right; }
+  ul.phrases button, ul.feeds button { padding: 2px 8px; font-size: 16px; line-height: 1; }
+  .tools { display: flex; gap: 6px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .tools input { flex: 1; min-width: 160px; padding: 6px 10px; font-size: 13px; }
+  .tools button { padding: 6px 10px; font-size: 13px; }
+  .using { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  ul.feeds { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
+  @media (max-width: 860px) { ul.feeds { grid-template-columns: 1fr; } }
+  ul.feeds li { display: flex; align-items: flex-start; gap: 8px; padding: 9px 0; border-top: 1px solid var(--border); min-width: 0; }
   ul.feeds .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 7px; flex: none; background: var(--ok); }
   ul.feeds .dot.err { background: var(--err); } ul.feeds .dot.warn { background: var(--warn); } ul.feeds .dot.pending { background: var(--muted); }
   ul.feeds .info { flex: 1; min-width: 0; }
   ul.feeds .name { font-weight: 600; overflow-wrap: anywhere; }
   ul.feeds .sub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
   ul.feeds .sub.err { color: var(--err); } ul.feeds .sub .warn { color: var(--warn); cursor: help; }
-  ul.feeds button { padding: 2px 8px; font-size: 18px; line-height: 1; }
-  .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .controls label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
-  .controls .full { grid-column: 1 / -1; }
-  .controls output { color: var(--text); font-weight: 600; }
-  input[type=range] { width: 100%; accent-color: var(--accent); }
-  .summary { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
-  .story { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
-  .story-head { display: flex; gap: 12px; align-items: flex-start; }
-  .badge { flex: none; min-width: 44px; text-align: center; padding: 4px 8px; border-radius: 6px;
-           background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13px; }
-  .badge .score { display: block; margin-top: 3px; padding-top: 3px; border-top: 1px solid currentColor; font-size: 11px; opacity: .85; }
-  .lead { font-size: 13px; color: var(--accent); font-weight: 600; margin-top: 2px; }
-  .w { display: inline-block; min-width: 18px; padding: 0 4px; border-radius: 4px; font-size: 11px; text-align: center;
-       background: var(--accent-soft); color: var(--accent); font-weight: 700; }
-  .feed-tools { display: flex; gap: 6px; align-items: center; margin-top: 12px; }
-  .feed-tools input { flex: 1; min-width: 0; padding: 6px 10px; font-size: 13px; }
-  .feed-tools button { padding: 6px 10px; font-size: 13px; }
-  .using { font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .req { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
-  ul.feeds li.required .name::after { content: " · required"; color: var(--accent); font-size: 12px; font-weight: 600; }
-  .required-note { margin-top: 12px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 6px;
-                   font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
-  .required-note .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .required-note select { width: auto; padding: 3px 6px; font-size: 13px; }
-  .required-note button { padding: 3px 10px; font-size: 13px; }
-  .required-note .warn { color: var(--warn); }
   ul.feeds li.off .info, ul.feeds li.off .dot { opacity: .45; }
-  ul.feeds .controls-col { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
-  ul.feeds .row-actions { display: flex; gap: 6px; align-items: center; }
-  input.weight { width: 4.2em; padding: 3px 6px; font-size: 13px; text-align: right; }
-  input.weight:invalid { border-color: var(--err); }
-  /* On/off switch built on a real checkbox, so it stays keyboard- and screen-reader-friendly. */
-  .switch { position: relative; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+  ul.feeds li.required .name::after { content: " · required"; color: var(--accent); font-size: 12px; font-weight: 600; }
+  ul.feeds .ctl { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+  ul.feeds .ctl .row { display: flex; gap: 6px; align-items: center; }
+  input.weight { width: 4.4em; padding: 3px 6px; font-size: 13px; text-align: right; }
+  .req { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+  .switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
   .switch input { appearance: none; -webkit-appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px;
                   background: var(--border); position: relative; cursor: pointer; transition: background .15s; }
   .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
@@ -108,139 +154,163 @@
   .switch input:checked { background: var(--ok); }
   .switch input:checked::after { transform: translateX(12px); }
   @media (prefers-reduced-motion: reduce) { .switch input, .switch input::after { transition: none; } }
-  .badge small { display: block; font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
-  .story h3 { margin: 0; font-size: 17px; line-height: 1.35; }
-  .story .when { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  details { margin-top: 10px; }
-  summary { cursor: pointer; font-size: 13px; color: var(--muted); }
-  .sources { list-style: none; padding: 0; margin: 8px 0 0; }
-  .sources li { padding: 6px 0; border-top: 1px dashed var(--border); font-size: 14px; }
-  .sources .src { font-size: 12px; font-weight: 600; color: var(--accent); }
-  .sources a { color: var(--text); text-decoration: none; }
-  .sources a:hover { text-decoration: underline; }
-  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
-  mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
-  .story.watched { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-  .chip { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--mark); color: var(--text); }
-  .desc { font-size: 14px; color: var(--muted); margin: 6px 0 0; display: -webkit-box; -webkit-line-clamp: 3;
-          -webkit-box-orient: vertical; overflow: hidden; }
-  .sources li.hit .src::after { content: " · matched"; color: var(--muted); font-weight: 500; }
-  .sources .snippet { font-size: 13px; color: var(--muted); margin-top: 2px; }
-  .sources li.nc { opacity: .55; }
-  .sources li.nc .src::after { content: " · doesn't count"; color: var(--muted); font-weight: 500; }
-  form.watch { display: flex; gap: 8px; }
-  form.watch input[type=text] { flex: 1; min-width: 0; }
-  form.watch input[type=number], ul.phrases input { width: 4.6em; padding: 6px 8px; text-align: right; }
-  ul.phrases { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-  ul.phrases li { display: flex; align-items: center; gap: 8px; }
-  ul.phrases .p { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  ul.phrases button { padding: 2px 8px; font-size: 16px; line-height: 1; }
-  .check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--muted); margin-top: 8px; }
-  .check input { margin-top: 3px; }
-  .scrape { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
-  .scrape .auto { font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; white-space: nowrap; }
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 14px; }
+  dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .progress { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin: 12px 0; }
+  .progress div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+  .btnrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  code { font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
+  pre { font-size: 12px; background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 0; }
 </style>
 </head>
 <body>
 <header>
   <h1>Consensus <span>News</span></h1>
+  <nav class="top" id="top_tabs" aria-label="Sections">
+    <a href="#stories/all" data-top="stories">Stories</a>
+    <a href="#settings/scraping" data-top="settings">Settings</a>
+  </nav>
   <div class="scrape">
-    <span id="status" class="summary" style="margin:0" aria-live="polite"></span>
-    <button id="refresh" class="ghost" title="Fetch every feed now">Refresh feeds</button>
-    <button id="stop" class="ghost" hidden title="Stop after the feeds in progress; progress is kept">Stop</button>
-    <label class="auto" title="Refresh all feeds on a schedule"><input type="checkbox" id="auto"> Auto <span id="auto_every"></span></label>
+    <span id="status" aria-live="polite"></span>
+    <button class="ghost" id="hdr_refresh" title="Fetch every feed now">Refresh</button>
+    <button class="ghost" id="hdr_stop" hidden title="Stop after the feeds in progress; progress is kept">Stop</button>
   </div>
 </header>
-<div class="tabbar"><nav class="tabs" id="tabs"></nav></div>
+<div class="subbar"><nav class="sub" id="sub_tabs" aria-label="Verticals"></nav></div>
 
-<div class="layout">
-  <aside>
-    <section class="panel" id="filter_panel">
-      <h2>Filter</h2>
-      <div class="controls">
-        <label>Reported by at least
-          <input type="number" id="min_feeds" min="1" step="1" value="2">
-        </label>
-        <label>Time window
-          <select id="hours">
-            <option value="6">6 hours</option>
-            <option value="12">12 hours</option>
-            <option value="24">24 hours</option>
-            <option value="48" selected>48 hours</option>
-            <option value="72">3 days</option>
-            <option value="168">7 days</option>
-          </select>
-        </label>
-        <label class="full">Only count outlets weighted at least
-          <input type="number" id="min_weight" min="0" max="10" step="0.5" value="0">
-          <span style="font-size:11px">Lower-weighted outlets still help group headlines and are listed, but don't count toward “reported by” or the score. 0 = count every outlet.</span>
-        </label>
-        <label class="full">Minimum prestige score
-          <input type="number" id="min_score" min="0" step="1" value="0">
-          <span style="font-size:11px">Sum of the outlets' weights (1–5 each). 0 = no minimum. Stories are ranked by this score.</span>
-        </label>
-        <label class="full">Title match strictness: <output id="threshold_out"></output>
-          <input type="range" id="threshold" min="0.05" max="0.5" step="0.01" value="0.12">
-          <span style="font-size:11px">Lower = groups loosely-related headlines; higher = near-identical only.</span>
-        </label>
-      </div>
-      <div class="required-note" id="required_note" hidden>
-        <div id="required_list"></div>
-        <div class="row">
-          <label for="require_all">Show stories that include</label>
-          <select id="require_all"><option value="false">any of them</option><option value="true">all of them</option></select>
-          <button type="button" class="ghost" id="clear_required">Clear</button>
+<main>
+  <!-- ===== Stories ===== -->
+  <section id="view_stories">
+    <div class="viewbar">
+      <div class="summary" id="summary">Loading…</div>
+      <label for="sort">Sort <select id="sort"><option value="score">Top</option><option value="latest">Latest</option></select></label>
+    </div>
+    <div class="stories" id="stories"></div>
+  </section>
+
+  <!-- ===== Settings: one vertical ===== -->
+  <section id="view_vertical" hidden>
+    <div class="grid">
+      <div class="panel" id="filters_panel">
+        <h2>Which stories show <span class="saved" id="saved" hidden>Saved</span></h2>
+        <p class="intro">Used by this vertical's Stories tab and by “All”.</p>
+        <div class="fields">
+          <label class="field">Reported by at least
+            <input type="number" id="s_min_feeds" min="1" max="100" step="1">
+            <span class="hint">outlets</span>
+          </label>
+          <label class="field">Time window
+            <select id="s_hours">
+              <option value="6">6 hours</option><option value="12">12 hours</option><option value="24">24 hours</option>
+              <option value="48">48 hours</option><option value="72">3 days</option><option value="168">7 days</option>
+              <option value="336">14 days</option>
+            </select>
+          </label>
+          <label class="field">Only count outlets weighted at least
+            <input type="number" id="s_min_weight" min="0" max="10" step="0.5">
+            <span class="hint">Lower-weighted outlets still help group headlines, but don't count. 0 = all.</span>
+          </label>
+          <label class="field">Minimum score
+            <input type="number" id="s_min_score" min="0" step="1">
+            <span class="hint">Outlet weights + watched bonuses. 0 = no minimum.</span>
+          </label>
+          <label class="field full">Title match strictness: <output id="threshold_out"></output>
+            <input type="range" id="s_threshold" min="0.05" max="0.5" step="0.01">
+            <span class="hint">Lower groups loosely related headlines; higher only near-identical ones.</span>
+          </label>
         </div>
-        <div class="warn" id="required_warn" hidden></div>
+        <div class="required-note" id="required_note" hidden>
+          <div id="required_list"></div>
+          <div class="row">
+            <label for="s_require_all">Show stories that include</label>
+            <select id="s_require_all"><option value="false">any of them</option><option value="true">all of them</option></select>
+            <button type="button" class="ghost" id="clear_required">Clear</button>
+          </div>
+          <div class="warn" id="required_warn" hidden></div>
+        </div>
+        <div class="panel-foot"><button type="button" class="ghost" id="reset_settings">Reset to defaults</button>
+          <span class="msg" id="settings_msg"></span></div>
       </div>
-    </section>
 
-    <section class="panel" id="watch_panel">
-      <h2>Watched phrases</h2>
-      <form class="watch" id="watch_form">
-        <label for="watch_phrase" class="sr-only">Phrase to watch</label>
-        <input type="text" id="watch_phrase" placeholder="e.g. Switch 2, layoffs, Nolan" maxlength="100" required>
-        <label for="watch_bonus" class="sr-only">Bonus points</label>
-        <input type="number" id="watch_bonus" min="0" max="100" step="1" value="5" title="Bonus added to the prestige score">
-        <button type="submit">Watch</button>
-      </form>
-      <div class="msg" id="watch_msg"></div>
-      <ul class="phrases" id="phrases"></ul>
-      <label class="check"><input type="checkbox" id="only_watched"> Only show stories with a watched phrase</label>
-      <label class="check"><input type="checkbox" id="watched_any"> Show watched stories even if fewer outlets report them</label>
-    </section>
-
-    <section class="panel" id="feeds_panel">
-      <h2><span id="vertical_label"></span> feeds (<span id="feed_count">0</span>)</h2>
-      <form class="add" id="add_form">
-        <label for="feed_url" class="sr-only">Feed URL</label>
-        <input type="url" id="feed_url" placeholder="https://example.com/rss.xml" required>
-        <button type="submit" id="add_btn">Add</button>
-      </form>
-      <div class="msg" id="add_msg"></div>
-      <div class="feed-tools">
-        <label for="feed_search" class="sr-only">Search outlets</label>
-        <input type="search" id="feed_search" placeholder="Search outlets">
-        <button type="button" class="ghost" id="all_on" title="Use every outlet in this tab">All</button>
-        <button type="button" class="ghost" id="all_off" title="Turn every outlet in this tab off">None</button>
+      <div class="panel" id="watch_panel">
+        <h2>Watched phrases</h2>
+        <p class="intro">Stories mentioning a phrase in any outlet's headline or description are highlighted, and its bonus is added to their score.</p>
+        <form class="row" id="watch_form">
+          <label for="watch_phrase" class="sr-only">Phrase to watch</label>
+          <input type="text" id="watch_phrase" placeholder="e.g. Switch 2, layoffs, Nolan" maxlength="100" required>
+          <label for="watch_bonus" class="sr-only">Bonus points</label>
+          <input type="number" id="watch_bonus" min="0" max="100" step="1" value="5" title="Bonus added to the score">
+          <button type="submit">Watch</button>
+        </form>
+        <div class="msg" id="watch_msg"></div>
+        <ul class="phrases" id="phrases"></ul>
+        <label class="check"><input type="checkbox" id="s_only_watched"> Only show stories with a watched phrase</label>
+        <label class="check" style="margin-top:8px"><input type="checkbox" id="s_watched_any"> Show watched stories even if fewer outlets report them</label>
       </div>
-      <div class="using" id="using"></div>
-      <ul class="feeds" id="feeds"></ul>
-    </section>
-  </aside>
 
-  <main>
-    <p class="summary" id="summary"></p>
-    <div id="stories"></div>
-  </main>
-</div>
+      <div class="panel wide" id="outlets_panel">
+        <h2>Outlets (<span id="feed_count">0</span>)</h2>
+        <p class="intro">Switch outlets on or off, mark ones a story must include, and set each outlet's prestige weight (1 = small blog, 5 = paper of record; 0–10 allowed).</p>
+        <form class="row" id="add_form">
+          <label for="feed_url" class="sr-only">Feed URL</label>
+          <input type="url" id="feed_url" placeholder="Add an RSS or Atom feed: https://example.com/rss.xml" required>
+          <button type="submit" id="add_btn">Add</button>
+        </form>
+        <div class="msg" id="add_msg"></div>
+        <div class="tools">
+          <label for="feed_search" class="sr-only">Search outlets</label>
+          <input type="search" id="feed_search" placeholder="Search outlets">
+          <button type="button" class="ghost" id="all_on">All on</button>
+          <button type="button" class="ghost" id="all_off">All off</button>
+        </div>
+        <div class="using" id="using"></div>
+        <ul class="feeds" id="feeds"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Settings: scraping ===== -->
+  <section id="view_scraping" hidden>
+    <div class="grid">
+      <div class="panel">
+        <h2>Scraping</h2>
+        <p class="intro">A refresh fetches every feed now. A backfill loads past days from Feedly's archive. Stopped or interrupted runs resume where they left off.</p>
+        <dl class="kv" id="scrape_kv"></dl>
+        <div class="progress" id="scrape_progress" hidden><div></div></div>
+        <div class="btnrow">
+          <button id="sc_refresh">Refresh all feeds</button>
+          <button class="ghost" id="sc_resume" hidden>Resume</button>
+          <button class="ghost" id="sc_stop" hidden>Stop</button>
+        </div>
+        <div class="btnrow">
+          <label for="sc_days" class="muted" style="font-size:13px">Backfill</label>
+          <input type="number" id="sc_days" min="1" max="14" step="1" value="3" style="width:5em">
+          <span class="muted" style="font-size:13px">days</span>
+          <button class="ghost" id="sc_backfill">Start backfill</button>
+        </div>
+        <div class="msg" id="scrape_msg" style="margin-top:8px"></div>
+      </div>
+      <div class="panel">
+        <h2>Schedule</h2>
+        <p class="intro">Turn this off to let an external scheduler (cron, Airflow…) drive scraping through the API.</p>
+        <label class="check"><input type="checkbox" id="sc_auto"> Refresh automatically</label>
+        <label class="field" style="margin-top:12px">Every (minutes)
+          <input type="number" id="sc_interval" min="1" max="1440" step="1" style="width:7em"></label>
+        <p class="intro" style="margin:16px 0 6px">API (from another machine, send <code>Authorization: Bearer &lt;token&gt;</code>):</p>
+        <pre>POST /api/scrape/start   {"kind": "refresh"}
+POST /api/scrape/start   {"kind": "backfill", "days": 3}
+POST /api/scrape/stop
+GET  /api/scrape/status</pre>
+      </div>
+    </div>
+  </section>
+</main>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : "#";
-
+const fmt = (n) => Number(n).toFixed(1).replace(/\.0$/, "");
 function ago(ts) {
   if (!ts) return "never";
   const s = Math.max(0, Date.now() / 1000 - ts);
@@ -249,418 +319,405 @@ function ago(ts) {
   if (s < 86400) return Math.floor(s / 3600) + "h ago";
   return Math.floor(s / 86400) + "d ago";
 }
-
-// Verticals (tabs) and per-vertical filter settings.
-const SETTINGS = ["min_feeds", "hours", "threshold", "min_score", "min_weight", "only_watched", "watched_any", "require_all"];
-const CHECKS = new Set(["only_watched", "watched_any"]);
-const getVal = (k) => CHECKS.has(k) ? $(k).checked : $(k).value;
-const setVal = (k, v) => { if (CHECKS.has(k)) $(k).checked = v === true || v === "true"; else $(k).value = v; };
-let VERTICALS = [], V = null, DEFAULT_THRESHOLD = 0.12, DEFAULT_WEIGHT = 2, MAX_WEIGHT = 10, DEFAULT_BONUS = 5, MAX_BONUS = 100;
-const fmt = (n) => Number(n).toFixed(1).replace(/\.0$/, "");
-const settingsKey = (v) => "news-settings-v3-" + v;
-const vertical = (v = V) => VERTICALS.find((x) => x.key === v);
-const defaultsFor = (v) => ({ min_feeds: vertical(v).default_min_feeds, hours: 48, threshold: DEFAULT_THRESHOLD,
-                              min_score: 0, min_weight: 0, only_watched: false, watched_any: false, require_all: "false" });
-
-function loadSettings() {
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(settingsKey(V)) || "{}"); } catch {}
-  const d = defaultsFor(V);
-  SETTINGS.forEach((k) => setVal(k, saved[k] ?? d[k]));
-}
-// Only user-changed values are stored, so retuned defaults still reach returning users.
-function saveSettings() {
-  const d = defaultsFor(V), cur = currentSettings(), diff = {};
-  SETTINGS.forEach((k) => {
-    const c = CHECKS.has(k) ? !!cur[k] : k === "require_all" ? String(!!cur[k]) : cur[k];
-    if (String(c) !== String(d[k])) diff[k] = c;
-  });
-  try { localStorage.setItem(settingsKey(V), JSON.stringify(diff)); } catch {}
-}
-// Validated filter values (blank/invalid inputs fall back to the tab's defaults).
-function currentSettings() {
-  const d = defaultsFor(V);
-  const n = parseInt($("min_feeds").value, 10);
-  const score = parseFloat($("min_score").value);
-  const t = parseFloat($("threshold").value);
-  return {
-    min_feeds: Number.isFinite(n) && n >= 1 ? n : d.min_feeds,
-    hours: $("hours").value || d.hours,
-    threshold: Number.isFinite(t) ? t : d.threshold,
-    min_score: Number.isFinite(score) && score >= 0 ? score : 0,
-    min_weight: (() => { const w = parseFloat($("min_weight").value); return Number.isFinite(w) && w >= 0 ? w : 0; })(),
-    only_watched: $("only_watched").checked ? 1 : 0,
-    watched_any: $("watched_any").checked ? 1 : 0,
-    require_all: $("require_all").value === "true" ? 1 : 0,
-  };
-}
-
-let feedsSeq = 0, storiesSeq = 0, lastFeedsJson = "", lastStoriesJson = "";
-function selectVertical(key) {
-  V = VERTICALS.some((x) => x.key === key) ? key : VERTICALS[0].key;
-  document.querySelectorAll("#tabs a").forEach((a) => {
-    const on = a.dataset.v === V;
-    a.classList.toggle("active", on);
-    on ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current");
-  });
-  $("vertical_label").textContent = vertical().label;
-  document.title = vertical().label + " · Consensus News";
-  // Clear the previous tab's content so nothing stale can be clicked.
-  $("stories").innerHTML = ""; $("feeds").innerHTML = ""; $("feed_count").textContent = "…"; $("using").textContent = "";
-  $("feed_search").value = "";
-  $("summary").textContent = "Loading…"; $("add_msg").textContent = "";
-  lastFeedsJson = lastStoriesJson = "";
-  loadSettings();
-  PHRASES = []; phraseRe = null; $("phrases").innerHTML = ""; $("watch_msg").textContent = "";
-  Promise.all([loadFeeds(true), loadPhrases()]).then(() => loadStories(true));
-}
-window.addEventListener("hashchange", () => selectVertical(location.hash.slice(1)));
-
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText || "Request failed");
   return data;
 }
+const patch = (path, body) => api(path, { method: "PATCH", body: JSON.stringify(body) });
+const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
 
-let feedCount = 0;
-let wasRefreshing = false;
+let META = { verticals: [], default_weight: 2, max_weight: 10, default_bonus: 5, max_bonus: 100 };
+const label = (key) => META.verticals.find((v) => v.key === key)?.label || key;
 
-let requiredCount = 0;
-function renderRequired(feeds) {
-  const req = feeds.filter((f) => f.required === 1);
-  requiredCount = req.length;
-  $("required_note").hidden = !req.length;
-  if (!req.length) return;
-  const name = (f) => f.name || f.title || f.url;
-  $("required_list").innerHTML = `<strong>Required outlet${req.length === 1 ? "" : "s"}:</strong> ${req.map((f) => esc(name(f))).join(", ")}`;
-  $("require_all").disabled = req.length < 2;
-  const off = req.filter((f) => f.enabled === 0);
-  $("required_warn").hidden = !off.length;
-  $("required_warn").textContent = off.length ? `${off.map(name).join(", ")} ${off.length === 1 ? "is" : "are"} switched off, so ${off.length === 1 ? "it" : "they"} can't appear in any story.` : "";
+// ---------- Routing: #stories/<all|vertical>  and  #settings/<vertical|scraping> ----------
+let route = { top: "stories", sub: "all" };
+function parseHash() {
+  const [top, sub] = location.hash.replace(/^#/, "").split("/");
+  const keys = META.verticals.map((v) => v.key);
+  if (top === "settings") return { top, sub: sub === "scraping" || keys.includes(sub) ? sub : "scraping" };
+  return { top: "stories", sub: sub === "all" || keys.includes(sub) ? sub : "all" };
 }
+function render() {
+  route = parseHash();
+  document.querySelectorAll("#top_tabs a").forEach((a) => {
+    const on = a.dataset.top === route.top;
+    a.classList.toggle("active", on); on ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current");
+  });
+  // The Settings link remembers the last settings sub-tab; Stories remembers the last view.
+  document.querySelector('#top_tabs a[data-top="' + route.top + '"]').setAttribute("href", "#" + route.top + "/" + route.sub);
+  const subs = route.top === "stories"
+    ? [["all", "All"], ...META.verticals.map((v) => [v.key, v.label])]
+    : [...META.verticals.map((v) => [v.key, v.label]), ["scraping", "Scraping"]];
+  $("sub_tabs").innerHTML = subs.map(([k, l]) => `<a href="#${route.top}/${k}" ${k === route.sub ? 'class="active" aria-current="page"' : ""}>${esc(l)}</a>`).join("");
+  $("view_stories").hidden = route.top !== "stories";
+  $("view_vertical").hidden = !(route.top === "settings" && route.sub !== "scraping");
+  $("view_scraping").hidden = !(route.top === "settings" && route.sub === "scraping");
+  document.title = (route.top === "stories" ? (route.sub === "all" ? "All stories" : label(route.sub))
+                    : "Settings · " + (route.sub === "scraping" ? "Scraping" : label(route.sub))) + " · Consensus News";
+  if (route.top === "stories") { V = null; lastStoriesJson = ""; $("stories").innerHTML = ""; $("summary").textContent = "Loading…"; loadStories(true); }
+  else if (route.sub === "scraping") { V = null; loadScrape(); }
+  else openVertical(route.sub);
+}
+window.addEventListener("hashchange", render);
 
-// Watched phrases for the open tab, and highlighting that mirrors the server's matching:
-// case-insensitive, whole words, any whitespace between words.
-let PHRASES = [];
+// ---------- Stories view ----------
+let storiesSeq = 0, lastStoriesJson = "";
+try { $("sort").value = localStorage.getItem("news-sort") || "score"; } catch {}
+$("sort").addEventListener("change", () => { try { localStorage.setItem("news-sort", $("sort").value); } catch {} loadStories(true); });
+
+// Highlight a story's watched phrases (case-insensitive, whole words, any whitespace between words).
 const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-let phraseRe = null;
-function buildPhraseRe() {
-  const parts = PHRASES.map((p) => p.phrase.split(/\s+/).map(reEsc).join("\\s+"));
-  phraseRe = parts.length ? new RegExp(`(?<![\\p{L}\\p{N}_])(?:${parts.join("|")})(?![\\p{L}\\p{N}_])`, "giu") : null;
+function phraseRe(phrases) {
+  if (!phrases.length) return null;
+  const parts = phrases.map((p) => p.split(/\s+/).map(reEsc).join("\\s+"));
+  return new RegExp(`(?<![\\p{L}\\p{N}_])(?:${parts.join("|")})(?![\\p{L}\\p{N}_])`, "giu");
 }
-const phraseIn = (text, phrase) => new RegExp(`(?<![\\p{L}\\p{N}_])${phrase.split(/\s+/).map(reEsc).join("\\s+")}(?![\\p{L}\\p{N}_])`, "iu").test(text || "");
-function hl(text) {
+function hl(text, re) {
   text = String(text ?? "");
-  if (!phraseRe) return esc(text);
+  if (!re) return esc(text);
   let out = "", last = 0;
-  for (const m of text.matchAll(phraseRe)) {
-    out += esc(text.slice(last, m.index)) + "<mark>" + esc(m[0]) + "</mark>";
-    last = m.index + m[0].length;
-  }
+  for (const m of text.matchAll(re)) { out += esc(text.slice(last, m.index)) + "<mark>" + esc(m[0]) + "</mark>"; last = m.index + m[0].length; }
   return out + esc(text.slice(last));
 }
+const storyKey = (s) => s.vertical + "|" + (s.lead.link || s.title);
 
-function phraseRow(p, v) {
-  return `<li><span class="p">${esc(p.phrase)}</span>
-    <label class="sr-only" for="pb${p.id}">Bonus for ${esc(p.phrase)}</label>
-    <input type="number" id="pb${p.id}" min="0" max="${MAX_BONUS}" step="1" value="${fmt(p.bonus)}" data-pbonus="${p.id}" data-v="${v}"
-           title="Bonus added to the score of stories that mention this phrase">
-    <button class="ghost" aria-label="Stop watching ${esc(p.phrase)}" data-pdel="${p.id}" data-v="${v}">×</button></li>`;
+async function fetchStories(key) {
+  const d = await api(`/api/${key}/stories`);
+  return { ...d, stories: d.stories.map((s) => ({ ...s, vertical: key })) };
 }
+const windowText = (h) => h >= 48 && h % 24 === 0 ? `${h / 24} days` : `${fmt(h)} hours`;
 
-async function loadPhrases(force = false) {
-  const v = V;
-  let data;
-  try { data = await api(`/api/${v}/phrases`); } catch (e) { return; }
-  if (v !== V) return;
-  PHRASES = data.phrases; buildPhraseRe();
-  if (force || !$("phrases").contains(document.activeElement)) {
-    $("phrases").innerHTML = PHRASES.map((p) => phraseRow(p, v)).join("") ||
-      `<li class="sub" style="font-size:13px;color:var(--muted)">No phrases yet. Watched phrases are highlighted and add bonus points to a story's score.</li>`;
+async function loadStories(force = false) {
+  if (route.top !== "stories") return;
+  const sub = route.sub, seq = ++storiesSeq;
+  const keys = sub === "all" ? META.verticals.map((v) => v.key) : [sub];
+  let results;
+  try { results = await Promise.all(keys.map(fetchStories)); }
+  catch (e) {
+    if (seq !== storiesSeq) return;
+    $("summary").textContent = "Couldn't load stories: " + e.message; $("stories").innerHTML = ""; lastStoriesJson = "";
+    return;
   }
+  if (seq !== storiesSeq || route.top !== "stories" || route.sub !== sub) return;
+  const stories = results.flatMap((r) => r.stories);
+  const scanned = results.reduce((t, r) => t + r.items_considered, 0);
+  if ($("sort").value === "latest") stories.sort((a, b) => b.latest - a.latest);
+  else stories.sort((a, b) => b.score - a.score || b.coverage - a.coverage || b.latest - a.latest);
+  if (sub === "all") {
+    $("summary").textContent = `${stories.length} stories across ${keys.length} verticals · ${scanned} headlines scanned · each vertical uses its own settings`;
+  } else {
+    const c = results[0].settings;
+    $("summary").textContent = `${stories.length} stories reported by ≥ ${c.min_feeds} outlet${c.min_feeds === 1 ? "" : "s"} in the last ${windowText(c.hours)} · ${scanned} headlines scanned`;
+  }
+  const json = JSON.stringify(stories);
+  if (!force && json === lastStoriesJson) return;
+  lastStoriesJson = json;
+  if (!stories.length) {
+    $("stories").innerHTML = `<div class="empty">No stories match the current settings yet.<br>
+      <a href="#settings/${sub === "all" ? META.verticals[0].key : sub}">Adjust them in Settings</a>, or refresh the feeds.</div>`;
+    return;
+  }
+  const open = new Set([...document.querySelectorAll("#stories details[open]")].map((d) => d.dataset.key));
+  $("stories").innerHTML = stories.map((s) => {
+    const re = phraseRe(s.watched.map((w) => w.phrase));
+    const titleHit = re && new RegExp(re.source, "iu").test(s.title);
+    const key = storyKey(s);
+    return `
+    <article class="story${s.watched.length ? " watched" : ""}">
+      <div class="story-head">
+        <div class="badge" title="${s.coverage} counted outlet${s.coverage === 1 ? "" : "s"}${s.outlets > s.coverage ? ` (of ${s.outlets})` : ""} · prestige ${fmt(s.base_score)}${s.bonus ? ` + ${fmt(s.bonus)} watched bonus` : ""}">${s.coverage}<small>outlets</small><span class="score">★ ${fmt(s.score)}</span></div>
+        <div style="min-width:0">
+          <h3>${s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${hl(s.title, re)}</a>` : hl(s.title, re)}</h3>
+          <div class="meta">${sub === "all" ? `<span class="vtag">${esc(label(s.vertical))}</span>` : ""}
+            <span class="lead">${esc(s.lead.feed)}</span><span>first seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</span></div>
+          ${s.lead.description ? `<p class="desc">${hl(s.lead.description, re)}</p>` : ""}
+          ${s.watched.length ? `<div class="chips">${s.watched.map((w) => `<span class="chip">Watched: ${esc(w.phrase)} +${fmt(w.bonus)}</span>`).join("")}</div>` : ""}
+        </div>
+      </div>
+      <details data-key="${esc(key)}" ${open.has(key) || (s.watched.length && !titleHit) ? "open" : ""}>
+        <summary>${s.sources.slice(0, 6).map((x) => esc(x.feed)).join(" · ")}${s.sources.length > 6 ? ` · +${s.sources.length - 6} more` : ""}</summary>
+        <ul class="sources">${s.sources.map((x) => `
+          <li class="${x.watched ? "hit" : ""}${x.counted === false ? " nc" : ""}"><div class="src"><span class="w" title="prestige weight">${fmt(x.weight)}</span> ${esc(x.feed)} · ${ago(x.published)}</div>
+            <a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener noreferrer">${hl(x.title, re)}</a>
+            ${x.snippet ? `<div class="snippet">${hl(x.snippet, re)}</div>` : ""}</li>`).join("")}
+        </ul>
+      </details>
+    </article>`;
+  }).join("");
 }
 
+// ---------- Settings: one vertical ----------
+const S_FIELDS = ["min_feeds", "hours", "threshold", "min_score", "min_weight", "only_watched", "watched_any", "require_all"];
+const S_BOOL = new Set(["only_watched", "watched_any"]);
+let V = null, vSeq = 0, lastFeedsJson = "";
+
+function showSettings(cfg) {
+  S_FIELDS.forEach((k) => {
+    const el = $("s_" + k);
+    if (el === document.activeElement && k !== "threshold") return;  // don't fight the user's typing
+    if (S_BOOL.has(k)) el.checked = !!cfg[k];
+    else if (k === "require_all") el.value = String(!!cfg[k]);
+    else if (k === "hours") {
+      if (![...el.options].some((o) => Number(o.value) === cfg.hours)) el.add(new Option(`${fmt(cfg.hours)} hours`, cfg.hours));
+      el.value = String(cfg.hours);
+    } else el.value = fmt(cfg[k]);
+  });
+  $("threshold_out").textContent = Number(cfg.threshold).toFixed(2);
+}
+function readSetting(k) {
+  const el = $("s_" + k);
+  if (S_BOOL.has(k)) return el.checked;
+  if (k === "require_all") return el.value === "true";
+  return el.value === "" ? NaN : Number(el.value);
+}
+const pending = {};
+let saveTimer, savedTimer;
+function queueSave(k) {
+  const v = V;
+  pending[k] = readSetting(k);
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    const body = {};
+    for (const [key, val] of Object.entries(pending)) if (!(typeof val === "number" && !Number.isFinite(val))) body[key] = val;
+    Object.keys(pending).forEach((key) => delete pending[key]);
+    if (!Object.keys(body).length) return;
+    try {
+      const d = await patch(`/api/${v}/settings`, body);
+      if (v !== V) return;
+      $("settings_msg").textContent = ""; showSettings(d.settings);
+      $("saved").hidden = false; clearTimeout(savedTimer); savedTimer = setTimeout(() => ($("saved").hidden = true), 1500);
+    } catch (e) { if (v === V) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = e.message; } }
+  }, 400);
+}
+S_FIELDS.forEach((k) => {
+  const el = $("s_" + k);
+  el.addEventListener(S_BOOL.has(k) || el.tagName === "SELECT" ? "change" : "input", () => {
+    if (k === "threshold") $("threshold_out").textContent = Number(el.value).toFixed(2);
+    queueSave(k);
+  });
+});
+$("reset_settings").addEventListener("click", async () => {
+  const v = V;
+  try { const d = await patch(`/api/${v}/settings`, { reset: true }); if (v === V) { showSettings(d.settings); $("settings_msg").textContent = ""; } }
+  catch (e) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = e.message; }
+});
+
+async function openVertical(key) {
+  V = key; const my = ++vSeq;
+  $("feeds").innerHTML = ""; $("phrases").innerHTML = ""; $("feed_count").textContent = "…"; $("using").textContent = "";
+  $("add_msg").textContent = ""; $("watch_msg").textContent = ""; $("settings_msg").textContent = ""; $("feed_search").value = "";
+  $("required_note").hidden = true; lastFeedsJson = "";
+  try {
+    const d = await api(`/api/${key}/settings`);
+    if (my !== vSeq) return;
+    showSettings(d.settings);
+  } catch (e) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = e.message; }
+  await Promise.all([loadFeeds(true), loadPhrases(true)]);
+}
+
+// Watched phrases
+async function loadPhrases(force = false) {
+  const v = V; if (!v) return;
+  let d; try { d = await api(`/api/${v}/phrases`); } catch { return; }
+  if (v !== V) return;
+  if (!force && $("phrases").contains(document.activeElement)) return;
+  $("phrases").innerHTML = d.phrases.map((p) => `<li><span class="p">${esc(p.phrase)}</span>
+      <label class="sr-only" for="pb${p.id}">Bonus for ${esc(p.phrase)}</label>
+      <input type="number" id="pb${p.id}" min="0" max="${META.max_bonus}" step="1" value="${fmt(p.bonus)}" data-pbonus="${p.id}" data-v="${v}" title="Bonus points">
+      <button class="ghost" aria-label="Stop watching ${esc(p.phrase)}" data-pdel="${p.id}" data-v="${v}">×</button></li>`).join("")
+    || `<li class="muted" style="font-size:13px">No phrases yet.</li>`;
+}
+$("watch_form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const v = V, bonus = parseFloat($("watch_bonus").value);
+  try {
+    await post(`/api/${v}/phrases`, { phrase: $("watch_phrase").value.trim(), bonus: Number.isFinite(bonus) ? bonus : META.default_bonus });
+    if (v === V) { $("watch_phrase").value = ""; $("watch_msg").textContent = ""; loadPhrases(true); }
+  } catch (err) { if (v === V) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; } }
+});
+$("phrases").addEventListener("click", async (e) => {
+  const { pdel: id, v } = e.target.dataset; if (!id) return;
+  try { await api(`/api/${v}/phrases/${id}`, { method: "DELETE" }); } catch (err) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; }
+  if (v === V) loadPhrases(true);
+});
+$("phrases").addEventListener("change", async (e) => {
+  const { pbonus: id, v } = e.target.dataset; if (!id) return;
+  const bonus = parseFloat(e.target.value);
+  try {
+    if (!Number.isFinite(bonus) || bonus < 0 || bonus > META.max_bonus) throw new Error(`Bonus goes from 0 to ${META.max_bonus}.`);
+    await patch(`/api/${v}/phrases/${id}`, { bonus });
+  } catch (err) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; }
+  e.target.blur(); if (v === V) loadPhrases(true);
+});
+$("phrases").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.pbonus) e.target.blur(); });
+
+// Outlets
 function feedRow(f, v) {
-  const viaFeedly = f.via === "feedly";
-  const failed = f.last_error && !viaFeedly;
+  const viaFeedly = f.via === "feedly", failed = f.last_error && !viaFeedly;
   const state = failed ? "err" : (viaFeedly ? "warn" : (f.last_fetched ? "" : "pending"));
   const via = viaFeedly ? ` · <span class="warn" title="${esc(f.last_error || "")}">via Feedly</span>` : "";
-  const sub = failed
-    ? `<div class="sub err">${esc(f.last_error)}</div>`
-    : `<div class="sub">${f.item_count} items · fetched ${ago(f.last_fetched)}${via}</div>`;
-  const name = f.name || f.title || f.url;
-  const w = Number(f.weight ?? DEFAULT_WEIGHT);
+  const sub = failed ? `<div class="sub err">${esc(f.last_error)}</div>`
+                     : `<div class="sub">${f.item_count} items · fetched ${ago(f.last_fetched)}${via}</div>`;
+  const name = f.name || f.title || f.url, w = Number(f.weight ?? META.default_weight);
   const on = f.enabled !== 0, req = f.required === 1;
   return `<li class="${on ? "" : "off"}${req ? " required" : ""}" data-search="${esc((name + " " + f.url).toLowerCase())}">
     <span class="dot ${state}"></span>
-    <div class="info"><div class="name">${esc(name)}</div>
-      <div class="sub">${esc(f.url)}</div>${sub}</div>
-    <div class="controls-col">
-      <label class="switch" title="${on ? "Used in stories" : "Not used in stories"}">
-        <input type="checkbox" ${on ? "checked" : ""} data-toggle="${f.id}" data-v="${v}" aria-label="Use ${esc(name)}">
-        ${on ? "On" : "Off"}
-      </label>
-      <label class="req" title="Only show stories that this outlet reports">
-        <input type="checkbox" ${req ? "checked" : ""} data-require="${f.id}" data-v="${v}" aria-label="Require ${esc(name)}"> Required
-      </label>
-      <div class="row-actions">
-        <input type="number" class="weight" min="0" max="${MAX_WEIGHT}" step="0.5" value="${fmt(w)}" data-weight="${f.id}" data-v="${v}"
-               aria-label="Prestige weight for ${esc(name)}" title="Prestige weight: 0 to ${MAX_WEIGHT} (seed lists use 1 = small blog to 5 = paper of record)">
+    <div class="info"><div class="name">${esc(name)}</div><div class="sub">${esc(f.url)}</div>${sub}</div>
+    <div class="ctl">
+      <div class="row">
+        <label class="switch" title="${on ? "Used in stories" : "Not used in stories"}"><input type="checkbox" ${on ? "checked" : ""} data-toggle="${f.id}" data-v="${v}" aria-label="Use ${esc(name)}">${on ? "On" : "Off"}</label>
+        <label class="req" title="Only show stories this outlet reports"><input type="checkbox" ${req ? "checked" : ""} data-require="${f.id}" data-v="${v}" aria-label="Require ${esc(name)}"> Required</label>
+      </div>
+      <div class="row">
+        <input type="number" class="weight" min="0" max="${META.max_weight}" step="0.5" value="${fmt(w)}" data-weight="${f.id}" data-v="${v}" aria-label="Prestige weight for ${esc(name)}" title="Prestige weight">
         <button class="ghost" aria-label="Remove ${esc(name)}" title="Remove feed" data-del="${f.id}" data-v="${v}">×</button>
       </div>
     </div>
   </li>`;
 }
-
-async function loadFeeds(force = false) {
-  const v = V, seq = ++feedsSeq;
-  let data;
-  try { data = await api(`/api/${v}/feeds`); }
-  catch (e) {
-    if (v === V && seq === feedsSeq) $("status").textContent = "Can't reach the server: " + e.message;
-    return;
-  }
-  if (v !== V || seq !== feedsSeq) return; // a newer request or another tab took over
-  const { feeds, refreshing, last_run, scrape } = data;
-  renderScrape(scrape);
-  feedCount = feeds.filter((f) => f.enabled !== 0).length;
-  $("feed_count").textContent = feeds.length;
-  $("using").textContent = feeds.length ? `Using ${feedCount} of ${feeds.length} outlets in stories` : "";
-  renderRequired(feeds);
-
-  // Don't rebuild the list under the user's hands (open ★ menu, focused button), or when nothing changed.
-  const json = JSON.stringify(feeds);
-  const busy = $("feeds").contains(document.activeElement);
-  if (force || (!busy && json !== lastFeedsJson)) {
-    $("feeds").innerHTML = feeds.map((f) => feedRow(f, v)).join("") || `<li class="sub">No feeds yet. Add an RSS or Atom URL above.</li>`;
-    lastFeedsJson = json;
-    applyFeedSearch();
-  }
-  if (wasRefreshing && !refreshing) loadStories();
-  wasRefreshing = refreshing;
+function renderRequired(feeds) {
+  const req = feeds.filter((f) => f.required === 1), name = (f) => f.name || f.title || f.url;
+  $("required_note").hidden = !req.length;
+  if (!req.length) return;
+  $("required_list").innerHTML = `<strong>Required outlet${req.length === 1 ? "" : "s"}:</strong> ${req.map((f) => esc(name(f))).join(", ")}`;
+  $("s_require_all").disabled = req.length < 2;
+  const off = req.filter((f) => f.enabled === 0);
+  $("required_warn").hidden = !off.length;
+  $("required_warn").textContent = off.length ? `${off.map(name).join(", ")} ${off.length === 1 ? "is" : "are"} switched off, so ${off.length === 1 ? "it" : "they"} can't appear in any story.` : "";
 }
-
-const storyKey = (s) => s.lead.link || s.title;
-
-async function loadStories(force = false) {
-  const v = V, seq = ++storiesSeq, cfg = currentSettings();
-  $("threshold_out").textContent = Number(cfg.threshold).toFixed(2);
-  let data;
-  try { data = await api(`/api/${v}/stories?` + new URLSearchParams(cfg)); }
-  catch (e) {
-    if (v !== V || seq !== storiesSeq) return;
-    $("summary").textContent = "Couldn't load stories: " + e.message;
-    $("stories").innerHTML = ""; lastStoriesJson = "";
-    return;
-  }
-  if (v !== V || seq !== storiesSeq) return;
-  const n = cfg.min_feeds;
-  $("summary").textContent = `${data.stories.length} stories reported by ≥ ${n} feed${n === 1 ? "" : "s"} · ${data.items_considered} headlines scanned`;
-  const json = JSON.stringify(data.stories);
-  if (!force && json === lastStoriesJson) return; // unchanged: keep scroll and expanded lists as they are
-  lastStoriesJson = json;
-  if (!data.stories.length) {
-    $("stories").innerHTML = `<div class="empty">${
-      feedCount < n
-        ? `${feedCount} outlet${feedCount === 1 ? " is" : "s are"} switched on in this tab. Turn on or add at least ${n} to see stories reported by ${n} sources.`
-        : requiredCount && !data.stories.length
-          ? `No stories in this window include the required outlet${requiredCount === 1 ? "" : "s"}. Clear or change them in the Filter panel.`
-        : cfg.only_watched
-          ? (PHRASES.length ? "No stories mention a watched phrase in this window." : "Add a watched phrase, or turn off “Only show stories with a watched phrase”.")
-          : "No stories meet the filters yet. Try lowering “reported by”, widening the time window, or loosening match strictness."
-    }</div>`;
-    return;
-  }
-  const open = new Set([...document.querySelectorAll("#stories details[open]")].map((d) => d.dataset.key));
-  $("stories").innerHTML = data.stories.map((s) => `
-    <article class="story${s.watched.length ? " watched" : ""}">
-      <div class="story-head">
-        <div class="badge" title="${s.coverage} counted outlet${s.coverage === 1 ? "" : "s"}${s.outlets > s.coverage ? ` (of ${s.outlets})` : ""} · prestige ${fmt(s.base_score)}${s.bonus ? ` + ${fmt(s.bonus)} watched bonus` : ""}">${s.coverage}<small>feeds</small><span class="score">★ ${fmt(s.score)}</span></div>
-        <div style="min-width:0">
-          <h3>${s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${hl(s.title)}</a>` : hl(s.title)}</h3>
-          <div class="lead">${esc(s.lead.feed)}</div>
-          ${s.lead.description ? `<p class="desc">${hl(s.lead.description)}</p>` : ""}
-          ${s.watched.length ? `<div class="chips">${s.watched.map((w) => `<span class="chip">Watched: ${esc(w.phrase)} +${fmt(w.bonus)}</span>`).join("")}</div>` : ""}
-          <div class="when">First seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</div>
-        </div>
-      </div>
-      <details data-key="${esc(storyKey(s))}" ${open.has(storyKey(s)) || (s.watched.length && !s.watched.some((w) => phraseIn(s.title, w.phrase))) ? "open" : ""}>
-        <summary>${s.sources.slice(0, 6).map((x) => esc(x.feed)).join(" · ")}${s.sources.length > 6 ? ` · +${s.sources.length - 6} more` : ""}</summary>
-        <ul class="sources">${s.sources.map((x) => `
-          <li class="${x.watched ? "hit" : ""}${x.counted === false ? " nc" : ""}"><div class="src"><span class="w" title="prestige weight">${fmt(x.weight)}</span> ${esc(x.feed)} · ${ago(x.published)}</div>
-            <a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener noreferrer">${hl(x.title)}</a>
-            ${x.snippet ? `<div class="snippet">${hl(x.snippet)}</div>` : ""}</li>`).join("")}
-        </ul>
-      </details>
-    </article>`).join("");
-}
-
-$("add_form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const v = V, label = vertical(v).label;
-  const url = $("feed_url").value.trim();
-  $("add_btn").disabled = true;
-  $("add_msg").className = "msg"; $("add_msg").textContent = `Checking feed for ${label}…`;
-  try {
-    const { feed } = await api(`/api/${v}/feeds`, { method: "POST", body: JSON.stringify({ url }) });
-    if (v !== V) return; // user moved to another tab; the feed is still added to its own tab
-    $("add_msg").className = "msg ok";
-    $("add_msg").textContent = `Added “${feed.name || feed.title || feed.url}” to ${label} (${feed.item_count} items).`;
-    $("feed_url").value = "";
-    await loadFeeds(true); await loadStories(true);
-  } catch (err) {
-    if (v !== V) return;
-    $("add_msg").className = "msg err"; $("add_msg").textContent = err.message;
-  } finally { $("add_btn").disabled = false; }
-});
-
-// Feed actions use the row's own vertical, never whichever tab happens to be open.
-$("feeds").addEventListener("click", async (e) => {
-  const { del: id, v } = e.target.dataset;
-  if (!id || !v || !confirm("Remove this feed and its stored headlines?")) return;
-  try {
-    await api(`/api/${v}/feeds/` + id, { method: "DELETE" });
-  } catch (err) { $("status").textContent = "Couldn't remove the feed: " + err.message; return; }
-  if (v === V) { await loadFeeds(true); await loadStories(true); }
-});
-
-async function patchFeed(v, id, body, what) {
-  try {
-    await api(`/api/${v}/feeds/` + id, { method: "PATCH", body: JSON.stringify(body) });
-  } catch (err) { $("status").textContent = `Couldn't change the ${what}: ` + err.message; }
-  if (v === V) { await loadFeeds(true); await loadStories(true); }
-}
-
-$("feeds").addEventListener("change", async (e) => {
-  const t = e.target, { v } = t.dataset;
-  if (!v) return;
-  if (t.dataset.require) {
-    t.closest("li").classList.toggle("required", t.checked);
-    return patchFeed(v, t.dataset.require, { required: t.checked }, "required setting");
-  }
-  if (t.dataset.toggle) {
-    t.closest("li").classList.toggle("off", !t.checked);
-    return patchFeed(v, t.dataset.toggle, { enabled: t.checked }, "outlet setting");
-  }
-  if (t.dataset.weight) {
-    const w = parseFloat(t.value);
-    if (!Number.isFinite(w) || w < 0 || w > MAX_WEIGHT) {
-      $("status").textContent = `Weights go from 0 to ${MAX_WEIGHT}.`;
-      return loadFeeds(true); // put the saved value back
-    }
-    t.blur();
-    return patchFeed(v, t.dataset.weight, { weight: w }, "weight");
-  }
-});
-// Enter in a weight box saves it (the change event fires on blur).
-$("feeds").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.weight) e.target.blur(); });
-
-function applyFeedSearch() {
+function applySearch() {
   const q = $("feed_search").value.trim().toLowerCase();
   document.querySelectorAll("#feeds li[data-search]").forEach((li) => { li.hidden = !!q && !li.dataset.search.includes(q); });
 }
-$("feed_search").addEventListener("input", applyFeedSearch);
-
-async function setAll(enabled) {
-  const v = V;
-  try { await api(`/api/${v}/feeds`, { method: "PATCH", body: JSON.stringify({ enabled }) }); }
-  catch (err) { $("status").textContent = "Couldn't change the outlets: " + err.message; return; }
-  if (v === V) { await loadFeeds(true); await loadStories(true); }
-}
-$("all_on").addEventListener("click", () => setAll(true));
-$("clear_required").addEventListener("click", async () => {
-  const v = V;
-  try { await api(`/api/${v}/feeds`, { method: "PATCH", body: JSON.stringify({ required: false }) }); }
-  catch (err) { $("status").textContent = "Couldn't clear required outlets: " + err.message; return; }
-  if (v === V) { await loadFeeds(true); await loadStories(true); }
-});
-$("all_off").addEventListener("click", () => setAll(false));
-
-let resumable = false;
-function renderScrape(st) {
-  if (!st) return;
-  const run = st.run, busy = st.state !== "idle";
-  resumable = st.resumable;
-  $("stop").hidden = !busy;
-  $("refresh").hidden = busy;
-  $("refresh").textContent = resumable ? "Resume" : "Refresh feeds";
-  $("refresh").title = resumable ? `Continue the ${run.kind} that stopped at ${run.done}/${run.total} feeds` : "Fetch every feed now";
-  if (!$("auto").matches(":focus")) $("auto").checked = st.auto;
-  $("auto_every").textContent = st.auto ? `(${fmt(st.interval_minutes)} min)` : "";
-  if (busy) {
-    $("status").textContent = `${st.state === "stopping" ? "Stopping" : run.kind === "backfill" ? "Backfilling" : "Refreshing"} ${run.done}/${run.total} feeds…`;
-  } else if (resumable) {
-    $("status").textContent = `Stopped at ${run.done}/${run.total} feeds${run.error ? ": " + run.error : ""}`;
-  } else {
-    const done = st.last_run?.finished_at;
-    $("status").textContent = done ? "Updated " + ago(done) : "";
+$("feed_search").addEventListener("input", applySearch);
+let feedsSeq = 0;
+async function loadFeeds(force = false) {
+  const v = V, seq = ++feedsSeq; if (!v) return;
+  let d; try { d = await api(`/api/${v}/feeds`); } catch (e) { return; }
+  if (v !== V || seq !== feedsSeq) return;
+  const feeds = d.feeds, on = feeds.filter((f) => f.enabled !== 0).length;
+  $("feed_count").textContent = feeds.length;
+  $("using").textContent = feeds.length ? `${on} of ${feeds.length} outlets switched on` : "";
+  renderRequired(feeds);
+  const json = JSON.stringify(feeds);
+  if (force || (!$("feeds").contains(document.activeElement) && json !== lastFeedsJson)) {
+    $("feeds").innerHTML = feeds.map((f) => feedRow(f, v)).join("") || `<li class="muted">No feeds yet. Add an RSS or Atom URL above.</li>`;
+    lastFeedsJson = json; applySearch();
   }
 }
-
-$("refresh").addEventListener("click", async () => {
-  try {
-    const body = resumable ? { resume: true } : { kind: "refresh", resume: false };
-    renderScrape(await api("/api/scrape/start", { method: "POST", body: JSON.stringify(body) }));
-  } catch (err) { $("status").textContent = "Couldn't start: " + err.message; return; }
-  wasRefreshing = true;
+async function feedChange(v, id, body, what) {
+  try { await patch(`/api/${v}/feeds/${id}`, body); }
+  catch (err) { $("add_msg").className = "msg err"; $("add_msg").textContent = `Couldn't change the ${what}: ${err.message}`; }
+  if (v === V) loadFeeds(true);
+}
+$("feeds").addEventListener("change", (e) => {
+  const t = e.target, { v } = t.dataset; if (!v) return;
+  if (t.dataset.toggle) { t.closest("li").classList.toggle("off", !t.checked); return feedChange(v, t.dataset.toggle, { enabled: t.checked }, "outlet setting"); }
+  if (t.dataset.require) { t.closest("li").classList.toggle("required", t.checked); return feedChange(v, t.dataset.require, { required: t.checked }, "required setting"); }
+  if (t.dataset.weight) {
+    const w = parseFloat(t.value);
+    if (!Number.isFinite(w) || w < 0 || w > META.max_weight) { $("add_msg").className = "msg err"; $("add_msg").textContent = `Weights go from 0 to ${META.max_weight}.`; return loadFeeds(true); }
+    t.blur(); return feedChange(v, t.dataset.weight, { weight: w }, "weight");
+  }
 });
-$("stop").addEventListener("click", async () => {
-  try { renderScrape(await api("/api/scrape/stop", { method: "POST", body: "{}" })); }
-  catch (err) { $("status").textContent = "Couldn't stop: " + err.message; }
+$("feeds").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.weight) e.target.blur(); });
+$("feeds").addEventListener("click", async (e) => {
+  const { del: id, v } = e.target.dataset;
+  if (!id || !confirm("Remove this feed and its stored headlines?")) return;
+  try { await api(`/api/${v}/feeds/${id}`, { method: "DELETE" }); } catch (err) { $("add_msg").className = "msg err"; $("add_msg").textContent = err.message; }
+  if (v === V) loadFeeds(true);
 });
-$("auto").addEventListener("change", async (e) => {
-  try { renderScrape(await api("/api/scrape/schedule", { method: "POST", body: JSON.stringify({ auto: e.target.checked }) })); }
-  catch (err) { $("status").textContent = "Couldn't change the schedule: " + err.message; }
+async function setAll(enabled) {
+  const v = V;
+  try { await patch(`/api/${v}/feeds`, { enabled }); } catch (err) { $("add_msg").className = "msg err"; $("add_msg").textContent = err.message; }
+  if (v === V) loadFeeds(true);
+}
+$("all_on").addEventListener("click", () => setAll(true));
+$("all_off").addEventListener("click", () => setAll(false));
+$("clear_required").addEventListener("click", async () => {
+  const v = V;
+  try { await patch(`/api/${v}/feeds`, { required: false }); } catch (err) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = err.message; }
+  if (v === V) loadFeeds(true);
 });
-
-// Watched phrases
-$("watch_form").addEventListener("submit", async (e) => {
+$("add_form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const v = V, phrase = $("watch_phrase").value.trim(), bonus = parseFloat($("watch_bonus").value);
+  const v = V; $("add_btn").disabled = true;
+  $("add_msg").className = "msg"; $("add_msg").textContent = `Checking feed for ${label(v)}…`;
   try {
-    await api(`/api/${v}/phrases`, { method: "POST", body: JSON.stringify({ phrase, bonus: Number.isFinite(bonus) ? bonus : DEFAULT_BONUS }) });
+    const { feed } = await post(`/api/${v}/feeds`, { url: $("feed_url").value.trim() });
     if (v !== V) return;
-    $("watch_phrase").value = ""; $("watch_msg").className = "msg"; $("watch_msg").textContent = "";
-    await loadPhrases(true); await loadStories(true);
-  } catch (err) { if (v === V) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; } }
+    $("add_msg").className = "msg ok"; $("add_msg").textContent = `Added “${feed.name || feed.title || feed.url}” to ${label(v)} (${feed.item_count} items).`;
+    $("feed_url").value = ""; loadFeeds(true);
+  } catch (err) { if (v === V) { $("add_msg").className = "msg err"; $("add_msg").textContent = err.message; } }
+  finally { $("add_btn").disabled = false; }
 });
-$("phrases").addEventListener("click", async (e) => {
-  const { pdel: id, v } = e.target.dataset;
-  if (!id || !v) return;
-  try { await api(`/api/${v}/phrases/${id}`, { method: "DELETE" }); }
-  catch (err) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; return; }
-  if (v === V) { await loadPhrases(true); await loadStories(true); }
-});
-$("phrases").addEventListener("change", async (e) => {
-  const { pbonus: id, v } = e.target.dataset;
-  if (!id || !v) return;
-  const bonus = parseFloat(e.target.value);
-  try {
-    if (!Number.isFinite(bonus) || bonus < 0 || bonus > MAX_BONUS) throw new Error(`Bonus goes from 0 to ${MAX_BONUS}.`);
-    await api(`/api/${v}/phrases/${id}`, { method: "PATCH", body: JSON.stringify({ bonus }) });
-  } catch (err) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; }
-  e.target.blur();
-  if (v === V) { await loadPhrases(true); await loadStories(true); }
-});
-$("phrases").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.pbonus) e.target.blur(); });
 
-let debounce;
-SETTINGS.forEach((k) => $(k).addEventListener(CHECKS.has(k) || k === "require_all" ? "change" : "input", () => {
-  clearTimeout(debounce);
-  debounce = setTimeout(() => { saveSettings(); loadStories(true); }, 200);
-}));
+// ---------- Scraping (header + Settings › Scraping) ----------
+let SCRAPE = null, wasBusy = false;
+function renderScrape(st) {
+  if (!st) return;
+  SCRAPE = st;
+  const run = st.run, busy = st.state !== "idle";
+  $("hdr_stop").hidden = !busy; $("hdr_refresh").hidden = busy;
+  $("hdr_refresh").textContent = st.resumable ? "Resume" : "Refresh";
+  if (busy) $("status").textContent = st.state === "stopping" ? "Stopping…" : !run.total ? "Starting…"
+    : `${run.kind === "backfill" ? "Backfilling" : "Refreshing"} ${run.done}/${run.total}…`;
+  else if (st.resumable) $("status").textContent = `Stopped at ${run.done}/${run.total}`;
+  else $("status").textContent = st.last_run?.finished_at ? "Updated " + ago(st.last_run.finished_at) : "";
+  const rows = [["State", busy ? (st.state === "stopping" ? "Stopping…" : "Running") : st.resumable ? "Stopped (can resume)" : "Idle"]];
+  if (run && (busy || st.resumable)) {
+    rows.push(["Run", `${esc(run.kind)}${run.days ? ` (${fmt(run.days)} days)` : ""} · ${run.done}/${run.total} feeds${run.failed ? ` · ${run.failed} failed` : ""} · started ${ago(run.started_at)}`]);
+    if (run.current?.length) rows.push(["In progress", run.current.slice(0, 4).map(esc).join("<br>")]);
+    if (run.error) rows.push(["Note", esc(run.error)]);
+  }
+  if (st.last_run?.finished_at) rows.push(["Last completed", `${esc(st.last_run.kind)} · ${st.last_run.done}/${st.last_run.total} feeds · ${ago(st.last_run.finished_at)}`]);
+  const next = st.next_auto_at ? Math.round((st.next_auto_at - Date.now() / 1000) / 60) : null;
+  rows.push(["Schedule", st.auto ? `every ${fmt(st.interval_minutes)} min${next !== null ? ` · next ${next > 0 ? "in " + next + " min" : "soon"}` : ""}` : "off (manual or external)"]);
+  $("scrape_kv").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  $("scrape_progress").hidden = !run || (!busy && !st.resumable);
+  if (run && run.total) $("scrape_progress").firstElementChild.style.width = `${Math.round(100 * run.done / run.total)}%`;
+  $("sc_stop").hidden = !busy; $("sc_resume").hidden = busy || !st.resumable;
+  $("sc_refresh").disabled = $("sc_backfill").disabled = busy;
+  if (document.activeElement !== $("sc_auto")) $("sc_auto").checked = st.auto;
+  if (document.activeElement !== $("sc_interval")) $("sc_interval").value = fmt(st.interval_minutes);
+  if (wasBusy && !busy) loadStories();
+  wasBusy = busy;
+}
+async function loadScrape() { try { renderScrape(await api("/api/scrape/status")); } catch (e) { $("status").textContent = "Can't reach the server"; } }
+async function scrapeAction(path, body, what) {
+  try { renderScrape(await post(path, body)); $("scrape_msg").textContent = ""; }
+  catch (e) { $("scrape_msg").className = "msg err"; $("scrape_msg").textContent = `Couldn't ${what}: ${e.message}`; $("status").textContent = `Couldn't ${what}`; }
+}
+$("hdr_refresh").addEventListener("click", () => scrapeAction("/api/scrape/start",
+  SCRAPE?.resumable ? { kind: SCRAPE.run.kind, days: SCRAPE.run.days || undefined, resume: true } : { kind: "refresh", resume: false }, "start"));
+$("hdr_stop").addEventListener("click", () => scrapeAction("/api/scrape/stop", {}, "stop"));
+$("sc_refresh").addEventListener("click", () => scrapeAction("/api/scrape/start", { kind: "refresh", resume: false }, "start a refresh"));
+$("sc_resume").addEventListener("click", () => scrapeAction("/api/scrape/start", { kind: SCRAPE?.run?.kind || "refresh", days: SCRAPE?.run?.days || undefined, resume: true }, "resume"));
+$("sc_stop").addEventListener("click", () => scrapeAction("/api/scrape/stop", {}, "stop"));
+$("sc_backfill").addEventListener("click", () => {
+  const days = parseFloat($("sc_days").value);
+  if (!Number.isFinite(days) || days < 1 || days > 14) { $("scrape_msg").className = "msg err"; $("scrape_msg").textContent = "Backfill 1 to 14 days."; return; }
+  scrapeAction("/api/scrape/start", { kind: "backfill", days, resume: false }, "start a backfill");
+});
+$("sc_auto").addEventListener("change", (e) => scrapeAction("/api/scrape/schedule", { auto: e.target.checked }, "change the schedule"));
+$("sc_interval").addEventListener("change", (e) => {
+  const n = parseFloat(e.target.value);
+  if (!Number.isFinite(n) || n < 1 || n > 1440) { $("scrape_msg").className = "msg err"; $("scrape_msg").textContent = "Interval: 1 to 1440 minutes."; return; }
+  scrapeAction("/api/scrape/schedule", { interval_minutes: n }, "change the schedule");
+});
 
+// ---------- Start ----------
 api("/api/verticals").then((d) => {
-  VERTICALS = d.verticals; DEFAULT_THRESHOLD = d.default_threshold; DEFAULT_WEIGHT = d.default_weight;
-  MAX_WEIGHT = d.max_weight ?? MAX_WEIGHT;
-  DEFAULT_BONUS = d.default_bonus ?? DEFAULT_BONUS; MAX_BONUS = d.max_bonus ?? MAX_BONUS;
-  $("watch_bonus").value = DEFAULT_BONUS;
-  $("tabs").innerHTML = VERTICALS.map((v) => `<a href="#${v.key}" data-v="${v.key}">${esc(v.label)}</a>`).join("");
-  selectVertical(location.hash.slice(1));
+  META = d; $("watch_bonus").value = d.default_bonus;
+  if (!location.hash) history.replaceState(null, "", "#stories/all");
+  render();
 }).catch((e) => { $("summary").textContent = "Can't reach the server: " + e.message; });
-setInterval(() => V && loadFeeds(), 5000);
-setInterval(() => V && loadStories(), 60000);
+loadScrape();
+setInterval(loadScrape, 5000);
+setInterval(() => { if (route.top === "settings" && route.sub !== "scraping") loadFeeds(); }, 5000);
+setInterval(() => { if (route.top === "stories") loadStories(); }, 60000);
 </script>
 </body>
 </html>

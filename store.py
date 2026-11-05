@@ -2,12 +2,13 @@
 
 Schema history (PRAGMA user_version): v1 feeds+items; v2 feeds.via; v3 feeds.name; v4 feeds.weight;
 v5 feeds.enabled; v6 feeds.backfilled_since + items.description; v7 feeds.last_run + feeds.required +
-phrases table.
+phrases table; v8 settings table.
 Older files are upgraded in place when opened.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import threading
@@ -21,7 +22,7 @@ import feeds
 import matching
 
 RETENTION_DAYS = 14
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 MAX_WEIGHT = 10.0
 MAX_BONUS = 100.0
 DEFAULT_BONUS = 5.0
@@ -55,6 +56,10 @@ CREATE TABLE IF NOT EXISTS items (
     UNIQUE (feed_id, guid)
 );
 CREATE INDEX IF NOT EXISTS items_published ON items(published);
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL            -- JSON
+);
 CREATE TABLE IF NOT EXISTS phrases (
     id       INTEGER PRIMARY KEY,
     phrase   TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -243,6 +248,22 @@ class Store:
                 (matching.DEFAULT_WEIGHT, since),
             ).fetchall()
         return [matching.Item(**dict(r)) for r in rows]
+
+    # --- settings (story filters for this vertical) ---------------------------------------------
+
+    def get_settings(self) -> dict:
+        with self._conn() as c:
+            return {r["key"]: json.loads(r["value"]) for r in c.execute("SELECT key, value FROM settings")}
+
+    def set_settings(self, values: dict) -> None:
+        with self._write() as c:
+            c.executemany("INSERT INTO settings (key, value) VALUES (?, ?) "
+                          "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                          [(k, json.dumps(v)) for k, v in values.items()])
+
+    def reset_settings(self) -> None:
+        with self._write() as c:
+            c.execute("DELETE FROM settings")
 
     # --- watched phrases -----------------------------------------------------------------------
 
