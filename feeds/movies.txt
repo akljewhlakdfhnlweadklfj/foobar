@@ -32,3 +32,9 @@ https://moxie.foxnews.com/google-publisher/entertainment.xml             # Fox N
 https://www.rollingstone.com/tv-movies/feed/                             # Rolling Stone (TV & Movies) | w=3 | general | ~26/wk
 https://www.avclub.com/rss                                               # The A.V. Club | w=3 | general | ~148/wk
 https://www.cbc.ca/webfeed/rss/rss-arts                                  # CBC (Arts) | w=3 | general | ~21/wk
+
+# --- YouTube channels (people: respected, mid-sized; checked active 2026-11-05) ---
+# A channel is an outlet; its video titles/descriptions are its headlines. Weight 2 by default.
+https://www.youtube.com/feeds/videos.xml?channel_id=UCAXR2zenCwvRIyQd9ydtfaA   # YouTube: Beyond The Trailer | w=2 | youtube | 937K; ~13/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCCqEeDAUf4Mg0GgEN658tkA   # YouTube: Chris Stuckmann | w=2 | youtube | 2.0M; ~27/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCSc16oMxxlcJSb9SXkjwMjA   # YouTube: YMS | w=2 | youtube | 1.1M; ~2/mo

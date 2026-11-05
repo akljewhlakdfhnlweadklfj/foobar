@@ -34,6 +34,7 @@ import groups as groups_mod
 import feeds
 import matching
 import seedcache
+import youtube
 from scraper import Scraper, fetch_with_fallback
 from store import DEFAULT_BONUS, MAX_BONUS, MAX_WEIGHT, RETENTION_DAYS, Store, read_feed_list
 
@@ -408,8 +409,12 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 return self._json({"group": group_store.get(group_store.create(cfg))}, 201)
             if store and rest == ["feeds"]:
                 url = str(body.get("url", "")).strip()
+                try:
+                    url = youtube.feed_url_for(url) or url          # a YouTube channel link or @handle
+                except feeds.FeedError as e:
+                    raise HTTPError(400, str(e))
                 if not url.lower().startswith(("http://", "https://")):
-                    raise HTTPError(400, "URL must start with http:// or https://")
+                    raise HTTPError(400, "URL must start with http:// or https:// (or be a YouTube @handle)")
                 try:
                     parsed, via, note = fetch_with_fallback(url)  # validate before saving
                 except feeds.FeedError as e:

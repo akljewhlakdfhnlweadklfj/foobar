@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable
 
 import feedly
+import youtube
 import feeds
 from store import RETENTION_DAYS, Store
 
@@ -49,7 +50,10 @@ def _from_feedly(entries: list[dict], title: str = "", feed_url: str = "") -> fe
 
 
 def fetch_with_fallback(url: str) -> tuple[feeds.ParsedFeed, str, str | None]:
-    """(parsed feed, via, note). Tries the feed directly, then Feedly's copy of it."""
+    """(parsed feed, via, note). Tries the feed directly, then Feedly's copy of it (YouTube channels:
+    see youtube.fetch)."""
+    if youtube.is_youtube(url):
+        return youtube.fetch(url, _from_feedly)
     try:
         return feeds.fetch_and_parse(url), "direct", None
     except feeds.FeedError as direct_err:

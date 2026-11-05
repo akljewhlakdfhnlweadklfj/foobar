@@ -127,6 +127,7 @@ class Item:
     weight: float = DEFAULT_WEIGHT  # outlet prestige, 1 (small blog) .. 5 (paper of record)
     description: str = ""
     image: str = ""
+    views: int | None = None  # YouTube videos: view count, when known
     tokens: frozenset[str] = field(default_factory=frozenset)
 
 

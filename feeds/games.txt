@@ -77,3 +77,10 @@ http://www.heypoorplayer.com/feed/                                       # Hey P
 https://report.wand.com/feed                                             # The Wand Report | w=1 | 11 | ~8/wk
 https://www.crossplay.news/feed                                          # Crossplay | w=1 | - | ~2/wk
 https://somanygames.co.uk/feed/                                          # So Many Games | w=1 | 1 | ~5/wk
+
+# --- YouTube channels (people: respected, mid-sized; checked active 2026-11-05) ---
+# A channel is an outlet; its video titles/descriptions are its headlines. Weight 2 by default.
+https://www.youtube.com/feeds/videos.xml?channel_id=UCZ7AeeVbyslLM_8-nVy2B8Q   # YouTube: Skill Up | w=2 | youtube | 1.1M subscribers; ~14/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCiUhKqsBH-Is2VeC2sykEfg   # YouTube: MinnMax | w=2 | youtube | 78K; ~19/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCZrxXp1reP8E353rZsB3jaA   # YouTube: Easy Allies | w=2 | youtube | 262K; ~7/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCK9_x1DImhU-eolIay5rb2Q   # YouTube: ACG | w=2 | youtube | 1.2M; ~3/mo

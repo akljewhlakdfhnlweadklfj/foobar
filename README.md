@@ -168,10 +168,21 @@ outlet headline.
     the seeds back.
   - **Weights** only fill feeds that have none, so change an existing feed's weight in the UI.
 - **Retention**: headlines are kept for 30 days (`RETENTION_DAYS` in `store.py`), the longest time window.
-- **YouTube and TikTok**: every YouTube channel has a feed of its 15 latest videos
-  (`https://www.youtube.com/feeds/videos.xml?channel_id=<id>`; add it like any feed). Video titles
-  rarely read like headlines ("I tried…"), so they seldom match news stories; none are in the seed
-  lists. TikTok has no feeds.
+- **YouTube channels** are a second kind of source in every vertical (respected, mid-sized creators;
+  see the end of each `feeds/<vertical>.txt`, weight 2). A channel is an outlet: its videos are items,
+  with the video title as the headline, the video description as the description and the thumbnail as
+  the image, so they're grouped with articles and count toward "reported by". A story's headline and
+  description still come from its articles when it has any. Its details show its **most popular
+  video** (most views, with the thumbnail, channel and view count).
+  - **Metadata** in a channel feed (`https://www.youtube.com/feeds/videos.xml?channel_id=UC…`, its 15
+    latest videos): video id, channel id, title, link, channel name, published/updated times, and a
+    media group with the full description, a 480×360 thumbnail, the player URL, likes
+    (`media:starRating count`) and views (`media:statistics`).
+  - YouTube refuses that feed from some servers (HTTP 404 from cloud machines). Then the app uses
+    Feedly's copy (titles, descriptions, thumbnails, exact times; no counts) plus the channel's videos
+    page for view counts, at most every 3 hours per channel; if Feedly lacks the channel, the page
+    supplies the videos too (without descriptions).
+  - Add one in a vertical's catalog with its link or `@handle`. TikTok has no feeds.
 - **One feed per publisher** in each vertical. Two feeds from the same newsroom (e.g. NYT Movies and
   NYT Television) often carry identical headlines and would count one story twice toward N.
 - **Cached history** (`seed_cache/<vertical>.jsonl.gz`, currently Anime and Manga): 14 days of
@@ -412,6 +423,7 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 | `digest.py` | shared per-vertical story digests (build, cache, disk, background rebuilds) |
 | `groups.py` | filter groups: storage, validation, applying them to digests, cached results |
 | `ai.py` | AI headlines for groups with AI summary on (Claude API, cache, daily cap) |
+| `youtube.py` | YouTube channels: feed URLs from links/handles, channel pages (view counts), fallbacks |
 | `tools/build_snapshot.py` | static snapshot of the UI with each group's stories embedded (for sharing as a page) |
 | `static/index.html` | the UI |
 

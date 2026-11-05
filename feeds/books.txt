@@ -26,3 +26,9 @@ http://www.independent.ie/entertainment/books/rss                        # Irish
 https://www.ft.com/books?format=rss                                      # Financial Times (Books) | w=4 | general | ~12/wk
 https://www.theatlantic.com/feed/channel/books/                          # The Atlantic (Books) | w=4 | general | ~7/wk
 http://www.csmonitor.com/rss/books.rss                                   # Christian Science Monitor (Books) | w=3 | general | ~2/wk
+
+# --- YouTube channels (people: respected, mid-sized; checked active 2026-11-05) ---
+# A channel is an outlet; its video titles/descriptions are its headlines. Weight 2 by default.
+https://www.youtube.com/feeds/videos.xml?channel_id=UCmT3SYwGCZvzFLTo_18Cvnw   # YouTube: BooksandLala | w=2 | youtube | 163K; ~8/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCy6Qlkv2hif7KPtmMmNUGUw   # YouTube: PeruseProject | w=2 | youtube | 389K; ~2/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UC6wKgH6YIKKfNX9-EN0dxIA   # YouTube: abookolive | w=2 | youtube | 48K; ~2/mo

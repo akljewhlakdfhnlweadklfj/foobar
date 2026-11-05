@@ -37,3 +37,10 @@ https://www.euronews.com/rss                                             # Euron
 https://www.rfi.fr/en/rss                                                # RFI (English) | w=3 | general | ~54/wk
 http://www.japantimes.co.jp/feed/                                        # The Japan Times | w=3 | general | ~288/wk
 http://www.scmp.com/rss/91/feed                                          # South China Morning Post (News) | w=3 | general | ~484/wk
+
+# --- YouTube channels (people: respected, mid-sized; checked active 2026-11-05) ---
+# A channel is an outlet; its video titles/descriptions are its headlines. Weight 2 by default.
+https://www.youtube.com/feeds/videos.xml?channel_id=UCEszqJb1FjYisBevHBIof3g   # YouTube: Prof James Ker-Lindsay | w=2 | youtube | 328K; ~9/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCC3ehuUksTyQ7bbjGntmx3Q   # YouTube: Perun | w=2 | youtube | 646K; ~3/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCwnKziETDbHJtx78nIkfYug   # YouTube: CaspianReport | w=2 | youtube | 1.9M; ~4/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCSMqateX8OA2s1wsOR2EgJA   # YouTube: TLDR News | w=2 | youtube | 936K; ~7/mo

@@ -48,3 +48,9 @@ https://www.phonearena.com/feed/news                                     # Phone
 https://www.sammobile.com/feed/                                          # SamMobile | w=2 | phones | ~60/wk
 https://www.neowin.net/news/rss/                                         # Neowin | w=2 | windows | ~160/wk
 https://www.notebookcheck.net/News.152.100.html                          # Notebookcheck | w=2 | devices | ~450/wk
+
+# --- YouTube channels (people: respected, mid-sized; checked active 2026-11-05) ---
+# A channel is an outlet; its video titles/descriptions are its headlines. Weight 2 by default.
+https://www.youtube.com/feeds/videos.xml?channel_id=UCTzLRZUgelatKZ4nyIKcAbg   # YouTube: Hardware Canucks | w=2 | youtube | 1.9M; ~9/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCSOpcUkE-is7u7c4AkLgqTw   # YouTube: MrMobile (Michael Fisher) | w=2 | youtube | 1.3M; ~4/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCzlXf-yUIaOpOjEjPrOO9TA   # YouTube: The Tech Chap | w=2 | youtube | 1.7M; ~11/mo

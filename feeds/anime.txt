@@ -17,3 +17,10 @@ https://www.cbr.com/feed/category/anime-news/                            # CBR (
 https://comicbook.com/category/anime/feed/                               # ComicBook.com (Anime) | w=2 | general | ~81/wk
 https://screenrant.com/feed/anime-news/                                  # Screen Rant (Anime News) | w=2 | general | ~10/wk
 https://gamerant.com/feed/anime/                                         # Game Rant (Anime) | w=1 | general | ~98/wk
+
+# --- YouTube channels (people: respected, mid-sized; checked active 2026-11-05) ---
+# A channel is an outlet; its video titles/descriptions are its headlines. Weight 2 by default.
+https://www.youtube.com/feeds/videos.xml?channel_id=UCfGmaA-nXPryTfimsnkLieQ   # YouTube: Chibi Reviews | w=2 | youtube | 481K; ~30/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCmEbe0XH51CI09gm_9Fcn8Q   # YouTube: Glass Reflection | w=2 | youtube | 579K; ~3/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCBs2Y3i14e1NWQxOGliatmg   # YouTube: Mother's Basement | w=2 | youtube | 1.4M; ~2/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCOsAfA06zghgALnXPp4VbGA   # YouTube: AnimeUproar | w=2 | youtube | 2.0M; ~3/mo

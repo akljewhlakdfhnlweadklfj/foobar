@@ -271,6 +271,19 @@ class GroupStore:
 
 # --- views -----------------------------------------------------------------------------------
 
+def _top_video(srcs: list[dict], weight, outlets: dict) -> dict | None:
+    """The story's most popular YouTube video: most views (when known), then the higher-weighted
+    channel, then the newest."""
+    videos = [x for x in srcs if x.get("y")]
+    if not videos:
+        return None
+    x = max(videos, key=lambda x: (x.get("v", -1), weight(x), x["p"]))
+    out = {"t": x["t"], "l": x["l"], "o": outlets[x["f"]]["name"], "i": x["i"], "p": x["p"]}
+    if "v" in x:
+        out["v"] = x["v"]
+    return out
+
+
 def min_outlets(cfg: dict, countable: int) -> int:
     """The "reported by at least" number: a count, or a share of the outlets that can count (rounded
     up, at least 1; rounded exactly, so 7% of 100 is 7)."""
@@ -316,8 +329,11 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], catalog_fo
                 continue
             score = sum(weight(x) for x in counted)
             extra = len(counted) < need or score < cfg["min_score"]
-            lead = matching.pick_headline(counted, title=lambda x: x["t"], weight=weight, published=lambda x: x["p"])
-            best = sorted(srcs, key=lambda x: (-weight(x), -x["p"]))
+            # Headline, description and picture come from articles when the story has any (video titles
+            # are written for clicks); a story made only of videos uses those.
+            articles = [x for x in counted if not x.get("y")] or counted
+            lead = matching.pick_headline(articles, title=lambda x: x["t"], weight=weight, published=lambda x: x["p"])
+            best = sorted(srcs, key=lambda x: (bool(x.get("y")), -weight(x), -x["p"]))
             ordered = [lead] + sorted((x for x in srcs if x is not lead), key=lambda x: (-weight(x), x["p"]))
             keys = [item_key(x["l"], x["t"]) for x in st["s"]]
             out = {"id": st["id"], "v": v, "t": lead["t"], "l": lead["l"], "f": outlets[lead["f"]]["name"],
@@ -325,8 +341,11 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], catalog_fo
                    "i": lead["i"] or next((x["i"] for x in best if x["i"]), ""),
                    "k": st.get("k", [])[:1], "sc": round(score, 2), "cov": len(counted), "n": len(srcs),
                    "p": min(x["p"] for x in srcs), "u": max(x["p"] for x in srcs), "h": keys,
-                   "s": [{"o": outlets[x["f"]]["name"], "t": x["t"], "l": x["l"], "p": x["p"], "w": weight(x),
+                   "s": [{"o": outlets[x["f"]]["name"], "t": x["t"], "l": x["l"], "p": x["p"], "w": weight(x), "y": x.get("y", 0),
                           "d": x["d"], "c": weight(x) >= cfg["min_weight"]} for x in ordered]}
+            top = _top_video(srcs, weight, outlets)
+            if top:
+                out["mv"] = top                    # shown in the story's details
             if extra:
                 out["x"] = 1
             elif ai_on and summarizer is not None:

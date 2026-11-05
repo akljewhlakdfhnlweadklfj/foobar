@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -28,6 +29,7 @@ _DESC_BOILERPLATE = re.compile(
 # Google News titles end with " - <Publisher>".
 _GOOGLE_NEWS_SUFFIX = re.compile(r"\s+[-–—]\s+[^-–—]{2,60}$")
 _WS_RE = re.compile(r"\s+")
+_BLOCK_TAG_RE = re.compile(r"<\s*(br|/?p|/?div|/?li|/?h[1-6])\b[^<>]*>", re.I)
 
 
 @dataclass
@@ -38,6 +40,7 @@ class ParsedEntry:
     published: float  # unix timestamp
     description: str = ""  # plain-text summary, trimmed to DESCRIPTION_CHARS
     image: str = ""        # http(s) URL of a picture for the item, if the feed has one
+    views: int | None = None  # view count (YouTube videos), when known
 
 
 @dataclass
@@ -134,15 +137,13 @@ class _GuardedHTTPSHandler(urllib.request.HTTPSHandler):
 _opener = urllib.request.build_opener(_CheckedRedirects, _GuardedHTTPHandler, _GuardedHTTPSHandler)
 
 
-def fetch(url: str, timeout: float = 20.0) -> bytes:
+FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml, */*"
+
+
+def fetch(url: str, timeout: float = 20.0, accept: str = FEED_ACCEPT) -> bytes:
+    """Download (gzip-compressed when the server supports it), capped at MAX_BYTES and FETCH_DEADLINE."""
     check_url(url)
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
-        },
-    )
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept, "Accept-Encoding": "gzip"})
     deadline = time.monotonic() + FETCH_DEADLINE
     try:
         with _opener.open(req, timeout=timeout) as resp:
@@ -158,6 +159,11 @@ def fetch(url: str, timeout: float = 20.0) -> bytes:
                 if size > MAX_BYTES:
                     raise FeedError("Feed is larger than 10 MB")
             data = b"".join(chunks)
+            if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                data = d.decompress(data, MAX_BYTES + 1)
+                if len(data) > MAX_BYTES:
+                    raise FeedError("Feed is larger than 10 MB")
     except FeedError:
         raise
     except urllib.error.HTTPError as e:
@@ -184,7 +190,8 @@ def _child(el: ET.Element, *names: str) -> ET.Element | None:
 def clean_text(raw: str) -> str:
     """Decode entities once (feeds often double-encode), strip HTML tags, collapse whitespace.
     Only real tags are stripped, so text like "3 < 5 and 7 > 2" survives."""
-    raw = _TAG_RE.sub("", html.unescape(raw or ""))
+    raw = _BLOCK_TAG_RE.sub(" ", html.unescape(raw or ""))        # "thoughts.<br>Merch" -> "thoughts. Merch"
+    raw = _TAG_RE.sub("", raw)
     return _WS_RE.sub(" ", raw).strip()
 
 
@@ -253,12 +260,24 @@ def _image(el: ET.Element, base_url: str = "") -> str:
 
 
 def _description(el: ET.Element) -> str:
-    """Prefer the short summary; fall back to the full content."""
-    for names in (("description", "summary"), ("encoded", "content")):
-        d = _text(_child(el, *names))
+    """Prefer the short summary; fall back to the full content (or a media:group's description, which
+    is where YouTube puts a video's)."""
+    group = _child(el, "group")
+    for parent, names in ((el, ("description", "summary")), (el, ("encoded", "content")), (group, ("description",))):
+        if parent is None:
+            continue
+        d = _text(_child(parent, *names))
         if d:
             return clean_description(d)
     return ""
+
+
+def _views(el: ET.Element) -> int | None:
+    """A media:statistics views count (YouTube), if present."""
+    for c in el.iter():
+        if _local(c.tag) == "statistics" and (c.get("views") or "").isdigit():
+            return int(c.get("views"))
+    return None
 
 
 def _parse_date(s: str) -> float | None:
@@ -311,7 +330,7 @@ def parse(data: bytes, base_url: str = "") -> ParsedFeed:
             link = urljoin(base_url, _atom_link(e)) if base_url else _atom_link(e)
             guid = _raw(_child(e, "id")) or link or t
             pub = min(_parse_date(_text(_child(e, "published", "updated"))) or now, now)  # no future dates
-            entries.append(ParsedEntry(guid, t, link, pub, _description(e), _image(e, base_url)))
+            entries.append(ParsedEntry(guid, t, link, pub, _description(e), _image(e, base_url), _views(e)))
     elif kind in ("rss", "rdf"):  # RSS 2.0 / RSS 1.0
         channel = _child(root, "channel")
         title = _text(_child(channel, "title")) if channel is not None else ""

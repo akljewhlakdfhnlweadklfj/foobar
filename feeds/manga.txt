@@ -14,3 +14,8 @@ http://www.theouterhaven.net/feed/                                       # The O
 # --- General publications ---
 http://www.publishersweekly.com/pw/feeds/section/book-news/comics/index.xml # Publishers Weekly (Comics) | w=4 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | general | ~4/wk
 https://comicbook.com/category/anime/feed/                               # ComicBook.com (Anime) | w=2 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | general | ~81/wk
+
+# --- YouTube channels (people: respected, mid-sized; checked active 2026-11-05) ---
+# A channel is an outlet; its video titles/descriptions are its headlines. Weight 2 by default.
+https://www.youtube.com/feeds/videos.xml?channel_id=UCR6j61T92mKeAEZlDccV5ZA   # YouTube: MangaKamen | w=2 | youtube | 221K; ~7/mo
+https://www.youtube.com/feeds/videos.xml?channel_id=UCfGmaA-nXPryTfimsnkLieQ   # YouTube: Chibi Reviews | w=2 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | youtube | 481K; ~30/mo

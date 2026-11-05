@@ -610,6 +610,96 @@ class SummarizerTests(unittest.TestCase):
         self.assertFalse(ai.Summarizer(None, enabled=False).available)
 
 
+class YouTubeTests(unittest.TestCase):
+    FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <title>Some Channel</title>
+ <entry>
+  <id>yt:video:abcdefghijk</id><yt:videoId>abcdefghijk</yt:videoId><yt:channelId>UCBJycsmduvYEL83R_U4JriQ</yt:channelId>
+  <title>Nintendo Switch 3 Revealed</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=abcdefghijk"/>
+  <author><name>Some Channel</name></author>
+  <published>2026-11-04T10:00:00+00:00</published>
+  <media:group>
+   <media:title>Nintendo Switch 3 Revealed</media:title>
+   <media:content url="https://www.youtube.com/v/abcdefghijk?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/abcdefghijk/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Nintendo just showed the Switch 3.
+Here is everything.</media:description>
+   <media:community><media:starRating count="5321" average="5.00" min="1" max="5"/><media:statistics views="123456"/></media:community>
+  </media:group>
+ </entry>
+</feed>"""
+
+    def test_native_feed_gives_description_thumbnail_and_views(self):
+        e = feeds.parse(self.FEED, base_url="https://www.youtube.com/feeds/videos.xml?channel_id=UCBJycsmduvYEL83R_U4JriQ").entries[0]
+        self.assertEqual((e.title, e.views, e.guid), ("Nintendo Switch 3 Revealed", 123456, "yt:video:abcdefghijk"))
+        self.assertEqual(e.description, "Nintendo just showed the Switch 3. Here is everything.")
+        self.assertEqual(e.image, "https://i1.ytimg.com/vi/abcdefghijk/hqdefault.jpg")
+        self.assertEqual(feeds.clean_text("thoughts.<br><br>Merch: <b>x</b> 3 < 5"), "thoughts. Merch: x 3 < 5")
+
+    def test_urls_counts_and_channel_page(self):
+        import youtube
+        cid = "UCBJycsmduvYEL83R_U4JriQ"
+        feed = youtube.FEED_URL.format(cid)
+        self.assertEqual(youtube.feed_url_for(f"https://www.youtube.com/channel/{cid}"), feed)
+        self.assertEqual(youtube.feed_url_for(feed), feed)
+        self.assertIsNone(youtube.feed_url_for("https://example.com/rss"))
+        page = ('<script>var ytInitialData = {"metadata": {"channelMetadataRenderer": {"title": "MKBHD"}}, "x": [{"lockupViewModel": '
+                '{"contentId": "g6Die8gVFn0", "metadata": {"lockupMetadataViewModel": {"title": {"content": "OLED iPad Mini"}, '
+                '"metadata": {"contentMetadataViewModel": {"metadataRows": [{"metadataParts": [{"text": {"content": "8.1M"}}, '
+                '{"text": {"content": "1d ago"}}]}]}}}}}}]};</script>')
+        with mock.patch.object(feeds, "fetch", lambda url, **kw: page.encode()):
+            name, vids = youtube.channel_videos(cid)
+        self.assertEqual((name, vids[0].title, vids[0].views, vids[0].guid), ("MKBHD", "OLED iPad Mini", 8100000, "yt:video:g6Die8gVFn0"))
+        self.assertAlmostEqual(vids[0].published, time.time() - 86400, delta=60)
+        self.assertEqual([youtube.parse_count(t) for t in ("8.1M", "12K views", "935", "1.2B", "")], [8100000, 12000, 935, 1200000000, None])
+
+    def test_fallback_chain_feedly_plus_page_views(self):
+        import youtube, scraper
+        cid = "UCBJycsmduvYEL83R_U4JriQ"
+        feedly_entry = {"originId": "yt:video:g6Die8gVFn0", "title": "OLED iPad Mini", "published": time.time() * 1000,
+                        "alternate": [{"href": "https://www.youtube.com/watch?v=g6Die8gVFn0"}], "content": {"content": "A refresh.<br>More"}}
+        page_vids = [feeds.ParsedEntry("yt:video:g6Die8gVFn0", "OLED iPad Mini", "https://www.youtube.com/watch?v=g6Die8gVFn0", 0, "", "", 8100000),
+                     feeds.ParsedEntry("yt:video:zzzzzzzzzzz", "Older video", "https://www.youtube.com/watch?v=zzzzzzzzzzz", 0, "", "", 500)]
+        youtube._views_checked.clear()
+        with mock.patch.object(feeds, "fetch_and_parse", side_effect=feeds.FeedError("Fetch failed: HTTP 404 Not Found")), \
+             mock.patch("feedly.recent", lambda url, **kw: ("MKBHD", [feedly_entry])), \
+             mock.patch.object(youtube, "channel_videos", lambda c: ("MKBHD", page_vids)):
+            parsed, via, note = scraper.fetch_with_fallback(youtube.FEED_URL.format(cid))
+            self.assertEqual(via, "feedly")
+            first = next(e for e in parsed.entries if e.guid.endswith("g6Die8gVFn0"))
+            self.assertEqual((first.views, first.description), (8100000, "A refresh. More"))
+            self.assertEqual(len(parsed.entries), 2)                       # the older video updates its count too
+            parsed, via, _ = scraper.fetch_with_fallback(youtube.FEED_URL.format(cid))
+            self.assertEqual((len(parsed.entries), parsed.entries[0].views), (1, None))   # page checked at most every 3h
+        with mock.patch.object(feeds, "fetch_and_parse", side_effect=feeds.FeedError("404")), \
+             mock.patch("feedly.recent", lambda url, **kw: ("", [])), \
+             mock.patch.object(youtube, "channel_videos", lambda c: ("MKBHD", page_vids)):
+            parsed, via, _ = scraper.fetch_with_fallback(youtube.FEED_URL.format(cid))
+        self.assertEqual((via, len(parsed.entries)), ("youtube page", 2))
+
+    def test_story_prefers_article_headline_and_shows_top_video(self):
+        tmp = Path(tempfile.mkdtemp())
+        store = app.Store(tmp / "games.db")
+        now = time.time()
+        rows = [("https://a.example/rss", "Outlet A", 4, "Nintendo reveals Switch 3 hardware and price", "https://a/1", None),
+                ("https://b.example/rss", "Outlet B", 3, "Nintendo Switch 3 hardware price revealed today", "https://b/1", None),
+                ("https://www.youtube.com/feeds/videos.xml?channel_id=UCaaaaaaaaaaaaaaaaaaaaaa", "Chan 1", 2, "Switch 3 hardware price!", "https://www.youtube.com/watch?v=aaaaaaaaaaa", 5000),
+                ("https://www.youtube.com/feeds/videos.xml?channel_id=UCbbbbbbbbbbbbbbbbbbbbbb", "Chan 2", 2, "Nintendo Switch 3 hardware price reaction", "https://www.youtube.com/watch?v=bbbbbbbbbbb", 90000)]
+        for n, (url, name, w, title, link, v) in enumerate(rows):
+            fid = store.add_feed(url, name, w)
+            store.save_fetch(fid, feeds.ParsedFeed(name, [feeds.ParsedEntry(f"g{n}", title, link, now - 600, "", "", v)]), None)
+        stores = {"games": store}
+        views = groups.Views(groups.GroupStore(tmp / "g.db"), app.make_digests(stores), stores)
+        g = groups.clean({"name": "G", "verticals": ["games"], "settings": {"min_feeds": 2}}, None, ["games"])
+        s = groups.build_view(g, lambda v, h: views.digests.data(v, h)[1], views._catalog)["stories"][0]
+        self.assertEqual(s["n"], 4)
+        self.assertEqual(s["t"], "Nintendo reveals Switch 3 hardware and price")        # shortest *article* headline
+        self.assertEqual((s["mv"]["o"], s["mv"]["v"]), ("Chan 2", 90000))               # most-viewed video
+        self.assertEqual(sorted(x["y"] for x in s["s"]), [0, 0, 1, 1])
+
+
 class HttpTestCase(unittest.TestCase):
     """Starts the real handler on a free port."""
 

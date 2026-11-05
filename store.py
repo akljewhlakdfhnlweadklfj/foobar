@@ -22,7 +22,7 @@ import feeds
 import matching
 
 RETENTION_DAYS = 30
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 MAX_WEIGHT = 10.0
 MAX_BONUS = 100.0
 DEFAULT_BONUS = 5.0
@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS items (
     fetched_at  REAL NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     image       TEXT NOT NULL DEFAULT '',
+    views       INTEGER,                    -- view count (YouTube videos), when known
     UNIQUE (feed_id, guid)
 );
 CREATE INDEX IF NOT EXISTS items_published ON items(published);
@@ -75,7 +76,7 @@ _ADDED_COLUMNS = {
     "feeds": [("via", "TEXT"), ("name", "TEXT"), ("weight", "REAL"), ("enabled", "INTEGER NOT NULL DEFAULT 1"),
               ("backfilled_since", "REAL"), ("last_run", "TEXT"), ("required", "INTEGER NOT NULL DEFAULT 0"),
               ("only", "TEXT")],
-    "items": [("description", "TEXT NOT NULL DEFAULT ''"), ("image", "TEXT NOT NULL DEFAULT ''")],
+    "items": [("description", "TEXT NOT NULL DEFAULT ''"), ("image", "TEXT NOT NULL DEFAULT ''"), ("views", "INTEGER")],
 }
 
 
@@ -244,13 +245,14 @@ class Store:
                 c.execute("UPDATE feeds SET last_fetched = ?, last_error = ? WHERE id = ?", (now, error, feed_id))
                 return
             c.executemany(
-                """INSERT INTO items (feed_id, guid, title, link, published, fetched_at, description, image)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO items (feed_id, guid, title, link, published, fetched_at, description, image, views)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT (feed_id, guid) DO UPDATE SET title = excluded.title, link = excluded.link,
                        description = CASE WHEN excluded.description != '' THEN excluded.description
                                           ELSE items.description END,
-                       image = CASE WHEN excluded.image != '' THEN excluded.image ELSE items.image END""",
-                [(feed_id, e.guid, e.title, e.link, min(e.published, now), now, e.description, e.image)
+                       image = CASE WHEN excluded.image != '' THEN excluded.image ELSE items.image END,
+                       views = COALESCE(excluded.views, items.views)""",
+                [(feed_id, e.guid, e.title, e.link, min(e.published, now), now, e.description, e.image, e.views)
                  for e in parsed.entries if e.title and e.published >= now - RETENTION_DAYS * 86400],
             )
             c.execute(
@@ -269,7 +271,7 @@ class Store:
             filters = {r["id"]: keyword_regex(r["only"]) for r in
                        c.execute("SELECT id, only FROM feeds WHERE only IS NOT NULL")}
             rows = c.execute(
-                """SELECT i.id, i.feed_id, i.title, i.link, i.published, i.description, i.image,
+                """SELECT i.id, i.feed_id, i.title, i.link, i.published, i.description, i.image, i.views,
                           COALESCE(f.name, NULLIF(f.title, ''), f.url) AS feed_title,
                           COALESCE(f.weight, ?) AS weight
                    FROM items i JOIN feeds f ON f.id = i.feed_id

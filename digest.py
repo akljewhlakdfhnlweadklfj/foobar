@@ -10,7 +10,8 @@ Digest format (keys kept short):
 {
   "vertical": "games", "label": "Games", "generated_at": <unix>, "window_hours": 168, "threshold": 0.12,
   "stories": [{"id", "k": [{"t": term, "w": weight, "f": [forms]}],          # key terms, best first
-               "s": [{"f": outlet id, "t": title, "l": link, "p": published, "d": description, "i": image}]}]
+               "s": [{"f": outlet id, "t": title, "l": link, "p": published, "d": description, "i": image,
+                      "y": 1 for a YouTube video, "v": its view count when known}]}]
 }
 One headline per outlet per story (the one matching.pick_headline would pick). Stories from a single
 outlet are left out to keep files small.
@@ -33,6 +34,7 @@ from typing import Callable
 
 import keyterms
 import matching
+import youtube
 from store import Store
 
 WINDOWS = (48, 168, 720)          # hours: 2 days, 7 days, 30 days. Browsers pick the smallest that covers theirs.
@@ -53,6 +55,15 @@ def _per_outlet(items: list[matching.Item]) -> list[matching.Item]:
     return sorted((matching.pick_headline(its) for its in by_feed.values()), key=lambda i: i.published)
 
 
+def _source(i: matching.Item) -> dict:
+    s = {"f": i.feed_id, "t": i.title, "l": i.link, "p": round(i.published), "d": i.description[:DESCRIPTION_CHARS], "i": i.image}
+    if youtube.is_video(i.link):
+        s["y"] = 1                         # a YouTube video
+        if i.views is not None:
+            s["v"] = i.views
+    return s
+
+
 def build_digest(key: str, label: str, store: Store, hours: int, threshold: float) -> dict:
     """Group the last `hours` of headlines from every outlet in the catalog (switched on by default or
     not, since each filter group chooses its own) and describe the stories."""
@@ -65,8 +76,7 @@ def build_digest(key: str, label: str, store: Store, hours: int, threshold: floa
         chosen = _per_outlet(s.items)
         entries.append({
             "id": hashlib.blake2b(min(i.link or i.title for i in s.items).encode(), digest_size=6).hexdigest(),
-            "s": [{"f": i.feed_id, "t": i.title, "l": i.link, "p": round(i.published),
-                   "d": i.description[:DESCRIPTION_CHARS], "i": i.image} for i in chosen],
+            "s": [_source(i) for i in chosen],
         })
         # Key terms use every headline in the story and the default weights for scale.
         term_input.append({"title": min((i.title for i in s.items), key=len), "score": s.score,
