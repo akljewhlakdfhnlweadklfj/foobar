@@ -1,6 +1,6 @@
 """News aggregator: shows only stories reported by at least N of your feeds.
 
-Stories are split into verticals (Games, Movies & TV, Books, General News). Each vertical has
+Stories are split into verticals (Games, Movies & TV, Books, General News, Anime, Manga). Each vertical has
 its own seed list (feeds/<vertical>.txt) and its own self-contained SQLite file
 (data/<vertical>.db), so a vertical can be moved by copying one file.
 
@@ -13,15 +13,11 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
-import math
 import os
-import re
 import sqlite3
 import sys
 import tempfile
 import threading
-import time
-from collections import Counter, defaultdict
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,16 +29,13 @@ import groups as groups_mod
 import feeds
 import matching
 import seedcache
-from scraper import Scraper, _from_feedly, fetch_with_fallback  # noqa: F401 (re-exported)
-from store import (DEFAULT_BONUS, MAX_BONUS, MAX_WEIGHT, RETENTION_DAYS, SCHEMA_VERSION,  # noqa: F401
-                   SeedFeed, Store, read_feed_list)
+from scraper import Scraper, fetch_with_fallback
+from store import DEFAULT_BONUS, MAX_BONUS, MAX_WEIGHT, RETENTION_DAYS, Store, read_feed_list
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
 FEEDS_DIR = ROOT / "feeds"
 MAX_BODY = 64 * 1024
-CACHE_SECONDS = 60
-MAX_PHRASE_LEN = 100
 
 
 @dataclass(frozen=True)
@@ -64,688 +57,31 @@ VERTICALS = [
 VERTICALS_BY_KEY = {v.key: v for v in VERTICALS}
 
 
-# --- per-vertical settings -------------------------------------------------------------------
+# --- per-vertical match strictness ----------------------------------------------------------
 
-# name: (type, min, max). Stored per vertical (store.settings); query parameters override them.
-SETTING_SPECS = {
-    "min_feeds": (int, 1, 100),
-    "min_feeds_mode": (("count", "percent"), None, None),   # absolute count, or % of enabled outlets
-    "min_feeds_percent": (float, 1, 100),
-    "hours": (float, 1, 24 * RETENTION_DAYS),
-    "threshold": (float, 0.02, 1.0),
-    "min_score": (float, 0, 10_000),
-    "min_weight": (float, 0, MAX_WEIGHT),
-    "only_watched": (bool, None, None),
-    "watched_any": (bool, None, None),
-    "require_all": (bool, None, None),
-}
+# The only story setting a vertical keeps (store.settings): how similar headlines must be to be grouped.
+# Everything about which stories show is per filter group (groups.py).
+THRESHOLD_RANGE = (0.02, 1.0)
 
 
-def default_settings(v: Vertical) -> dict:
-    return {"min_feeds": v.default_min_feeds, "min_feeds_mode": "count", "min_feeds_percent": 10.0, "hours": 48.0, "threshold": matching.DEFAULT_THRESHOLD,
-            "min_score": 0.0, "min_weight": 0.0, "only_watched": False, "watched_any": False, "require_all": False}
+def threshold(store: Store) -> float:
+    val = store.get_settings().get("threshold")
+    lo, hi = THRESHOLD_RANGE
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and lo <= val <= hi:
+        return float(val)
+    return matching.DEFAULT_THRESHOLD
 
 
-def coerce_setting(name: str, value, strict: bool = True):
-    """Validate one setting. strict=True (JSON bodies) rejects wrong types; strict=False (query
-    strings) parses text and clamps numbers into range."""
-    typ, lo, hi = SETTING_SPECS[name]
-    if isinstance(typ, tuple):                    # one of a fixed set of values
-        if value in typ:
-            return value
-        raise HTTPError(400, f"{name} must be one of: {', '.join(typ)}")
-    if typ is bool:
-        if isinstance(value, bool):
-            return value
-        if not strict and isinstance(value, str) and value.lower() in ("1", "true", "0", "false"):
-            return value.lower() in ("1", "true")
-        raise HTTPError(400, f"{name} must be true or false")
-    if isinstance(value, bool) or (strict and not isinstance(value, (int, float))):
-        raise HTTPError(400, f"{name} must be a number")
-    try:
-        num = float(value)
-    except (TypeError, ValueError):
-        raise HTTPError(400, f"{name} must be a number")
-    if num != num:
-        raise HTTPError(400, f"{name} must be a number")
-    if not lo <= num <= hi:
-        if strict:
-            raise HTTPError(400, f"{name} must be between {lo:g} and {hi:g}")
-        num = min(hi, max(lo, num))
-    return int(num) if typ is int else num
-
-
-def min_outlets(cfg: dict, store: Store) -> tuple[int, int]:
-    """(the "reported by at least" number in effect, number of outlets that can count). Outlets that
-    count are switched on and weighted at least min_weight; in percent mode the number is that share
-    of them, rounded up, and at least 1."""
-    floor = cfg.get("min_weight") or 0
-    enabled = sum(1 for f in store.list_feeds() if f["enabled"]
-                  and (f["weight"] if f["weight"] is not None else matching.DEFAULT_WEIGHT) >= floor)
-    if cfg.get("min_feeds_mode") == "percent":
-        return max(1, math.ceil(cfg["min_feeds_percent"] / 100 * enabled)), enabled
-    return cfg["min_feeds"], enabled
-
-
-def effective_settings(v: Vertical, store: Store, overrides: dict | None = None) -> dict:
-    """Defaults, then the vertical's saved settings, then any query-string overrides.
-    Also reports min_feeds_effective / enabled_outlets (see min_outlets)."""
-    out = default_settings(v)
+def earlier_settings(v: Vertical, store: Store) -> dict:
+    """A vertical's story settings saved by earlier versions, as filter-group settings (for seeding the
+    first groups; values that don't fit are skipped)."""
+    out = {**groups_mod.DEFAULT_SETTINGS, "min_feeds": v.default_min_feeds}
     for k, val in store.get_settings().items():
-        if k in SETTING_SPECS:
+        if k in groups_mod.SETTING_SPECS:
             try:
-                out[k] = coerce_setting(k, val)
-            except HTTPError:
-                pass  # ignore a bad stored value
-    for k, val in (overrides or {}).items():
-        if k in SETTING_SPECS:
-            out[k] = coerce_setting(k, val, strict=False)
-    if overrides and "min_feeds" in overrides and "min_feeds_mode" not in overrides:
-        out["min_feeds_mode"] = "count"           # an explicit ?min_feeds= means an absolute number
-    out["min_feeds_effective"], out["enabled_outlets"] = min_outlets(out, store)
-    return out
-
-
-# --- stories ---------------------------------------------------------------------------------
-
-def phrase_regex(phrase: str) -> re.Pattern:
-    """Case-insensitive whole-word match; any run of whitespace between words."""
-    words = phrase.split()
-    return re.compile(r"(?<!\w)" + r"\s+".join(re.escape(w) for w in words) + r"(?!\w)", re.I)
-
-
-def _snippet(text: str, m: re.Match, before: int = 70, after: int = 110) -> str:
-    """The part of a description around a phrase match, cut on word boundaries."""
-    start, end = max(0, m.start() - before), min(len(text), m.end() + after)
-    if start > 0:
-        start = text.find(" ", start) + 1 or start
-    if end < len(text):
-        end = text.rfind(" ", m.end(), end) if text.rfind(" ", m.end(), end) > 0 else end
-    return ("…" if start > 0 else "") + text[start:end] + ("…" if end < len(text) else "")
-
-
-_cache: dict[tuple, tuple] = {}
-_cache_lock = threading.Lock()
-
-
-def _clusters(store: Store, hours: float, threshold: float) -> tuple[list[matching.Story], int]:
-    """Clustered stories for the window, cached until the data changes or CACHE_SECONDS pass."""
-    key = (store.path, hours, threshold)
-    with _cache_lock:
-        hit = _cache.get(key)
-        if hit and hit[0] == store.version and time.time() - hit[1] < CACHE_SECONDS:
-            return hit[2], hit[3]
-    items = store.items_since(time.time() - hours * 3600)
-    stories = matching.cluster(items, threshold=threshold)
-    with _cache_lock:
-        _cache[key] = (store.version, time.time(), stories, len(items))
-    return stories, len(items)
-
-
-MIN_HEADLINE_WORDS = 4
-# Headlines labelled as a format rather than the news itself.
-_LABELLED = re.compile(r"^\s*(opinion|op-ed|watch|video|videos|listen|podcast|live|live updates|analysis|editorial|"
-                       r"explainer|review|reviews|preview|quiz|letters?|photos?|in pictures|the latest|perspective|"
-                       r"column|commentary|interview|recap)\b\s*[:|\-–—]", re.I)
-
-
-def headline_item(story: matching.Story, min_weight: float = 0) -> matching.Item:
-    """The headline a story is shown with: the shortest one among its counted outlets.
-    Fragments under MIN_HEADLINE_WORDS words ("Sweet Pea", "Review") are skipped when a fuller
-    headline exists; ties go to the higher-weighted outlet."""
-    pool = [i for i in story.items if i.weight >= min_weight] or story.items
-    full = [i for i in pool if len(i.title.split()) >= MIN_HEADLINE_WORDS] or pool
-    plain = [i for i in full if not _LABELLED.match(i.title)] or full  # skip "Opinion | ...", "WATCH: ..."
-    return min(plain, key=lambda i: (len(i.title), -i.weight, i.published))
-
-
-def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, min_score: float = 0,
-                  only_watched: bool = False, watched_any_coverage: bool = False,
-                  require_all: bool = False, min_weight: float = 0) -> dict:
-    """Stories for the API.
-
-    score = prestige (sum of distinct outlets' weights) + bonus of every watched phrase found in
-    any of the story's titles or descriptions. only_watched keeps just stories with a watched
-    phrase; watched_any_coverage shows watched stories even below min_feeds / min_score.
-    Required outlets (feeds.required): when any are set, a story must include at least one of
-    them (require_all: every one of them). This applies to every story, watched ones included.
-    min_weight: outlets weighted below it still help group headlines and are listed, but don't count
-    toward coverage (the "reported by N" number) or the prestige score.
-    """
-    stories, considered = _clusters(store, hours, threshold)
-    phrases = [(p, phrase_regex(p["phrase"])) for p in store.list_phrases()]
-    required = store.required_feed_ids()
-    out, body_by_key = [], {}
-    for s in stories:
-        if required:
-            have = s.feed_ids & required
-            if not have or (require_all and have != required):
-                continue
-        hits, watched_items, snippets = [], set(), {}
-        for p, rx in phrases:
-            found = []
-            for i in s.items:
-                if rx.search(i.title):
-                    found.append(i.id)
-                elif m := rx.search(i.description):
-                    found.append(i.id)
-                    snippets.setdefault(i.id, _snippet(i.description, m))
-            if found:
-                hits.append(p)
-                watched_items.update(found)
-        if only_watched and not hits:
-            continue
-        counted = {i.feed_id: i.weight for i in s.items if i.weight >= min_weight}
-        coverage, prestige = len(counted), sum(counted.values())
-        if not counted:
-            continue
-        bonus = sum(p["bonus"] for p in hits)
-        score = prestige + bonus
-        if not (hits and watched_any_coverage) and (coverage < min_feeds or score < min_score):
-            continue
-        # One entry per feed (a feed may have several near-duplicate items; keep the newest).
-        per_feed: dict[int, matching.Item] = {}
-        for it in sorted(s.items, key=lambda i: i.published):
-            per_feed[it.feed_id] = it
-        body_by_key[id(s)] = list({i.description for i in s.items if i.description})
-        lead = headline_item(s, min_weight)
-        per_feed[lead.feed_id] = lead  # show the chosen headline for its outlet, not that outlet's newest item
-        best = sorted(s.items, key=lambda i: (-i.weight, -i.published))
-        description = lead.description or next((i.description for i in best if i.description), "")
-        image = lead.image or next((i.image for i in best if i.image), "")
-        out.append({
-            "_key": id(s),
-            "title": lead.title,
-            "lead": {"feed": lead.feed_title, "link": lead.link, "weight": lead.weight,
-                     "description": description[:400], "image": image},
-            "coverage": coverage,
-            "base_score": prestige,
-            "outlets": s.coverage,  # including outlets below min_weight
-            "bonus": bonus,
-            "score": score,
-            "watched": [{"id": p["id"], "phrase": p["phrase"], "bonus": p["bonus"]} for p in hits],
-            "first_seen": s.earliest,
-            "latest": s.latest,
-            "sources": [
-                {"feed": it.feed_title, "title": it.title, "link": it.link, "published": it.published,
-                 "weight": it.weight, "watched": it.id in watched_items, "snippet": snippets.get(it.id, ""),
-                 "image": it.image,
-                 "counted": it.weight >= min_weight}
-                for it in sorted(per_feed.values(), key=lambda i: (-i.weight, i.published))
-            ],
-        })
-    out.sort(key=lambda s: (-s["score"], -s["coverage"], -s["latest"]))
-    bodies = [body_by_key[x["_key"]] for x in out]
-    for x in out:
-        x.pop("_key")
-    return {"stories": out, "items_considered": considered, "terms": story_terms(out, bodies=bodies)}
-
-
-# --- prominent terms (word cloud) ---------------------------------------------------------------
-
-# Headline filler that would otherwise dominate the cloud without saying what the news is about.
-GENERIC_TERMS = frozenset("""
-    trailer trailers review reviews release released releases releasing date dates first season seasons
-    episode episodes game games gameplay update updates launch launches launched launching coming comes
-    year years time times day days week weeks month best top official officially full get gets got getting
-    now here look looks looking set sets make makes making made take takes taking back big one two three
-    part story stories show shows showing star stars film films movie movies book books series anime manga
-    announce announces announced announcement reveal reveals revealed confirm confirms confirmed
-    want wants need needs could would might may will just like also still even every way ways thing things
-    people fans fan report reports reported reportedly rumor rumors leak leaks leaked deal deals sale sales
-    free price prices next last end ends final finally after before start starts starting open opens
-    win wins won world know says said tell tells talk talks call calls go goes going see seen watch new
-    major huge massive including includes include available live early late latest today tonight
-    against during off long short high low good great bad better worse every many much more most
-    dies die died dead death aged age obituary
-""".split())
-_GENERIC_STEMS = frozenset(matching._stem(w) for w in GENERIC_TERMS)
-MIN_SHARE = 0.4
-MAX_RUN_WORDS = 4
-STORY_KEYWORDS = 6
-NAME_BOOST, RUN_BOOST = 1.5, 1.25   # ranking boost for multi-word names / other multi-word runs
-SINGLE_NAME_BOOST = 1.25            # single-word proper nouns ("Trump", "Texas", "Suda51")
-COMMON_WEIGHT = 0.7                 # common words and phrases, relative to names
-BACKGROUND_SHARE = 0.15             # a common word in this share of the listed stories is background
-PROPER_LEAD_MIN = 0.35              # a proper noun leads if it scores at least this share of the top term
-START_WEIGHT = 2.0                  # a term at the start of a headline counts this much vs 1 at the end
-BODY_WEIGHT = 0.3                   # a description mention counts this much vs a headline mention
-
-# Headline verbs and adjectives that shouldn't lead a story ("delayed", "blames", "Black", "record").
-# No part-of-speech tagger in the standard library, so: this list plus verb/adjective endings.
-NOT_NOUNS = frozenset(matching._stem(w) for w in """
-    blame blames win wins won lose loses lost beat beats join joins reunite reunites slam slams sue sues hit
-    cut cuts raise raises quit quits fire fires fired claim claims warn warns vow vows urge urges push pushes
-    plan plans seek seeks eye eyes pull pulls drop drops add adds ban bans block blocks kill kills die dies
-    sign signs buy buys sell sells lead leads name names return returns leave leaves face faces take takes
-    make makes give gives help helps hire hires lay lays boost boosts slash slashes hike hikes flip flips
-    sweep sweeps defeat defeats oust ousts elect elects pass passes reject rejects approve approves stop stops
-    exit exits break breaks hold holds keep keeps miss misses rise rises fall falls soar soars sink sinks
-    jump jumps climb climbs top tops tease teases debut debuts premiere premieres stream streams air airs drop
-    black white red blue green new old big small first last final major minor record female male young
-    former latest early late dark bright huge massive key main real true false full free live dead open close
-    official top best worst little great high low long short fresh rare global local national federal
-    possible likely unlikely second third shut shuts closes closed close
-""".split())
-# Words that are capitalised as part of a name ("Nagoshi Studio", "Booker Prize", "President Biden") but
-# aren't names on their own: never a single-word proper noun, still fine inside a multi-word name.
-NAME_PARTS = frozenset(matching._stem(w) for w in """
-    studio studios creator creators developer developers publisher publishers series sequel franchise company
-    team union president minister senator governor speaker leader chief director actor actress author writer
-    prize award awards festival league cup university college school press group network channel museum
-    department ministry agency council committee party court house senate congress city state county
-    season episode chapter volume edition collection remaster remake trailer showcase direct conference
-""".split())
-_NOT_NOUN_ENDINGS = ("ed", "ing", "ly", "ous", "ive", "able", "ible", "ful", "less", "ish")
-
-
-def _noun_like(key: tuple, display: str, proper_evidence: bool) -> bool:
-    """Rough noun test for a keyword (see NOT_NOUNS)."""
-    if key[0] in ("name", "pair"):
-        return True                                # names and multi-word phrases
-    word = display.lower()
-    if key[0] in NOT_NOUNS or matching._stem(word) in NOT_NOUNS:
-        return False                               # checked first: "Black women" capitalises an adjective
-    if proper_evidence or display.isupper() or any(c.isdigit() for c in display):
-        return True                                # a capitalised name, acronym or model ("Ubisoft", "PS5")
-    return not word.endswith(_NOT_NOUN_ENDINGS)
-_WORD_RE = re.compile(r"[^\W_][\w'’+\-]*")   # Unicode letters/digits: "Miéville", "Pokémon"
-
-
-def _term_key(word: str) -> str | None:
-    w = word.lower().replace("’", "'")
-    if w.endswith("'s"):
-        w = w[:-2]
-    w = w.strip("'-")
-    if len(w) < 3 or w.isdigit() or w in matching.STOPWORDS or w in GENERIC_TERMS:
-        return None
-    mapped = matching.SYNONYMS.get(w, w)
-    if mapped in GENERIC_TERMS:                   # "unveils" -> "announce"
-        return None
-    key = matching._stem(mapped)
-    return None if key in GENERIC_TERMS or key in matching.STOPWORDS or key in _GENERIC_STEMS else key
-
-
-# Small words allowed inside a name ("God of War", "Lord of the Rings", "Dungeons & Dragons").
-NAME_CONNECTORS = frozenset({"of", "the", "&", "de", "la", "le", "du", "del", "von", "van", "vs"})
-# Punctuation that ends a name: phrases never span "Zelda: Ocarina" or "Switch 2, PS5".
-_SEGMENT_RE = re.compile(r"[:|;,!?()\[\]{}\"“”«»]|\s[-–—]\s|\.\s|(?<!\w)[‘’']|[‘’'](?!\w)")
-_TOKEN_RE = re.compile(r"[^\W_][\w'’+\-.]*[^\W_+]|[^\W_]|&")
-MAX_NAME_WORDS = 6
-_QUOTED_RE = re.compile(r"[‘“\"]([^‘’“”\"]{3,80})[’”\"]|(?<!\w)'([^']{3,80})'(?!\w)")
-
-
-def _strip_possessive(w: str) -> str:
-    return w[:-2] if w.lower().endswith(("'s", "’s")) else w
-
-
-def _is_cap(w: str) -> bool:
-    """Looks like part of a name: Capitalised, ALLCAPS, or contains a digit ("6", "PS5", "VI")."""
-    return w[:1].isupper() or any(c.isdigit() for c in w)
-
-
-def _name_candidates(title: str) -> dict[tuple, str]:
-    """Proper-noun phrases in a headline: runs of capitalised words/numbers, possibly with connectors
-    inside ("God of War Laufey", "South of Midnight", "Grand Theft Auto 6", "Xbox Series X").
-    Returns {lowercased word tuple: surface text}.
-
-    In Title Case headlines every word is capitalised, so a run only counts there if it has a
-    connector, a number or an acronym in it; plain capitalised pairs ("File Size") need a
-    sentence-case headline, where capitals actually mark names. Pairs like "Elder Scrolls" are also
-    found by the adjacent-pair stage."""
-    words_all = _WORD_RE.findall(title)
-    caps_all = sum(w[0].isupper() for w in words_all)
-    title_case = len(words_all) > 3 and caps_all / len(words_all) >= 0.6
-    out = {}
-    # Quoted titles are names even in Title Case headlines: "Patrick Stewart, ‘Star Trek’ Captain".
-    for m in _QUOTED_RE.finditer(title):
-        inner = [_strip_possessive(w) for w in _TOKEN_RE.findall(m.group(1) or m.group(2))]
-        names_in = [w for w in inner if w.lower() not in NAME_CONNECTORS]
-        if 2 <= len(inner) <= MAX_NAME_WORDS and len(names_in) >= 2 and all(_is_cap(w) for w in names_in) \
-                and inner[-1].lower() not in NAME_CONNECTORS:
-            out[tuple(w.lower() for w in inner)] = " ".join(inner)
-    at_title_start = True
-    for segment in _SEGMENT_RE.split(title):
-        raw = _TOKEN_RE.findall(segment)
-        words = [_strip_possessive(w) for w in raw]
-        n = len(words)
-        for i in range(n):
-            first = words[i]
-            mid_sentence = not title_case and not (at_title_start and i == 0)
-            if not _is_cap(first) or first.lower() in NAME_CONNECTORS or first.isdigit():
-                continue
-            if first.lower() in matching.STOPWORDS and not (mid_sentence and first[:1].isupper()):
-                continue                          # "No More Heroes" only when "No" is capitalised mid-sentence
-            for j in range(i + 1, min(n, i + MAX_NAME_WORDS)):
-                w = words[j]
-                if w.lower() in NAME_CONNECTORS:
-                    continue                      # connector: allowed inside, never at the end
-                if not _is_cap(w):
-                    break                         # an ordinary lowercase word ends the name
-                span = words[i:j + 1]
-                names = [x for x in span if x.lower() not in NAME_CONNECTORS]
-                has_conn = len(names) < len(span)
-                special = any(any(c.isdigit() for c in x) or (x.isupper() and x not in ("A", "I")) for x in names)
-                last = span[-1]
-                if len(names) < 2:
-                    continue
-                if not (_term_key(last) or any(c.isdigit() for c in last) or last.isupper() or has_conn):
-                    continue                      # don't end on filler ("Switch Official"), unless clearly a name ("Ocarina of Time")
-                # In a sentence-case headline the capitals after the first word mark a name, so a
-                # run may start with a generic word there ("Star Trek actor…", "No More Heroes").
-                if not (_term_key(first) or has_conn or any(c.isdigit() for c in first) or first.isupper()
-                        or (mid_sentence and first.lower() in matching.STOPWORDS)
-                        or (not title_case and len(names) >= 2 and first.lower() not in matching.STOPWORDS)):
-                    continue                      # don't start on filler, unless it's clearly a name ("Call of Duty")
-                if not any(_term_key(x) or any(c.isdigit() for c in x) or x.isupper() for x in names):
-                    continue
-                if title_case and not has_conn:
-                    # Every word is capitalised here, so only trust runs anchored by a number/acronym
-                    # at an end ("GTA 6", "Xbox Series X"), not whole headlines ("Presses Back AI Service").
-                    is_special = lambda x: any(c.isdigit() for c in x) or (x.isupper() and x not in ("A", "I"))
-                    if not (is_special(names[0]) or is_special(names[-1])) or len(span) > 4:
-                        continue
-                # Key without possessives (so "Dragon's Dogma" = "Dragon Dogma"); display keeps an inner
-                # possessive ("Dragon's Dogma 2") but drops a trailing one ("Nintendo's" -> "Nintendo").
-                shown = raw[i:j] + [words[j]]
-                out[tuple(x.lower() for x in span)] = " ".join(shown)
-        if raw:
-            at_title_start = False
-    return out
-
-
-def _display_name(forms: Counter) -> str:
-    """Most common surface form, with connectors lowercased after the first word."""
-    words = forms.most_common(1)[0][0].split()
-    return " ".join(w if i == 0 or w.lower() not in NAME_CONNECTORS else w.lower() for i, w in enumerate(words))
-
-
-def _contains(longer: tuple, shorter: tuple) -> bool:
-    n = len(shorter)
-    return any(longer[i:i + n] == shorter for i in range(len(longer) - n + 1))
-
-
-def _word_at(lowered_title: str, word: str) -> int:
-    """Index of `word` as a whole word in a lowercased headline ("no" must not match "now")."""
-    m = re.search(r"(?<!\w)" + re.escape(word.lower()) + r"(?!\w)", lowered_title)
-    return m.start() if m else 0
-
-
-def _position_weight(rel: float) -> float:
-    """Weight of a term by where it first appears in a headline: START_WEIGHT at the start, 1 at the end."""
-    return 1 + (START_WEIGHT - 1) * (1 - min(1.0, max(0.0, rel)))
-
-
-def _body_terms(text: str) -> set:
-    """Keys of the single words, word runs and names in a description (for the body bonus)."""
-    keys = set()
-    for seg in _SEGMENT_RE.split(text):
-        seg_keys = [_term_key(w) for w in _WORD_RE.findall(seg)]
-        keys.update(k for k in seg_keys if k)
-        for i in range(len(seg_keys)):
-            for j in range(i + 2, min(len(seg_keys), i + MAX_RUN_WORDS) + 1):
-                run = seg_keys[i:j]
-                if None in run:
-                    break
-                keys.add(("pair",) + tuple(run))
-    keys.update(("name",) + k for k in _name_candidates(text))
-    return keys
-
-
-def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | None = None) -> list[dict]:
-    """The most prominent names, phrases and words in these stories' headlines.
-
-    Three kinds of term:
-      - names: proper-noun phrases with connectors ("God of War Laufey", "Grand Theft Auto 6");
-      - pairs: two adjacent words that recur together ("box office", "Elder Scrolls");
-      - single words.
-    A term counts for a story only if it's in at least MIN_SHARE of that story's headlines (what the
-    story is about, not one outlet's wording), and adds score x share. Longer terms replace the
-    shorter ones they contain when they account for most of their uses. Returns
-    [{"term", "weight", "stories", "forms"}], heaviest first, and sets each story's "keywords":
-    up to STORY_KEYWORDS of its own terms, most prominent first (share x distinctiveness).
-    """
-    uni_w, uni_n = defaultdict(float), defaultdict(int)
-    multi_w, multi_n = defaultdict(float), defaultdict(int)   # names and pairs, keyed by tuple
-    forms: dict = defaultdict(Counter)            # single-word key -> surface forms
-    multi_forms: dict = defaultdict(Counter)      # multi-word key -> surface forms
-    name_best_share: dict = defaultdict(float)    # multi-word key -> highest share in any one story
-    proper: dict = defaultdict(int)               # key -> capitalised mid-headline in sentence-case headlines
-    plain: dict = defaultdict(int)                # key -> lowercase mid-headline in sentence-case headlines
-    per_story = []                                # (story, {key: share}, {multi key: share}, position, body)
-
-    for si, s in enumerate(stories):
-        titles = {x["title"] for x in s["sources"]} | {s["title"]}
-        cnt_u, cnt_m = Counter(), Counter()
-        pos_sum: dict = defaultdict(float)        # key -> summed position weight over the headlines with it
-        for title in titles:
-            seen_u, seen_m = set(), {}
-            low = title.lower()
-            words = _WORD_RE.findall(title)
-            caps = sum(w[0].isupper() for w in words)
-            sentence_case = len(words) > 3 and caps / len(words) < 0.6
-            keys = []
-            for i, w in enumerate(words):
-                k = _term_key(w)
-                keys.append(k)
-                if not k:
-                    continue
-                forms[k][_strip_possessive(w).strip("'’-")] += 1
-                if sentence_case and i > 0:
-                    proper[k] += 1 if w[0].isupper() else 0
-                    plain[k] += 0 if w[0].isupper() else 1
-                if k not in seen_u:
-                    pos_sum[k] += _position_weight(i / max(1, len(words) - 1))
-                seen_u.add(k)
-            # Runs of 2-4 adjacent content words inside one punctuation segment ("box office",
-            # "Grand Theft Auto", "Otaku Vampire Love Bite").
-            for seg in _SEGMENT_RE.split(title):
-                seg_words = _WORD_RE.findall(seg)
-                seg_keys = [_term_key(w) for w in seg_words]
-                for w, k in zip(seg_words, seg_keys):
-                    if k and not forms[k]:
-                        forms[k][_strip_possessive(w).strip("'’-")] += 1
-                for i in range(len(seg_keys)):
-                    for j in range(i + 2, min(len(seg_keys), i + MAX_RUN_WORDS) + 1):
-                        run = seg_keys[i:j]
-                        if None in run:
-                            break
-                        if len(set(run)) == len(run):
-                            key = ("pair",) + tuple(run)
-                            surface = seg_words[i:j - 1] + [_strip_possessive(seg_words[j - 1])]
-                            if key not in seen_m:
-                                at = _word_at(low, seg_words[i])
-                                pos_sum[key] += _position_weight(at / max(1, len(title)))
-                            seen_m.setdefault(key, None)
-                            multi_forms[key][" ".join(x.strip("-") for x in surface)] += 1
-            for key, text in _name_candidates(title).items():
-                if ("name",) + key not in seen_m:
-                    at = _word_at(low, text.split()[0])
-                    pos_sum[("name",) + key] += _position_weight(at / max(1, len(title)))
-                seen_m[("name",) + key] = text
-                multi_forms[("name",) + key][text] += 1
-            cnt_u.update(seen_u)
-            cnt_m.update(seen_m.keys())
-        need = max(1, MIN_SHARE * len(titles))
-        own_u = {k: c / len(titles) for k, c in cnt_u.items() if c >= need}
-        own_m = {k: c / len(titles) for k, c in cnt_m.items() if c >= need}
-        # Within the story: drop a name contained in a longer name that has most of its uses.
-        for kind in ("name", "pair"):
-            group = sorted((k for k in own_m if k[0] == kind), key=len, reverse=True)
-            for short in group:
-                if any(len(long) > len(short) and _contains(long[1:], short[1:]) and own_m[long] >= 0.8 * own_m[short]
-                       for long in group if long in own_m):
-                    own_m.pop(short, None)
-        for k, share in own_u.items():
-            uni_w[k] += s["score"] * share; uni_n[k] += 1
-        for k, share in own_m.items():
-            multi_w[k] += s["score"] * share; multi_n[k] += 1
-            name_best_share[k] = max(name_best_share[k], share)
-        position = {k: pos_sum[k] / c for k, c in (cnt_u + cnt_m).items() if c}
-        descs = [d for d in (bodies[si] if bodies else []) if d]
-        body = Counter()
-        for d in descs:
-            body.update(_body_terms(d))
-        body_share = {k: c / len(descs) for k, c in body.items()} if descs else {}
-        per_story.append((s, own_u, own_m, position, body_share))
-
-    def display(k: str) -> str:
-        """Names, acronyms and model names keep their capitals; ordinary words are lowercased.
-        A word is a name when it's mostly capitalised mid-headline in sentence-case headlines; with no
-        such headlines to go by, it keeps its most common form."""
-        if not forms[k]:
-            return k
-        form = forms[k].most_common(1)[0][0]
-        caps_ = Counter({f: c for f, c in forms[k].items() if f[:1].isupper()})
-        if (len(form) > 1 and form.isupper()) or any(c.isdigit() for c in form):
-            return form
-        if proper[k] + plain[k] == 0:
-            return caps_.most_common(1)[0][0] if caps_ else form
-        return caps_.most_common(1)[0][0] if caps_ and proper[k] >= plain[k] else form.lower()
-
-    def run_is_proper(k: tuple) -> bool:
-        """A detected name, or a word run with at least one real name in it ("Nagoshi Studio": Nagoshi
-        is capitalised mid-sentence in sentence-case headlines). Title Case alone isn't evidence:
-        "Additional Cast" from a Title Case outlet is not a name."""
-        if k[0] == "name":
-            return True
-        return all(w[:1].isupper() or w[:1].isdigit() for w in multi_display(k).split()) and \
-            any(proper[w] > plain[w] and w not in NAME_PARTS for w in k[1:])   # not "Nintendo team (up)"
-
-    def multi_display(k: tuple) -> str:
-        if k[0] == "name":
-            return _display_name(multi_forms[k])
-        # A run keeps its headline spelling ("Dragon's Dogma"), with ordinary words lowercased.
-        if multi_forms[k]:
-            words = multi_forms[k].most_common(1)[0][0].split()
-            if len(words) == len(k) - 1:
-                return " ".join(w if display(key)[:1].isupper() or w.isupper() else w.lower()
-                                for w, key in zip(words, k[1:]))
-        return " ".join(display(w) for w in k[1:])
-
-    def word_keys(k: tuple) -> set:
-        """Single-word keys inside a multi-word term."""
-        return {wk for w in k[1:] for wk in [_term_key(w) if k[0] == "name" else w] if wk}
-
-    def multi_forms_list(k: tuple) -> list:
-        if k[0] == "name":
-            return sorted(multi_forms[k])[:6]
-        return sorted({f for w in k[1:] for f in forms[w]})[:6]
-
-    # --- the cloud: multi-word terms first, then single words they don't absorb ---
-    terms = {}
-    # Names may come from a single story when they define it (in at least half its headlines);
-    # other multi-word runs need 2+ stories.
-    multi = [k for k, n in multi_n.items()
-             if (k[0] == "name" and (n >= 2 or name_best_share[k] >= 0.5))
-             or (k[0] == "pair" and n >= 2 and n >= 0.6 * min(uni_n[w] for w in k[1:]))]
-    multi.sort(key=lambda k: (-(len(k) - 1), -multi_w[k]))          # longest first
-    kept = []
-    for k in multi:
-        if any(_contains(o[1:], k[1:]) and multi_n[o] >= 0.8 * multi_n[k] for o in kept if o[0] == "name" or k[0] == "pair"):
-            continue
-        # A pair inside a kept name ("war laufey" in "god of war laufey") is redundant.
-        if k[0] == "pair" and any(word_keys(k) <= word_keys(o) and multi_n[o] >= 0.8 * multi_n[k] for o in kept):
-            continue
-        kept.append(k)
-        terms[k] = {"term": multi_display(k), "weight": multi_w[k], "stories": multi_n[k], "forms": multi_forms_list(k)}
-    absorbed = Counter()
-    for k in kept:
-        for wk in word_keys(k):
-            absorbed[wk] += multi_n[k]            # "War" counted inside "God of War Laufey", "Call of Duty: ...War..."
-    for k, n in uni_n.items():
-        if n >= 2 and n > 1.25 * absorbed.get(k, 0):
-            terms[k] = {"term": display(k), "weight": uni_w[k], "stories": n, "forms": sorted(forms[k])[:6]}
-
-    # --- per-story keywords (pass 2: local) ---
-    # Pass 1 above learned the vocabulary across all stories: spellings, which words are names
-    # (capitalisation), and how many stories use each term. Here each story's terms are ranked using only
-    # that story: headline share x position + body share, times a weight for the kind of term.
-    # The only global input is "background" common words: used by a large share of the stories
-    # ("dies", "captain", "election"), which are halved. Names are never demoted for recurring.
-    n_stories = max(1, len(stories))
-
-    def background(df: int) -> bool:
-        return n_stories >= 5 and df / n_stories >= BACKGROUND_SHARE
-    for s, own_u, own_m, position, body_share in per_story:
-
-        def prominence(k, share, df, boost, proper_noun=False):
-            """Local score: headline share x position (start counts more) + a smaller body share, times
-            the kind-of-term weight; common words that are background across the list are halved."""
-            local = share * position.get(k, 1.0) + BODY_WEIGHT * body_share.get(k, 0.0)
-            kind = boost if proper_noun else boost * COMMON_WEIGHT * (0.5 if background(df) else 1.0)
-            return kind * local
-
-        cands, used = [], set()
-        chosen: list[tuple] = []                  # (wks, share, cand index, is_name)
-        for k, share in sorted(own_m.items(), key=lambda kv: (-kv[1], -(len(kv[0]) - 1))):
-            wks = word_keys(k)
-            if not wks or any(wks <= c[0] for c in chosen):
-                continue                          # "Elder Scrolls VI" after "Elder Scrolls 6"; "GTA" after "GTA 6"
-            # A phrase must cover most uses of its words; names less strictly, since outlets often
-            # shorten them ("Nagoshi's studio" for "Nagoshi Studio").
-            if k[0] == "pair" and share < (0.5 if run_is_proper(k) else 0.8) * max(own_u.get(w, 0) for w in wks):
-                continue
-            if k[0] == "pair" and any(c[3] and wks & c[0] for c in chosen):
-                continue                          # "Midnight director" overlaps the name "South of Midnight"
-            # A longer name replaces shorter chosen terms it contains ("War Laufey" -> "God of War Laufey")
-            # when it covers most of their headlines.
-            replaced = [c for c in chosen if c[0] < wks and share >= 0.75 * c[1]]
-            for c in replaced:
-                chosen.remove(c)
-                cands[c[2]] = None
-            chosen.append((wks, share, len(cands), k[0] == "name"))
-            text = multi_display(k)
-            proper_run = run_is_proper(k)
-            # Headlines often use only a surname ("Johnson out as House leader"): credit those to the
-            # full name ("Mike Johnson") when the last word is itself a capitalised name.
-            last = _term_key(k[-1]) if k[0] == "name" else k[-1]
-            if (proper_run and len(k) == 3 and not any(w in NAME_CONNECTORS for w in k[1:])
-                    and last and own_u.get(last, 0) > share and proper[last] >= plain[last]):
-                share = own_u[last]               # the surname is also used on its own
-                position[k] = max(position.get(k, 1.0), position.get(last, 1.0))
-            boost = NAME_BOOST if proper_run else RUN_BOOST    # what a story is about is usually a name
-            cands.append((prominence(k, share, multi_n[k], boost, proper_run), text, multi_forms_list(k), k))
-            used |= wks                           # "Johnson" is covered by "Mike Johnson"
-        cands = [c for c in cands if c is not None]
-        for k, share in own_u.items():
-            if k not in used:
-                shown = display(k)
-                single_proper = proper[k] > plain[k] or (shown.isupper() and len(shown) > 1) or (
-                    any(ch.isdigit() for ch in shown) and any(ch.isalpha() for ch in shown) and not shown[:1].isdigit())
-                is_name = single_proper and k not in NOT_NOUNS and k not in NAME_PARTS
-                cands.append((prominence(k, share, uni_n[k], SINGLE_NAME_BOOST if is_name else 1.0, is_name),
-                              shown, sorted(forms[k])[:6], (k,)))
-        cands.sort(key=lambda c: -c[0])
-        # The lead keyword is the most prominent proper noun (a name, title, acronym, "Suda51") when one
-        # scores at least PROPER_LEAD_MIN of the top term; otherwise the most prominent noun-like term.
-        # The rest keep their order.
-        def is_proper(c):
-            k, text = c[3], c[1]
-            if k[0] == "name":
-                return True
-            words = text.split()
-            if any(w[:1].isdigit() for w in words[:1]):
-                return False                       # "20th anniversary", "8 million copies"
-            if k[0] == "pair":
-                return run_is_proper(k)
-            return (proper[k[0]] > plain[k[0]] or text.isupper() and len(text) > 1
-                    or (any(ch.isdigit() for ch in text) and any(ch.isalpha() for ch in text))) \
-                and k[0] not in NOT_NOUNS and k[0] not in NAME_PARTS
-        top_score = cands[0][0] if cands else 0
-        lead = next((c for c in cands if is_proper(c) and c[0] >= PROPER_LEAD_MIN * top_score), None)
-        if lead is None:
-            lead = next((c for c in cands if _noun_like(c[3], c[1], c[3][0] not in ("name", "pair") and proper[c[3][0]] > plain[c[3][0]])), None)
-        if lead is not None:
-            cands.remove(lead)
-            cands.insert(0, lead)
-        top = cands[:STORY_KEYWORDS]
-        best = max((c[0] for c in top), default=1) or 1
-        s["keywords"] = [{"term": t, "weight": round(w / best, 3), "forms": f} for w, t, f, _ in top] if top else []
-
-    out = sorted(terms.values(), key=lambda t: -t["weight"])[:limit]
-    for t in out:
-        t["weight"] = round(t["weight"], 2)
+                out[k] = groups_mod.coerce_setting(k, val)
+            except ValueError:
+                pass
     return out
 
 
@@ -792,10 +128,8 @@ class Security:
 def make_digests(stores: dict[str, Store], out_dir: Path | None = None, log=None) -> digests_mod.Digests:
     """Shared digests for every vertical (see digest.py)."""
     def builder(key: str, window: int) -> dict:
-        v, store = VERTICALS_BY_KEY[key], stores[key]
-        cfg = effective_settings(v, store)
-        defaults = {k: cfg[k] for k in SETTING_SPECS if k != "threshold"}
-        return digests_mod.build_digest(key, v.label, store, window, cfg["threshold"], defaults, story_terms)
+        store = stores[key]
+        return digests_mod.build_digest(key, VERTICALS_BY_KEY[key].label, store, window, threshold(store))
     return digests_mod.Digests(out_dir, builder, list(stores), log=log)
 
 
@@ -804,8 +138,7 @@ def seed_groups(group_store: groups_mod.GroupStore, stores: dict[str, Store]) ->
     if not group_store.is_empty():
         return 0
     for pos, v in enumerate(v for v in VERTICALS if v.key in stores):
-        cfg = effective_settings(v, stores[v.key])
-        settings = {k: cfg[k] for k in groups_mod.SETTING_SPECS if k in cfg}
+        settings = earlier_settings(v, stores[v.key])
         # Outlets marked "required" in the earlier design become this group's own setting.
         required = {str(f["id"]): {"req": True} for f in stores[v.key].list_feeds() if f.get("required")}
         group_store.create(groups_mod.clean({"name": v.label, "verticals": [v.key], "position": pos, "settings": settings,
@@ -822,7 +155,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
         group_store = groups_mod.GroupStore(Path(tempfile.mkdtemp()) / "groups.db")
         seed_groups(group_store, stores)
     summarizer = summarizer or ai_mod.Summarizer(None, enabled=False)
-    views = groups_mod.Views(group_store, digests, summarizer)
+    views = groups_mod.Views(group_store, digests, stores, summarizer)
     seen_hosts: set[str] = set()
 
     class Handler(BaseHTTPRequestHandler):
@@ -923,9 +256,6 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 if method != "GET":
                     self._guard_write()
                 getattr(self, "_" + method)()
-                parts = urlparse(self.path).path.strip("/").split("/")
-                if method != "GET" and len(parts) >= 3 and parts[1] in stores and parts[2] in ("feeds", "settings"):
-                    digests.request_rebuild([parts[1]])   # the shared catalog changed
             except HTTPError as e:
                 self._json({"error": str(e)}, e.status)
             except (BrokenPipeError, ConnectionResetError):
@@ -960,16 +290,9 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 self.wfile.write(body)
             elif path == "/api/verticals":
                 self._json({
-                    "verticals": [{"key": v.key, "label": v.label, "default_min_feeds": v.default_min_feeds}
-                                  for v in VERTICALS if v.key in stores],
-                    "default_threshold": matching.DEFAULT_THRESHOLD,
-                    "default_weight": matching.DEFAULT_WEIGHT,
-                    "max_weight": MAX_WEIGHT,
-                    "default_bonus": DEFAULT_BONUS,
-                    "max_bonus": MAX_BONUS,
-                    "windows": list(digests_mod.WINDOWS),
-                    "retention_days": RETENTION_DAYS,
-                    "ai": summarizer.status(),
+                    "verticals": [{"key": v.key, "label": v.label} for v in VERTICALS if v.key in stores],
+                    "default_weight": matching.DEFAULT_WEIGHT, "max_weight": MAX_WEIGHT,
+                    "default_bonus": DEFAULT_BONUS, "max_bonus": MAX_BONUS, "retention_days": RETENTION_DAYS,
                 })
             elif path == "/api/groups":
                 self._json({"groups": group_store.list(), "ai": summarizer.status()})
@@ -987,22 +310,9 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                     raise HTTPError(400, "hours must be a number")
                 self._send_digest(digests.get(self._vertical_key(), hours))
             elif store and rest == ["feeds"]:
-                st = scraper.status()
-                last = st["last_run"] or {}
-                self._json({"feeds": store.list_feeds(), "refreshing": st["state"] != "idle",
-                            "last_run": last.get("finished_at"), "scrape": st})
-            elif store and rest == ["phrases"]:
-                self._json({"phrases": store.list_phrases()})
+                self._json({"feeds": store.list_feeds()})
             elif store and rest == ["settings"]:
-                v = VERTICALS_BY_KEY[self._vertical_key()]
-                self._json({"settings": effective_settings(v, store), "defaults": default_settings(v)})
-            elif store and rest == ["stories"]:
-                v = VERTICALS_BY_KEY[self._vertical_key()]
-                cfg = effective_settings(v, store, {k: val for k, val in q.items() if val != ""})
-                res = build_stories(store, cfg["min_feeds_effective"], cfg["hours"], cfg["threshold"], cfg["min_score"],
-                                    only_watched=cfg["only_watched"], watched_any_coverage=cfg["watched_any"],
-                                    require_all=cfg["require_all"], min_weight=cfg["min_weight"])
-                self._json({**res, "settings": cfg})
+                self._json({"threshold": threshold(store)})
             else:
                 raise HTTPError(404, "Not found")
 
@@ -1012,7 +322,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             rest, _, store = self._route()
             path = urlparse(self.path).path
             body = self._body()
-            if path in ("/api/scrape/start", "/api/refresh"):
+            if path == "/api/scrape/start":
                 kind = body.get("kind", "refresh")
                 days = body.get("days")
                 verticals = body.get("verticals")
@@ -1056,17 +366,8 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                     raise HTTPError(409, "That feed is already added")
                 group_store.forget_outlet(self._vertical_key(), feed_id)   # an id can be reused after a delete
                 store.save_fetch(feed_id, parsed, note, via)
+                digests.request_rebuild([self._vertical_key()])             # new headlines to group
                 return self._json({"feed": store.get_feed(feed_id)}, 201)
-            if store and rest == ["phrases"]:
-                phrase = " ".join(str(body.get("phrase", "")).split())
-                if not phrase or len(phrase) > MAX_PHRASE_LEN:
-                    raise HTTPError(400, f"phrase must be 1 to {MAX_PHRASE_LEN} characters")
-                bonus = self._number(body.get("bonus", DEFAULT_BONUS), "bonus", 0, MAX_BONUS)
-                try:
-                    pid = store.add_phrase(phrase, bonus)
-                except sqlite3.IntegrityError:
-                    raise HTTPError(409, "That phrase is already watched")
-                return self._json({"phrase": store.get_phrase(pid)}, 201)
             raise HTTPError(404, "Not found")
 
         @staticmethod
@@ -1080,11 +381,10 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
         # --- PATCH ---
 
         def _PATCH(self):
-            """/api/<v>/feeds/<id> {"weight": 0..10, "enabled": bool}  - change one feed.
-            /api/<v>/feeds/<id> {"required": bool}                     - stories must include this outlet.
-            /api/<v>/feeds/<id> {"only": "manga, light novel"}         - keyword filter ("" clears).
-            /api/<v>/feeds {"enabled": bool} / {"required": false}     - all feeds on/off; clear required.
-            /api/<v>/phrases/<id> {"bonus": 0..100}                    - change a phrase's bonus."""
+            """/api/groups/<id> {...}                          - change a filter group (see groups.clean).
+            /api/<v>/settings {"threshold": 0.02..1}          - match strictness ({"reset": true} = default).
+            /api/<v>/feeds/<id> {"weight": 0..10, "enabled": bool, "only": "manga, light novel"}
+                                                              - catalog defaults and keyword filter ("" clears)."""
             rest, _, store = self._route()
             body = self._body()
             if len(rest) == 3 and rest[:2] == ["api", "groups"] and rest[2].isdigit():
@@ -1098,36 +398,24 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             if store and rest == ["settings"]:
                 if body.get("reset") is True:
                     store.reset_settings()
+                elif set(body) == {"threshold"}:
+                    store.set_settings({"threshold": self._number(body["threshold"], "threshold", *THRESHOLD_RANGE)})
                 else:
-                    unknown = [k for k in body if k not in SETTING_SPECS]
-                    if unknown:
-                        raise HTTPError(400, f"unknown setting(s): {', '.join(unknown)}")
-                    store.set_settings({k: coerce_setting(k, val) for k, val in body.items()})
-                v = VERTICALS_BY_KEY[self._vertical_key()]
-                return self._json({"settings": effective_settings(v, store), "defaults": default_settings(v)})
-            if store and len(rest) == 2 and rest[0] == "phrases" and rest[1].isdigit():
-                bonus = self._number(body.get("bonus"), "bonus", 0, MAX_BONUS)
-                if store.update_phrase(int(rest[1]), bonus):
-                    return self._json({"phrase": store.get_phrase(int(rest[1]))})
-                raise HTTPError(404, "Not found")
-            enabled, required, only = body.get("enabled"), body.get("required"), body.get("only")
-            if only is not None and (not isinstance(only, str) or len(only) > 500):
-                raise HTTPError(400, "only must be text: comma-separated keywords (empty to clear)")
-            for name, val in (("enabled", enabled), ("required", required)):
-                if val is not None and not isinstance(val, bool):
-                    raise HTTPError(400, f"{name} must be true or false")
-            if store and rest == ["feeds"]:
-                if enabled is None and required is not False:
-                    raise HTTPError(400, 'send {"enabled": true|false} or {"required": false}')
-                updated = store.set_all_enabled(enabled) if enabled is not None else 0
-                if required is False:
-                    updated = max(updated, store.clear_required())
-                return self._json({"updated": updated})
+                    raise HTTPError(400, 'send {"threshold": number} or {"reset": true}')
+                digests.request_rebuild([self._vertical_key()])             # stories are grouped differently
+                return self._json({"threshold": threshold(store)})
             if store and len(rest) == 2 and rest[0] == "feeds" and rest[1].isdigit():
+                enabled, only = body.get("enabled"), body.get("only")
+                if only is not None and (not isinstance(only, str) or len(only) > 500):
+                    raise HTTPError(400, "only must be text: comma-separated keywords (empty to clear)")
+                if enabled is not None and not isinstance(enabled, bool):
+                    raise HTTPError(400, "enabled must be true or false")
                 weight = self._number(body["weight"], "weight", 0, MAX_WEIGHT) if "weight" in body else None
-                if weight is None and enabled is None and required is None and only is None:
-                    raise HTTPError(400, "send weight, enabled, required and/or only")
-                if store.update_feed(int(rest[1]), weight=weight, enabled=enabled, required=required, only=only):
+                if weight is None and enabled is None and only is None:
+                    raise HTTPError(400, "send weight, enabled and/or only")
+                if store.update_feed(int(rest[1]), weight=weight, enabled=enabled, only=only):
+                    if only is not None:                                    # changes which headlines are grouped
+                        digests.request_rebuild([self._vertical_key()])
                     return self._json({"feed": store.get_feed(int(rest[1]))})
             raise HTTPError(404, "Not found")
 
@@ -1145,8 +433,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             if store and len(rest) == 2 and rest[1].isdigit():
                 if rest[0] == "feeds" and store.delete_feed(int(rest[1])):
                     group_store.forget_outlet(self._vertical_key(), int(rest[1]))
-                    return self._json({"ok": True})
-                if rest[0] == "phrases" and store.delete_phrase(int(rest[1])):
+                    digests.request_rebuild([self._vertical_key()])
                     return self._json({"ok": True})
             raise HTTPError(404, "Not found")
 

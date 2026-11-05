@@ -43,7 +43,7 @@ Codespaces stop after ~30 minutes idle and count against your free monthly hours
 `data/` until the codespace is deleted.
 
 **Keep the port private.** Without an API token, anyone who can open the app can change feeds and
-phrases. A Codespaces port is private (only you, signed in) by default; don't switch it to Public
+filter groups. A Codespaces port is private (only you, signed in) by default; don't switch it to Public
 unless you trust everyone with the link.
 
 ## Using it
@@ -91,7 +91,8 @@ The app has two sections (top left):
   group's minimums.
 - **One page per vertical** (shared catalog): the outlets it fetches, with status, default on/off
   and weight (used by groups that haven't set their own), keyword filter, remove; **Add feed**; and
-  **match strictness**. These regroup stories for everyone; until the new grouping is ready (seconds,
+  **match strictness**. Default weights and on/off apply at once. Adding or removing a feed, a keyword
+  filter and match strictness regroup stories for everyone; until the new grouping is ready (seconds,
   up to about half a minute for General News) a "Re-grouping in progress…" flag shows and your new
   value stays put.
 - **Scraping**: progress of the current run, Refresh all, Stop, Resume, Backfill N days, and the
@@ -149,8 +150,9 @@ outlet headline.
 | Anime | `feeds/anime.txt` | `data/anime.db` |
 | Manga | `feeds/manga.txt` | `data/manga.db` |
 
-- **Separate databases**: each tab is one self-contained SQLite file (feeds, headlines, watched
-  phrases, story settings). To migrate, copy the `.db` file and point `--data` at its folder. Older databases are
+- **Separate databases**: each vertical is one self-contained SQLite file (its outlets,
+  headlines and match strictness); filter groups are in `data/groups.db`, AI headlines in
+  `data/ai.db`. To migrate, copy the `.db` file and point `--data` at its folder. Older databases are
   upgraded in place (schema version in `PRAGMA user_version`; history in `store.py`).
 - **Seed lists** are read once, when a tab's database is created. Format:
   `URL  # Display name | w=N | only=keyword, keyword | notes` (`only=` is optional).
@@ -363,43 +365,37 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 
 | Method | Path | |
 |---|---|---|
-| GET | `/api/verticals` | tab list, defaults, digest `windows`, `retention_days` |
-| GET | `/api/<v>/digest?hours=N` | the shared digest covering N hours (gzip, ETag, 60 s cache) |
+| GET | `/api/verticals` | verticals and limits (weights, bonuses, retention) |
 | GET | `/api/groups` | filter groups (and whether AI headlines are available) |
 | POST | `/api/groups` `{"name", "verticals": ["games"], "settings": {...}, "outlets": {...}, "ai_summary": false}` | create a group |
 | PATCH | `/api/groups/{id}` (any of those fields, plus `position`; outlets: `{"games": {"12": {"on": false, "req": true, "w": 4}}}`, `null` = catalog default) | change a group |
 | DELETE | `/api/groups/{id}` | delete a group (one must remain) |
 | GET | `/api/groups/{id}/stories` | the group's stories (gzip, ETag, 30 s cache); what the UI uses |
-| GET | `/api/<v>/feeds` | feeds, their status, and scrape status |
+| GET | `/api/<v>/digest?hours=N` | the vertical's grouped stories covering N hours (gzip, ETag, 60 s cache) |
+| GET | `/api/<v>/feeds` | the vertical's outlets and their fetch status |
 | POST | `/api/<v>/feeds` `{"url": ...}` | add a feed (validated first) |
-| PATCH | `/api/<v>/feeds/{id}` `{"weight": 4, "enabled": false, "required": true, "only": "manga, manhwa"}` | change one feed (`"only": ""` clears the filter) |
-| PATCH | `/api/<v>/feeds` `{"enabled": true}` / `{"required": false}` | switch every feed on or off / clear required |
-| DELETE | `/api/<v>/feeds/{id}` | remove a feed and its items |
-| GET | `/api/<v>/phrases` | watched phrases |
-| POST | `/api/<v>/phrases` `{"phrase": "Switch 2", "bonus": 5}` | watch a phrase |
-| PATCH | `/api/<v>/phrases/{id}` `{"bonus": 10}` | change its bonus |
-| DELETE | `/api/<v>/phrases/{id}` | stop watching it |
-| GET | `/api/<v>/settings` | the vertical's story settings (and defaults) |
-| PATCH | `/api/<v>/settings` `{"min_feeds": 3, "hours": 72}`, `{"min_feeds_mode": "percent", "min_feeds_percent": 10}` / `{"reset": true}` | change / reset them (responses include `min_feeds_effective`) |
-| GET | `/api/<v>/stories` | (for scripts; the UI uses digests) stories ranked by score, using the saved settings; any of `min_feeds`, `hours`, `threshold`, `min_score`, `min_weight`, `only_watched`, `watched_any`, `require_all` as query parameters override them |
+| PATCH | `/api/<v>/feeds/{id}` `{"weight": 4, "enabled": false, "only": "manga, manhwa"}` | catalog defaults (weight, on by default in groups) and keyword filter (`""` clears it) |
+| DELETE | `/api/<v>/feeds/{id}` | remove a feed, its items and every group's settings for it |
+| GET / PATCH | `/api/<v>/settings` `{"threshold": 0.15}` / `{"reset": true}` | match strictness |
 | | `/api/scrape/...` | see [Scraping](#scraping-api-scheduling-and-resume) |
 
 ## Code layout
 
 | File | |
 |---|---|
-| `app.py` | HTTP server, API, security, stories (scoring, phrases), CLI |
+| `app.py` | verticals, HTTP server and API, security, CLI |
 | `scraper.py` | scrape runs: start/stop, progress, schedule, resume; refresh and backfill |
 | `store.py` | SQLite storage and schema upgrades |
 | `feeds.py` | fetching (with SSRF guard) and RSS/Atom parsing |
 | `feedly.py` | Feedly API: history paging, pacing, rate-limit handling |
-| `matching.py` | tokenizer, similarity, clustering, lead headline |
+| `matching.py` | tokenizer, similarity, clustering, headline choice |
+| `keyterms.py` | each story's key terms (the inline "Key term:") |
 | `eval_matching.py`, `eval_realistic.py` | matching evaluations |
 | `seedcache.py`, `tools/build_seed_cache.py` | cached history for new verticals (load / build) |
 | `digest.py` | shared per-vertical story digests (build, cache, disk, background rebuilds) |
 | `groups.py` | filter groups: storage, validation, applying them to digests, cached results |
 | `ai.py` | AI headlines for groups with AI summary on (Claude API, cache, daily cap) |
-| `tools/build_snapshot.py` | static snapshot of the UI with the digests embedded (for sharing as a page) |
+| `tools/build_snapshot.py` | static snapshot of the UI with each group's stories embedded (for sharing as a page) |
 | `static/index.html` | the UI |
 
 ## Tests

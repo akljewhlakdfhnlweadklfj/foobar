@@ -63,16 +63,6 @@
   .viewbar label { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
   .viewbar select { width: auto; padding: 4px 8px; }
   .stories { max-width: 900px; }
-  .cloud { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 2px 12px;
-           padding: 14px 16px; margin-bottom: 14px; background: var(--panel); border: 1px solid var(--border);
-           border-radius: 10px; max-width: 900px; line-height: 1.15; }
-  .cloud button { background: none; border: 0; padding: 2px 3px; border-radius: 4px; font-weight: 700; color: var(--text);
-                  cursor: pointer; white-space: nowrap; letter-spacing: -0.01em; }
-  .cloud button.hot { color: var(--accent); }
-  .cloud button.mid { color: var(--text); font-weight: 600; }
-  .cloud button.low { color: var(--muted); font-weight: 500; }
-  .cloud button:hover, .cloud button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
-  .cloud .empty-cloud { color: var(--muted); font-size: 13px; }
   .viewbar .clear { color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: 0; padding: 0; font: inherit; }
   /* Simple list of titles; details open per story. */
   .stories { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
@@ -89,11 +79,6 @@
   .story .more { padding: 8px 0 4px; }
   .more-head { display: flex; gap: 12px; align-items: flex-start; }
   .meta strong { color: var(--text); }
-  .story-head { display: flex; gap: 12px; align-items: flex-start; }
-  .badge { flex: none; min-width: 44px; text-align: center; padding: 4px 8px; border-radius: 6px;
-           background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13px; }
-  .badge small { display: block; font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
-  .badge .score { display: block; margin-top: 3px; padding-top: 3px; border-top: 1px solid currentColor; font-size: 11px; opacity: .85; }
   .story h3 { margin: 0; font-size: 16px; line-height: 1.35; font-weight: 600; }
   .story-text { flex: 1; min-width: 0; }
   /* Lead keyword: plain accent-coloured text. */
@@ -150,12 +135,6 @@
   .saved { font-size: 12px; color: var(--ok); margin-left: 8px; font-weight: 500; }
   .panel-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
   .panel-foot button { padding: 4px 10px; font-size: 13px; }
-  .required-note { margin-top: 14px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 6px;
-                   font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
-  .required-note .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .required-note select { width: auto; padding: 3px 6px; font-size: 13px; }
-  .required-note button { padding: 3px 10px; font-size: 13px; }
-  .required-note .warn { color: var(--warn); }
   form.row { display: flex; gap: 8px; }
   form.row input[type=text], form.row input[type=url] { flex: 1; min-width: 0; }
   form.row input[type=number] { width: 5em; text-align: right; }
@@ -167,7 +146,6 @@
   .tools { display: flex; gap: 6px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
   .tools input { flex: 1; min-width: 160px; padding: 6px 10px; font-size: 13px; }
   .tools button { padding: 6px 10px; font-size: 13px; }
-  .using { font-size: 12px; color: var(--muted); margin-top: 6px; }
   ul.feeds { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
   @media (max-width: 860px) { ul.feeds { grid-template-columns: 1fr; } }
   ul.feeds li { display: flex; align-items: flex-start; gap: 8px; padding: 9px 0; border-top: 1px solid var(--border); min-width: 0; }
@@ -182,14 +160,6 @@
   ul.feeds .ctl { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
   ul.feeds .ctl .row { display: flex; gap: 6px; align-items: center; }
   input.weight { width: 4.4em; padding: 3px 6px; font-size: 13px; text-align: right; }
-  details.kw, details.cat { margin-top: 4px; }
-  details.cat .catrow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: var(--muted); }
-  details.cat .catrow input[type=text] { flex: 1; min-width: 140px; padding: 4px 8px; font-size: 13px; }
-  details.cat .catrow input[type=number] { width: 4.4em; padding: 3px 6px; font-size: 13px; }
-  details.cat .catrow button { padding: 2px 8px; font-size: 12px; }
-  details.kw summary { font-size: 12px; overflow-wrap: anywhere; }
-  details.kw[data-set] summary { color: var(--accent); }
-  details.kw input { margin-top: 4px; padding: 4px 8px; font-size: 13px; }
   .req { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
   .switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
   .switch input { appearance: none; -webkit-appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px;
@@ -509,7 +479,7 @@ function personalize(view) {
       id: st.id, vertical: st.v, h: st.h, title: useAi && st.a ? st.a : st.t, ai: !!(useAi && st.a), original: st.t,
       lead: { feed: st.f, link: st.l, description: st.d, image: st.i },
       coverage: st.cov, outlets: st.n, base_score: st.sc, bonus, score: st.sc + bonus,
-      watched: hits.map((p) => ({ phrase: p.phrase, bonus: p.bonus })), first_seen: st.p, latest: st.u,
+      watched: hits.map((p) => ({ phrase: p.phrase, bonus: p.bonus })), first_published: st.p, latest: st.u,
       keywords: (st.k || []).map((k) => ({ term: k.t, weight: k.w, forms: k.f })),
       sources: st.s.map((x) => ({ feed: x.o, title: x.t, link: x.l, published: x.p, weight: x.w, counted: x.c,
                                   watched: watchedSrc.has(x), snippet: snippets.get(x) || "" })),
@@ -673,7 +643,7 @@ function renderStoryList(allStories, force, hidden = 0) {
             <div class="meta">${multiVertical ? `<span class="vtag">${esc(label(s.vertical))}</span>` : ""}
               <span title="${s.coverage} counted outlet${s.coverage === 1 ? "" : "s"}${s.outlets > s.coverage ? ` (of ${s.outlets})` : ""}"><strong>${s.coverage}</strong> outlets</span>
               <span title="prestige ${fmt(s.base_score)}${s.bonus ? ` + ${fmt(s.bonus)} watched bonus` : ""}">★ ${fmt(s.score)}</span>
-              <span class="lead">${esc(s.lead.feed)}</span><span>first published ${ago(s.first_seen)} · latest ${ago(s.latest)}</span>
+              <span class="lead">${esc(s.lead.feed)}</span><span>first published ${ago(s.first_published)} · latest ${ago(s.latest)}</span>
               ${s.seen ? `<span>seen ${ago(s.firstShown)}</span>` : ""}</div>
             ${s.lead.description ? `<p class="desc">${hl(s.lead.description, re)}</p>` : ""}
             ${s.watched.length ? `<div class="chips">${s.watched.map((w) => `<span class="chip">Watched: ${esc(w.phrase)} +${fmt(w.bonus)}</span>`).join("")}</div>` : ""}
@@ -832,7 +802,7 @@ $("glist").addEventListener("click", async (e) => {
 // A group's outlets: on/off, required and weight, defaulting to the vertical's catalog.
 function outletState(v, o) {
   const p = (G.outlets[v] || {})[o.id] || {};
-  return { on: p.on ?? !!o.enabled, req: p.req ?? !!o.required, w: p.w ?? o.weight, custom: Object.keys(p).length > 0 };
+  return { on: p.on ?? !!o.enabled, req: p.req ?? false, w: p.w ?? o.weight, custom: Object.keys(p).length > 0 };
 }
 async function renderGroupOutlets() {
   if (!G) return;
@@ -864,7 +834,7 @@ async function renderGroupOutlets() {
 }
 function outletChange(v, id, key, value) {
   const o = (CATALOG.get(v) || []).find((x) => x.id === id);
-  const dflt = key === "on" ? !!o.enabled : key === "req" ? !!o.required : o.weight;
+  const dflt = key === "on" ? !!o.enabled : key === "req" ? false : o.weight;
   return { outlets: { [v]: { [id]: { [key]: value === dflt ? null : value } } } };
 }
 $("g_outlets").addEventListener("change", (e) => {
@@ -987,9 +957,9 @@ $("feeds").addEventListener("change", (e) => {
   if (t.dataset.cweight) {
     const w = parseFloat(t.value);
     if (!Number.isFinite(w) || w < 0 || w > META.max_weight) { $("admin_msg").className = "msg err"; $("admin_msg").textContent = `Weights go from 0 to ${META.max_weight}.`; return; }
-    return catalogChange(() => patch(`/api/${v}/feeds/${t.dataset.cweight}`, { weight: w }), "default weight");
+    return catalogChange(() => patch(`/api/${v}/feeds/${t.dataset.cweight}`, { weight: w }), "default weight", "Saved for everyone.", null);
   }
-  if (t.dataset.cenabled) return catalogChange(() => patch(`/api/${v}/feeds/${t.dataset.cenabled}`, { enabled: t.checked }), "default");
+  if (t.dataset.cenabled) return catalogChange(() => patch(`/api/${v}/feeds/${t.dataset.cenabled}`, { enabled: t.checked }), "default", "Saved for everyone.", null);
   if (t.dataset.only !== undefined && t.dataset.only !== "") return catalogChange(() => patch(`/api/${v}/feeds/${t.dataset.only}`, { only: t.value }), "keyword filter");
 });
 $("feeds").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.target.dataset.cweight || e.target.dataset.only)) e.target.blur(); });
@@ -999,8 +969,9 @@ $("feeds").addEventListener("click", (e) => {
   catalogChange(() => api(`/api/${V}/feeds/${id}`, { method: "DELETE" }), "catalog");
 });
 
-// Catalog changes re-group stories for everyone in the background (seconds; longer for big verticals):
-// wait for a digest newer than the one shown (for match strictness, built with the new value).
+// Adding or removing a feed, a keyword filter and match strictness re-group stories for everyone in the
+// background (seconds; longer for big verticals): wait for a digest newer than the one shown (for match
+// strictness, built with the new value). Default weights and on/off apply at once (ready = null).
 const PENDING_THRESHOLD = new Map(), REGROUPING = new Set(), regroupSeq = new Map();
 function setRegrouping(v, on) { on ? REGROUPING.add(v) : REGROUPING.delete(v); if (v === V) $("regrouping").hidden = !on; }
 async function catalogChange(call, what, okText, ready = () => true) {
@@ -1010,6 +981,7 @@ async function catalogChange(call, what, okText, ready = () => true) {
   $("admin_msg").className = "msg ok"; $("admin_msg").textContent = okText || "Saved for everyone. Stories are being re-grouped…";
   CATALOG.delete(v); VIEWS.clear();
   if (v === V) { await catalog(v).catch(() => null); if (v === V) renderCatalog(); }
+  if (!ready) return true;
   const my = (regroupSeq.get(v) || 0) + 1; regroupSeq.set(v, my);
   setRegrouping(v, true);
   (async () => {
@@ -1104,7 +1076,7 @@ $("sc_interval").addEventListener("change", (e) => {
 // ---------- Start ----------
 Promise.all([api("/api/verticals"), api("/api/groups")]).then(([d, g]) => {
   META = { ...META, ...d }; GROUPS = g.groups; META.ai = g.ai; $("watch_bonus").value = d.default_bonus;
-  if (!location.hash || location.hash === "#stories/all") history.replaceState(null, "", `#stories/${GROUPS[0]?.id ?? ""}`);
+  if (!location.hash) history.replaceState(null, "", `#stories/${GROUPS[0]?.id ?? ""}`);
   render();
 }).catch((e) => { $("summary").textContent = "Can't reach the server: " + e.message; });
 loadScrape();

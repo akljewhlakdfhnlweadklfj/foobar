@@ -1,22 +1,19 @@
-"""Shared, per-vertical story digests: the only per-refresh processing the server does.
+"""Shared, per-vertical story digests: headlines grouped into stories, the expensive step.
 
-Grouping headlines into stories (the expensive step) doesn't depend on who is looking, so it runs
-once after each scrape, per vertical and per window, and the result is written as a static JSON
-digest (plus a gzipped copy). Every browser downloads the same file and applies the viewer's own
-settings itself: which outlets are on, outlet weights, required outlets, watched phrases, the
-"reported by" minimum, minimum score and the exact time window. Serving many users therefore costs
-little more than serving a static file, and the digests can sit behind a CDN.
+Grouping doesn't depend on who is looking or on any filter group, so it runs once per vertical after
+each scrape (and after a change that affects grouping: a feed added or removed, a keyword filter,
+match strictness), for each window. Filter groups (groups.py) are then applied to these digests.
+Digests are kept in memory and written to data/digests/ (JSON plus a gzipped copy), so they survive
+restarts and could be served as static files.
 
-Digest format (keys kept short; it's downloaded by every viewer):
+Digest format (keys kept short):
 {
-  "vertical": "games", "label": "Games", "generated_at": <unix>, "window_hours": 168,
-  "threshold": 0.12, "defaults": {<the vertical's default story settings>},
-  "outlets": [{"id", "name", "url", "weight", "enabled", "required", "only",
-               "status": {"item_count", "last_fetched", "via", "last_error"}}],
+  "vertical": "games", "label": "Games", "generated_at": <unix>, "window_hours": 168, "threshold": 0.12,
   "stories": [{"id", "k": [{"t": term, "w": weight, "f": [forms]}],          # key terms, best first
                "s": [{"f": outlet id, "t": title, "l": link, "p": published, "d": description, "i": image}]}]
 }
-Stories from a single outlet are left out to keep files small.
+One headline per outlet per story (the one matching.pick_headline would pick). Stories from a single
+outlet are left out to keep files small.
 """
 
 from __future__ import annotations
@@ -33,6 +30,7 @@ import traceback
 from pathlib import Path
 from typing import Callable
 
+import keyterms
 import matching
 from store import Store
 
@@ -47,30 +45,18 @@ def window_for(hours: float) -> int:
 
 
 def _per_outlet(items: list[matching.Item]) -> list[matching.Item]:
-    """One item per outlet: its shortest full headline (the viewer's headline is the shortest overall)."""
-    best: dict[int, matching.Item] = {}
+    """One item per outlet: the headline matching.pick_headline would choose among its items."""
+    by_feed: dict[int, list[matching.Item]] = {}
     for it in items:
-        cur = best.get(it.feed_id)
-        full = len(it.title.split()) >= 4
-        if cur is None or (full, -len(it.title)) > (len(cur.title.split()) >= 4, -len(cur.title)):
-            best[it.feed_id] = it
-    return sorted(best.values(), key=lambda i: i.published)
+        by_feed.setdefault(it.feed_id, []).append(it)
+    return sorted((matching.pick_headline(its) for its in by_feed.values()), key=lambda i: i.published)
 
 
-def build_digest(key: str, label: str, store: Store, hours: int, threshold: float, defaults: dict,
-                 story_terms: Callable) -> dict:
-    """Group the last `hours` of headlines (from every outlet in the catalog, switched on by default or
-    not, since each viewer chooses their own) and describe the stories for the browser."""
+def build_digest(key: str, label: str, store: Store, hours: int, threshold: float) -> dict:
+    """Group the last `hours` of headlines from every outlet in the catalog (switched on by default or
+    not, since each filter group chooses its own) and describe the stories."""
     now = time.time()
     items = store.items_since(now - hours * 3600, include_disabled=True)
-    feeds = store.list_feeds()
-    outlets = [{
-        "id": f["id"], "name": f.get("name") or f.get("title") or f["url"], "url": f["url"],
-        "weight": f["weight"] if f["weight"] is not None else matching.DEFAULT_WEIGHT,
-        "enabled": bool(f["enabled"]), "required": bool(f.get("required")), "only": f.get("only") or "",
-        "status": {"item_count": f["item_count"], "last_fetched": f["last_fetched"], "via": f["via"],
-                   "last_error": f["last_error"]},
-    } for f in feeds]
     stories = [s for s in matching.cluster(items, threshold=threshold) if s.coverage >= MIN_OUTLETS]
 
     entries, term_input, bodies = [], [], []
@@ -85,11 +71,11 @@ def build_digest(key: str, label: str, store: Store, hours: int, threshold: floa
         term_input.append({"title": min((i.title for i in s.items), key=len), "score": s.score,
                            "sources": [{"title": i.title} for i in s.items]})
         bodies.append(list({i.description for i in s.items if i.description}))
-    story_terms(term_input, bodies=bodies)
+    keyterms.story_terms(term_input, bodies=bodies)
     for e, t in zip(entries, term_input):
         e["k"] = [{"t": k["term"], "w": k["weight"], "f": k["forms"]} for k in t.get("keywords", [])]
     return {"vertical": key, "label": label, "generated_at": round(now), "window_hours": hours,
-            "threshold": threshold, "defaults": defaults, "outlets": outlets, "stories": entries}
+            "threshold": threshold, "stories": entries}
 
 
 class Digests:

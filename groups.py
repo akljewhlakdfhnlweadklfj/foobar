@@ -30,7 +30,6 @@ import gzip
 import hashlib
 import json
 import math
-import re
 import sqlite3
 import threading
 import time
@@ -54,12 +53,6 @@ SETTING_SPECS = {   # name: (type, min, max)
     "require_all": (bool, None, None),
 }
 MAX_NAME = 60
-MIN_HEADLINE_WORDS = 4
-LABELLED = re.compile(r"^\s*(opinion|op-ed|watch|video|videos|listen|podcast|live|live updates|analysis|editorial|"
-                      r"explainer|review|reviews|preview|quiz|letters?|photos?|in pictures|the latest|perspective|"
-                      r"column|commentary|interview|recap)\b\s*[:|\-–—]", re.I)
-
-
 def item_key(link: str, title: str) -> str:
     """Short, stable id for one outlet's article (for "last seen" and AI summary caching)."""
     return hashlib.blake2b((link or title).encode(), digest_size=5).hexdigest()
@@ -67,7 +60,7 @@ def item_key(link: str, title: str) -> str:
 
 # --- validation ------------------------------------------------------------------------------
 
-def _setting(name: str, value):
+def coerce_setting(name: str, value):
     typ, lo, hi = SETTING_SPECS[name]
     if isinstance(typ, tuple):
         if value in typ:
@@ -117,7 +110,7 @@ def clean(body: dict, current: dict | None, verticals: list[str]) -> dict:
         for k, val in body["settings"].items():
             if k not in SETTING_SPECS:
                 raise ValueError(f"unknown setting: {k}")
-            cfg["settings"][k] = _setting(k, val)
+            cfg["settings"][k] = coerce_setting(k, val)
     if "outlets" in body:
         if not isinstance(body["outlets"], dict):
             raise ValueError("outlets must be an object: {vertical: {outlet id: {on, req, w} or null}}")
@@ -259,13 +252,6 @@ class GroupStore:
 
 # --- views -----------------------------------------------------------------------------------
 
-def _headline(counted: list[dict], weight: Callable[[dict], float]) -> dict:
-    """The shortest headline among counted outlets (4+ words, not a labelled format piece)."""
-    full = [x for x in counted if len(x["t"].split()) >= MIN_HEADLINE_WORDS] or counted
-    plain = [x for x in full if not LABELLED.match(x["t"])] or full
-    return min(plain, key=lambda x: (len(x["t"]), -weight(x), x["p"]))
-
-
 def min_outlets(cfg: dict, countable: int) -> int:
     """The "reported by at least" number: a count, or a share of the outlets that can count (rounded
     up, at least 1; rounded exactly, so 7% of 100 is 7)."""
@@ -274,8 +260,10 @@ def min_outlets(cfg: dict, countable: int) -> int:
     return max(1, math.ceil(round(cfg["min_feeds_percent"] * countable / 100, 9)))
 
 
-def build_view(group: dict, digest_for: Callable[[str, float], dict], summarizer=None, now: float | None = None) -> dict:
-    """Apply a group's filters to the shared digests of its verticals."""
+def build_view(group: dict, digest_for: Callable[[str, float], dict], catalog_for: Callable[[str], list[dict]],
+               summarizer=None, now: float | None = None) -> dict:
+    """Apply a group's filters to the shared digests of its verticals. catalog_for(v) gives the
+    vertical's outlets [{"id", "name", "weight", "enabled"}]: names and the defaults groups override."""
     now = now or time.time()
     cfg = {**DEFAULT_SETTINGS, **group.get("settings", {})}
     cut = now - cfg["hours"] * 3600
@@ -286,7 +274,7 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], summarizer
         built = max(built, d.get("generated_at", 0))
         over = group.get("outlets", {}).get(v, {})
         outlets = {}
-        for o in d["outlets"]:
+        for o in catalog_for(v):
             ov = over.get(str(o["id"]), {})
             outlets[o["id"]] = {"name": o["name"], "on": ov.get("on", o["enabled"]), "req": ov.get("req", False),
                                 "w": ov.get("w", o["weight"])}
@@ -308,7 +296,7 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], summarizer
                 continue
             score = sum(weight(x) for x in counted)
             extra = len(counted) < need or score < cfg["min_score"]
-            lead = _headline(counted, weight)
+            lead = matching.pick_headline(counted, title=lambda x: x["t"], weight=weight, published=lambda x: x["p"])
             best = sorted(srcs, key=lambda x: (-weight(x), -x["p"]))
             ordered = [lead] + sorted((x for x in srcs if x is not lead), key=lambda x: (-weight(x), x["p"]))
             keys = [item_key(x["l"], x["t"]) for x in st["s"]]
@@ -344,20 +332,34 @@ class Views:
     """Each group's view as ready-to-send bytes, rebuilt only when its inputs change: the group, the
     digests of its verticals or the AI summaries (so every viewer gets the same cached file)."""
 
-    def __init__(self, groups: GroupStore, digests: digest_mod.Digests, summarizer=None):
-        self.groups, self.digests, self.summarizer = groups, digests, summarizer
+    def __init__(self, groups: GroupStore, digests: digest_mod.Digests, stores: dict, summarizer=None):
+        self.groups, self.digests, self.stores, self.summarizer = groups, digests, stores, summarizer
+        self._catalogs: dict[str, tuple[int, list[dict]]] = {}
         self._cache: dict[int, tuple[tuple, dict]] = {}
         self._lock = threading.Lock()
 
     def _digest(self, v: str, hours: float) -> tuple[str, dict]:
         return self.digests.data(v, hours)
 
+    def _catalog(self, v: str) -> list[dict]:
+        """The vertical's outlets, re-read only when the catalog changed."""
+        store = self.stores[v]
+        version = store.catalog_version
+        hit = self._catalogs.get(v)
+        if hit and hit[0] == version:
+            return hit[1]
+        outlets = [{"id": f["id"], "name": f.get("name") or f.get("title") or f["url"],
+                    "weight": f["weight"] if f["weight"] is not None else matching.DEFAULT_WEIGHT,
+                    "enabled": bool(f["enabled"])} for f in store.list_feeds()]
+        self._catalogs[v] = (version, outlets)
+        return outlets
+
     def get(self, gid: int) -> dict | None:
         group = self.groups.get(gid)
         if group is None:
             return None
         hours = {**DEFAULT_SETTINGS, **group.get("settings", {})}["hours"]
-        tags = tuple(self._digest(v, hours)[0] for v in group["verticals"])
+        tags = tuple((self._digest(v, hours)[0], self.stores[v].catalog_version) for v in group["verticals"])
         # Time moves the window's cut-off too: rebuild at least once a minute.
         ai_version = getattr(self.summarizer, "version", 0) if group.get("ai_summary") else 0
         key = (group["updated_at"], tags, ai_version, int(time.time() // 60))
@@ -365,7 +367,7 @@ class Views:
             hit = self._cache.get(gid)
             if hit and hit[0] == key:
                 return hit[1]
-        view = build_view(group, lambda v, h: self._digest(v, h)[1], self.summarizer)
+        view = build_view(group, lambda v, h: self._digest(v, h)[1], self._catalog, self.summarizer)
         body = json.dumps(view, separators=(",", ":"), ensure_ascii=False).encode()
         entry = {"json": body, "gz": gzip.compress(body, 6),
                  "etag": '"%s"' % hashlib.sha1(body).hexdigest()[:16], "view": view}

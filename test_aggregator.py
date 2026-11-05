@@ -10,6 +10,8 @@ from unittest import mock
 
 import app
 import feeds
+import groups
+import keyterms
 import matching
 from matching import Item
 
@@ -144,7 +146,7 @@ class WeightTests(unittest.TestCase):
             Item(id=4, feed_id=3, title="Studio X is closing", weight=3),
         ])
         self.assertEqual(story.score, 9)
-        self.assertEqual(matching.lead_item(story).feed_id, 2)
+        self.assertEqual(matching.pick_headline(story.items).id, 4)                 # shortest full headline
 
     def test_seed_weights_parsed_and_ui_edits_kept(self):
         tmp = Path(tempfile.mkdtemp())
@@ -156,7 +158,7 @@ class WeightTests(unittest.TestCase):
         store = app.Store(tmp / "x.db")
         store.add_feeds(feeds_)
         fa = next(f for f in store.list_feeds() if f["name"] == "Outlet A")
-        store.set_weight(fa["id"], 2)
+        store.update_feed(fa["id"], weight=2)
         store.sync_seed(feeds_)  # restart: the seed must not overwrite the UI edit
         self.assertEqual(store.get_feed(fa["id"])["weight"], 2)
 
@@ -176,35 +178,6 @@ class OutletToggleTests(unittest.TestCase):
             self.store.save_fetch(fid, feeds.ParsedFeed(f"Outlet {n}", [
                 feeds.ParsedEntry(f"g{n}", f"Valve announces Steam Machine hardware {n}", "", now)]), None)
 
-    def test_disabled_outlets_are_left_out_of_stories(self):
-        res = app.build_stories(self.store, 3, 48, 0.15)
-        self.assertEqual(res["stories"][0]["coverage"], 3)
-        self.store.update_feed(2, enabled=False)
-        self.assertEqual(app.build_stories(self.store, 3, 48, 0.15)["stories"], [])
-        self.assertEqual(app.build_stories(self.store, 2, 48, 0.15)["stories"][0]["coverage"], 2)
-        self.assertEqual(self.store.set_all_enabled(True), 3)
-        self.assertEqual(app.build_stories(self.store, 3, 48, 0.15)["stories"][0]["coverage"], 3)
-
-    def test_required_outlets_filter_stories(self):
-        now = time.time()
-        fid4 = self.store.add_feed("https://4.example/rss", "Outlet 4", 3)
-        for n in (1, 2, 4):  # a second story, which Outlet 3 doesn't report
-            fid = fid4 if n == 4 else n
-            self.store.save_fetch(fid, feeds.ParsedFeed("x", [feeds.ParsedEntry(
-                f"d{n}", f"Nintendo Direct dated for Thursday {n}", "", now)]), None)
-        titles = lambda **kw: sorted(s["title"][:8] for s in app.build_stories(self.store, 3, 48, 0.12, **kw)["stories"])
-        self.assertEqual(titles(), ["Nintendo", "Valve an"])
-        self.store.update_feed(3, required=True)                 # Outlet 3 only reported the Valve story
-        self.assertEqual(titles(), ["Valve an"])
-        self.store.update_feed(fid4, required=True)              # any of {3, 4}: both stories
-        self.assertEqual(titles(), ["Nintendo", "Valve an"])
-        self.assertEqual(titles(require_all=True), [])           # no story has both 3 and 4
-        self.store.add_phrase("Direct", 5)                       # watched stories still need a required outlet
-        self.store.update_feed(fid4, required=False)
-        self.assertEqual(titles(watched_any_coverage=True), ["Valve an"])
-        self.assertEqual(self.store.clear_required(), 1)
-        self.assertEqual(self.store.required_feed_ids(), set())
-
     def test_keyword_filter_limits_a_feeds_items(self):
         now = time.time()
         self.store.save_fetch(1, feeds.ParsedFeed("x", [
@@ -219,17 +192,6 @@ class OutletToggleTests(unittest.TestCase):
         self.assertEqual({i.title for i in self.store.items_since(0) if i.feed_id == 1}, before)
         seeds = app.read_feed_list(app.FEEDS_DIR / "manga.txt")
         self.assertTrue(seeds["http://www.animenewsnetwork.com/newsfeed/rss.xml"].only.startswith("manga"))
-
-    def test_min_weight_controls_what_counts(self):
-        self.store.update_feed(1, weight=5); self.store.update_feed(2, weight=1)
-        story = lambda **kw: app.build_stories(self.store, 1, 48, 0.12, **kw)["stories"][0]
-        s = story()
-        self.assertEqual((s["coverage"], s["base_score"]), (3, 9))
-        s = story(min_weight=3)                                   # outlet 2 (weight 1) no longer counts
-        self.assertEqual((s["coverage"], s["base_score"], s["outlets"]), (2, 8, 3))
-        self.assertEqual(sorted(x["counted"] for x in s["sources"]), [False, True, True])
-        self.assertEqual(app.build_stories(self.store, 3, 48, 0.12, min_weight=3)["stories"], [])
-        self.assertEqual(app.build_stories(self.store, 1, 48, 0.12, min_weight=6)["stories"], [])
 
     def test_patch_api_validates_weight_and_enabled(self):
         import json, threading, urllib.request
@@ -255,11 +217,8 @@ class OutletToggleTests(unittest.TestCase):
             for bad in ({"weight": 11}, {"weight": -1}, {"weight": "5"}, {"weight": True}, {"enabled": "no"}, {}):
                 self.assertEqual(patch("/1", bad)[0], 400, bad)
             self.assertEqual(patch("/99", {"enabled": True})[0], 404)
-            self.assertEqual(patch("", {"enabled": False}), (200, {"updated": 3}))
-            self.assertEqual(patch("", {"weight": 3})[0], 400)
-            self.assertEqual(patch("/1", {"required": True})[1]["feed"]["required"], 1)
-            self.assertEqual(patch("/1", {"required": "yes"})[0], 400)
-            self.assertEqual(patch("", {"required": False}), (200, {"updated": 1}))
+            self.assertEqual(patch("/1", {"required": True})[0], 400)          # "required" is per group now
+            self.assertEqual(patch("", {"enabled": False})[0], 404)              # no bulk change
 
 
 class FeedlyThrottlingTests(unittest.TestCase):
@@ -378,12 +337,11 @@ class DigestTests(unittest.TestCase):
     def test_digest_has_every_outlet_and_multi_outlet_stories_only(self):
         d = json.loads(self.digests.get("games", 48)["json"])
         self.assertEqual(d["window_hours"], 48)
-        self.assertEqual([(o["id"], o["weight"], o["enabled"]) for o in d["outlets"]], [(1, 1, True), (2, 2, True), (3, 3, False)])
+        self.assertNotIn("outlets", d)                               # outlet details come from the catalog
         self.assertEqual(len(d["stories"]), 1)                       # the old story is outside 48h; solos dropped
         st = d["stories"][0]
         self.assertEqual(sorted(x["f"] for x in st["s"]), [1, 2, 3])   # switched-off outlets included: viewers choose
         self.assertTrue(st["k"] and st["k"][0]["t"])
-        self.assertIn("min_feeds", d["defaults"])
         d30 = json.loads(self.digests.get("games", 300)["json"])     # 300h -> 30-day window
         self.assertEqual((d30["window_hours"], len(d30["stories"])), (720, 2))
 
@@ -412,15 +370,14 @@ class DigestTests(unittest.TestCase):
                 get({"If-None-Match": etag})
             self.assertEqual(cm.exception.code, 304)
             with urllib.request.urlopen(base + "/api/verticals", timeout=10) as r:
-                self.assertEqual(json.load(r)["windows"], [48, 168, 720])
-            req = urllib.request.Request(base + "/api/games/feeds/1", data=b'{"weight": 6}', method="PATCH",
-                                         headers={"Content-Type": "application/json"})
+                self.assertEqual(json.load(r)["retention_days"], 30)
+            patch = lambda body: urllib.request.urlopen(urllib.request.Request(
+                base + "/api/games/feeds/1", data=json.dumps(body).encode(), method="PATCH",
+                headers={"Content-Type": "application/json"}), timeout=10).close()
             with mock.patch.object(self.digests, "request_rebuild") as rebuild:
-                urllib.request.urlopen(req, timeout=10).close()
-                for _ in range(100):           # queued just after the response is sent
-                    if rebuild.called:
-                        break
-                    time.sleep(0.02)
+                patch({"weight": 6})                  # a default weight doesn't change grouping: no rebuild
+                rebuild.assert_not_called()
+                patch({"only": "Nintendo"})           # a keyword filter does (outlet 1 drops its Valve item)
             rebuild.assert_called_once_with(["games"])
         self.digests.build_now("games", (48,))
         self.assertNotEqual(self.digests.get("games", 48)["etag"], etag)
@@ -445,11 +402,12 @@ class GroupTests(unittest.TestCase):
         self.stores = {"games": self.store}
         self.digests = app.make_digests(self.stores)
         self.gs = groups.GroupStore(self.tmp / "groups.db")
+        self.views = groups.Views(self.gs, self.digests, self.stores)
 
     def view(self, **cfg):
         body = {"name": "G", "verticals": ["games"], **cfg}
         group = self.groups.clean(body, None, ["games"])
-        return self.groups.build_view(group, lambda v, h: self.digests.data(v, h)[1])
+        return self.groups.build_view(group, lambda v, h: self.digests.data(v, h)[1], self.views._catalog)
 
     def shown(self, view):
         return sorted(len(s["s"]) for s in view["stories"] if "x" not in s)
@@ -484,8 +442,17 @@ class GroupTests(unittest.TestCase):
         v = self.view(settings={"min_feeds": 2}, outlets={"games": {"3": {"on": False}, "4": {"on": False}, "1": {"w": 9}}})
         self.assertEqual(self.shown(v), [2, 2])
         self.assertEqual(sorted(s["sc"] for s in v["stories"]), [11, 11])
-        # Required outlet 3: only story A.
+        # Required outlet 3: only story A. Required 1 and 3: any -> both; all -> only A (B lacks 3).
         self.assertEqual(self.shown(self.view(settings={"min_feeds": 2}, outlets={"games": {"3": {"req": True}}})), [4])
+        both = {"games": {"1": {"req": True}, "3": {"req": True}}}
+        self.assertEqual(self.shown(self.view(settings={"min_feeds": 2}, outlets=both)), [2, 4])
+        self.assertEqual(self.shown(self.view(settings={"min_feeds": 2, "require_all": True}, outlets=both)), [4])
+        # Catalog default off (outlets 3 and 4): groups without their own setting leave them out...
+        self.store.update_feed(3, enabled=False); self.store.update_feed(4, enabled=False)
+        self.assertEqual(self.shown(self.view(settings={"min_feeds": 2})), [2, 2])
+        # ...and a group can switch one back on.
+        self.assertEqual(self.shown(self.view(settings={"min_feeds": 2}, outlets={"games": {"3": {"on": True}}})), [2, 3])
+        self.store.update_feed(3, enabled=True); self.store.update_feed(4, enabled=True)
         # Minimum score: A scores 10, B scores 3.
         self.assertEqual(self.shown(self.view(settings={"min_feeds": 2, "min_score": 5})), [4])
         # Time window: B is 30 min old, A 90 minutes.
@@ -661,7 +628,7 @@ class SecurityTests(HttpTestCase):
         self.start_server({"games": self.store}, security=app.Security(api_token="s3cret"))
 
     def test_cross_site_and_non_json_writes_are_refused(self):
-        self.assertEqual(self.call("POST", "/api/games/phrases", raw=b'{"phrase": "x"}',
+        self.assertEqual(self.call("POST", "/api/groups", raw=b'{"name": "x"}',
                                    headers={"Content-Type": "text/plain"})[0], 415)
         self.assertEqual(self.call("PATCH", f"/api/games/feeds/{self.fid}", {"weight": 3},
                                    headers={"Origin": "https://evil.example"})[0], 403)
@@ -682,7 +649,7 @@ class SecurityTests(HttpTestCase):
                                    headers={"Content-Type": "application/json"})[0], 400)
         self.assertEqual(self.call("PATCH", f"/api/games/feeds/{self.fid}", raw=b"{nope",
                                    headers={"Content-Type": "application/json"})[0], 400)
-        self.assertEqual(self.call("POST", "/api/games/phrases", raw=b"x" * (70 * 1024),
+        self.assertEqual(self.call("POST", "/api/groups", raw=b"x" * (70 * 1024),
                                    headers={"Content-Type": "application/json"})[0], 413)
 
     def test_private_feed_urls_are_refused(self):
@@ -783,89 +750,21 @@ class ScrapeControlTests(HttpTestCase):
         self.assertEqual((sc2.status()["auto"], sc2.status()["interval_minutes"]), (False, 30))
 
 
-class PhraseTests(HttpTestCase):
-    def setUp(self):
-        self.store = app.Store(Path(tempfile.mkdtemp()) / "p.db")
-        now = time.time()
-        for n in (1, 2, 3):
-            fid = self.store.add_feed(f"https://{n}.example/rss", f"Outlet {n}", 3)
-            self.store.save_fetch(fid, feeds.ParsedFeed("x", [
-                feeds.ParsedEntry(f"a{n}", f"Valve announces Steam Machine hardware {n}", "", now,
-                                  "The console-like PC ships in early 2027." if n == 2 else ""),
-                feeds.ParsedEntry(f"b{n}", f"Nintendo Direct dated for Thursday {n}", "", now)]), None)
-        self.start_server({"games": self.store})
-
-    def stories(self, **q):
-        from urllib.parse import urlencode
-        return self.call("GET", "/api/games/stories?" + urlencode({"min_feeds": 3, **q}))[1]["stories"]
-
-    def test_phrase_in_description_adds_bonus_and_is_reported(self):
-        base = {s["title"][:13]: s["score"] for s in self.stories()}
-        code, ph = self.call("POST", "/api/games/phrases", {"phrase": "early   2027", "bonus": 7})
-        self.assertEqual((code, ph["phrase"]["phrase"]), (201, "early 2027"))
-        steam = next(s for s in self.stories() if s["title"].startswith("Valve"))
-        self.assertEqual((steam["bonus"], steam["score"]), (7, base["Valve announc"] + 7))
-        self.assertEqual([w["phrase"] for w in steam["watched"]], ["early 2027"])
-        self.assertTrue(any(src["watched"] for src in steam["sources"]))
-        self.assertEqual(self.stories()[0]["title"][:5], "Valve")              # bonus lifts it to the top
-        self.assertEqual([s["title"][:5] for s in self.stories(only_watched=1)], ["Valve"])
-        self.assertEqual(self.call("POST", "/api/games/phrases", {"phrase": "EARLY 2027"})[0], 409)
-
-    def test_whole_words_only_and_watched_any_coverage(self):
-        self.call("POST", "/api/games/phrases", {"phrase": "Direct", "bonus": 1})
-        self.call("POST", "/api/games/phrases", {"phrase": "machin"})          # partial word: no match
-        nin = next(s for s in self.stories() if s["title"].startswith("Nintendo"))
-        self.assertEqual([w["phrase"] for w in nin["watched"]], ["Direct"])
-        steam = next(s for s in self.stories() if s["title"].startswith("Valve"))
-        self.assertEqual(steam["watched"], [])
-        self.assertEqual(len(self.stories(min_feeds=9)), 0)
-        self.assertEqual([s["title"][:8] for s in self.stories(min_feeds=9, watched_any=1)], ["Nintendo"])
-
-    def test_phrase_api_validation_and_delete(self):
-        self.assertEqual(self.call("POST", "/api/games/phrases", {"phrase": "  "})[0], 400)
-        self.assertEqual(self.call("POST", "/api/games/phrases", {"phrase": "x", "bonus": 1000})[0], 400)
-        pid = self.call("POST", "/api/games/phrases", {"phrase": "Switch 2"})[1]["phrase"]["id"]
-        self.assertEqual(self.call("PATCH", f"/api/games/phrases/{pid}", {"bonus": 12})[1]["phrase"]["bonus"], 12)
-        self.assertEqual(self.call("DELETE", f"/api/games/phrases/{pid}")[0], 200)
-        self.assertEqual(self.call("GET", "/api/games/phrases")[1]["phrases"], [])
-
-
 class SettingsApiTests(HttpTestCase):
-    def setUp(self):
-        self.store = app.Store(Path(tempfile.mkdtemp()) / "games.db")
-        now = time.time()
-        for n in (1, 2, 3):
-            fid = self.store.add_feed(f"https://{n}.example/rss", f"Outlet {n}", 3)
-            self.store.save_fetch(fid, feeds.ParsedFeed("x", [
-                feeds.ParsedEntry(f"a{n}", f"Valve announces Steam Machine hardware {n}", "", now)]), None)
-        self.start_server({"games": self.store})
+    """Per vertical, only match strictness is left (everything else is per filter group)."""
 
-    def test_defaults_save_validate_reset(self):
-        code, d = self.call("GET", "/api/games/settings")
-        self.assertEqual((code, d["settings"]["min_feeds"], d["defaults"]["min_feeds"]), (200, 4, 4))
-        self.assertEqual(self.call("GET", "/api/games/stories")[1]["stories"], [])          # 3 outlets < 4
-        code, d = self.call("PATCH", "/api/games/settings", {"min_feeds": 3, "only_watched": False})
-        self.assertEqual((code, d["settings"]["min_feeds"]), (200, 3))
-        res = self.call("GET", "/api/games/stories")[1]
-        self.assertEqual((len(res["stories"]), res["settings"]["min_feeds"]), (1, 3))       # saved value used
-        self.assertEqual(len(self.call("GET", "/api/games/stories?min_feeds=9")[1]["stories"]), 0)  # query wins
-        for bad in ({"min_feeds": 0}, {"min_feeds": "3"}, {"threshold": 2}, {"only_watched": 1}, {"nope": 1}):
+    def test_threshold_only(self):
+        store = app.Store(Path(tempfile.mkdtemp()) / "t.db")
+        store.set_settings({"min_feeds": 7})                     # saved by an earlier version: ignored now
+        self.start_server({"games": store})
+        self.assertEqual(self.call("GET", "/api/games/settings")[1], {"threshold": matching.DEFAULT_THRESHOLD})
+        self.assertEqual(self.call("PATCH", "/api/games/settings", {"threshold": 0.2})[1], {"threshold": 0.2})
+        for bad in ({"threshold": 2}, {"threshold": "0.2"}, {"min_feeds": 3}, {}):
             self.assertEqual(self.call("PATCH", "/api/games/settings", bad)[0], 400, bad)
-        # Percent of enabled outlets: 3 enabled, 50% -> 2 needed (rounded up).
-        d = self.call("PATCH", "/api/games/settings", {"min_feeds_mode": "percent", "min_feeds_percent": 50})[1]["settings"]
-        self.assertEqual((d["min_feeds_effective"], d["enabled_outlets"]), (2, 3))
-        self.assertEqual(len(self.call("GET", "/api/games/stories")[1]["stories"]), 1)
-        # The percentage is of outlets that can count: below min_weight they don't.
-        self.store.update_feed(1, weight=1); self.store.update_feed(2, weight=3); self.store.update_feed(3, weight=3)
-        d = self.call("PATCH", "/api/games/settings", {"min_weight": 2, "min_feeds_percent": 100})[1]["settings"]
-        self.assertEqual((d["min_feeds_effective"], d["enabled_outlets"]), (2, 2))
-        d = self.call("PATCH", "/api/games/settings", {"min_weight": 0, "min_feeds_percent": 50})[1]["settings"]
-        self.store.update_feed(3, enabled=False)                                # 2 enabled -> 50% = 1
-        self.assertEqual(self.call("GET", "/api/games/settings")[1]["settings"]["min_feeds_effective"], 1)
-        self.assertEqual(self.call("PATCH", "/api/games/settings", {"min_feeds_mode": "share"})[0], 400)
-        self.assertEqual(self.call("GET", "/api/games/stories?min_feeds=9")[1]["settings"]["min_feeds_effective"], 9)
-        self.assertEqual(self.call("PATCH", "/api/games/settings", {"reset": True})[1]["settings"]["min_feeds"], 4)
-        self.assertEqual(self.store.get_settings(), {})
+        self.assertEqual(self.call("PATCH", "/api/games/settings", {"reset": True})[1]["threshold"], matching.DEFAULT_THRESHOLD)
+        self.assertEqual(app.earlier_settings(app.VERTICALS_BY_KEY["games"], store)["min_feeds"], 4)   # reset cleared it
+        self.assertEqual(self.call("GET", "/api/games/stories")[0], 404)
+        self.assertEqual(self.call("GET", "/api/games/phrases")[0], 404)
 
 
 class SeedCacheTests(unittest.TestCase):
@@ -906,11 +805,16 @@ class HeadlineAndImageTests(unittest.TestCase):
             Item(id=3, feed_id=3, title="Zelda: Ocarina of Time remake review roundup", weight=3),
             Item(id=4, feed_id=4, title="Ocarina of Time remake: our review", weight=1, image="https://x/i.jpg"),
         ])
-        self.assertEqual(app.headline_item(story).id, 4)
-        self.assertEqual(app.headline_item(story, min_weight=2).id, 3)               # outlet 4 doesn't count
+        self.assertEqual(matching.pick_headline(story.items).id, 4)
+        self.assertEqual(matching.pick_headline([i for i in story.items if i.weight >= 2]).id, 3)   # outlet 4 doesn't count
         labelled = matching.Story(items=[Item(id=1, feed_id=1, title="Opinion | The end of aid to Israel?"),
                                          Item(id=2, feed_id=2, title="US will stop $4B in aid to Israel, Trump says")])
-        self.assertEqual(app.headline_item(labelled).id, 2)
+        self.assertEqual(matching.pick_headline(labelled.items).id, 2)
+        # Per outlet too: an outlet's plain headline isn't dropped for its shorter "Opinion |" piece.
+        import digest
+        both = [Item(id=1, feed_id=1, title="Opinion | Aid ends?", published=1),
+                Item(id=2, feed_id=1, title="US will stop $4B in aid to Israel, Trump says", published=2)]
+        self.assertEqual([i.id for i in digest._per_outlet(both)], [2])
 
     def test_images_from_rss_atom_and_feedly(self):
         rss = b"""<rss xmlns:media="http://search.yahoo.com/mrss/"><channel>
@@ -934,9 +838,12 @@ class HeadlineAndImageTests(unittest.TestCase):
                                                  ("Valve's Steam Machine hardware announced by the company", "Long text.", "https://i/1.jpg")], 1):
             fid = store.add_feed(f"https://{n}.example/rss", f"Outlet {n}", n)
             store.save_fetch(fid, feeds.ParsedFeed("x", [feeds.ParsedEntry(f"g{n}", title, f"https://{n}/a", now, desc, img)]), None)
-        s = app.build_stories(store, 3, 48, 0.12)["stories"][0]
-        self.assertEqual(s["title"], "Valve announces Steam Machine hardware")        # shortest
-        self.assertEqual((s["lead"]["description"], s["lead"]["image"]), ("Long text.", "https://i/1.jpg"))
+        stores = {"games": store}
+        views = groups.Views(groups.GroupStore(Path(tempfile.mkdtemp()) / "g.db"), app.make_digests(stores), stores)
+        g = groups.clean({"name": "G", "verticals": ["games"], "settings": {"min_feeds": 3}}, None, ["games"])
+        s = groups.build_view(g, lambda v, h: views.digests.data(v, h)[1], views._catalog)["stories"][0]
+        self.assertEqual(s["t"], "Valve announces Steam Machine hardware")             # shortest
+        self.assertEqual((s["d"], s["i"]), ("Long text.", "https://i/1.jpg"))           # from another outlet
 
 
 class KeywordTests(unittest.TestCase):
@@ -949,7 +856,7 @@ class KeywordTests(unittest.TestCase):
             story(["Valve announces Steam Machine", "Steam Machine announced by Valve", "Valve's new Steam Machine"]),
             story(["Elder Scrolls Online gets an update", "Elder Scrolls Online patch notes"]),
         ]
-        app.story_terms(stories)
+        keyterms.story_terms(stories)
         kw = [k["term"] for k in stories[0]["keywords"]]
         self.assertEqual(set(kw[:2]), {"Sentinel", "Elder Scrolls"})   # in every headline; phrase replaces its words
         self.assertNotIn("Elder", kw)
@@ -961,13 +868,13 @@ class KeywordTests(unittest.TestCase):
             return {"title": title_list[0], "score": 10, "sources": [{"title": t} for t in title_list]}
         gov = story(["Record number of female governors elected", "Female governors elected in record numbers",
                      "Record number of women elected governor"])
-        app.story_terms([gov])
+        keyterms.story_terms([gov])
         self.assertNotIn(gov["keywords"][0]["term"].lower(), ("record", "female", "elected"))
-        self.assertTrue(app._noun_like(("ubisoft",), "Ubisoft", True))
-        self.assertFalse(app._noun_like(("black",), "Black", True))           # capitalised adjective
-        self.assertFalse(app._noun_like(("delay",), "delayed", False))
-        self.assertTrue(app._noun_like(("name", "god", "of", "war"), "God of War", False))
-        self.assertEqual(sorted(app._name_candidates("Dragon’s Dogma 2 Drops Surprise Collab").values(), key=len)[-1],
+        self.assertTrue(keyterms._noun_like(("ubisoft",), "Ubisoft", True))
+        self.assertFalse(keyterms._noun_like(("black",), "Black", True))           # capitalised adjective
+        self.assertFalse(keyterms._noun_like(("delay",), "delayed", False))
+        self.assertTrue(keyterms._noun_like(("name", "god", "of", "war"), "God of War", False))
+        self.assertEqual(sorted(keyterms._name_candidates("Dragon’s Dogma 2 Drops Surprise Collab").values(), key=len)[-1],
                          "Dragon’s Dogma 2")
 
     def test_proper_noun_at_headline_start_leads(self):
@@ -981,7 +888,7 @@ class KeywordTests(unittest.TestCase):
             "Suda51 says No More Heroes' Travis Touchdown \"is definitely coming back\" to celebrate the franchise's 20th anniversary"])
         mieville = story(["China Miéville has won the 2026 Goldsmiths Prize", "Goldsmiths Prize goes to China Miéville",
                           "China Miéville wins Goldsmiths Prize with longest novel in its history"])
-        app.story_terms([suda, mieville])
+        keyterms.story_terms([suda, mieville])
         self.assertEqual(suda["keywords"][0]["term"], "Suda51")
         self.assertIn("No More Heroes", [k["term"] for k in suda["keywords"]])
         self.assertEqual(mieville["keywords"][0]["term"], "China Miéville")
@@ -997,18 +904,18 @@ class KeywordTests(unittest.TestCase):
         tributes = [story(["Jonathan Frakes pays tribute to Patrick Stewart", "Patrick Stewart tributes from Jonathan Frakes"]),
                     story(["Hugh Jackman remembers Patrick Stewart", "Patrick Stewart remembered by Hugh Jackman"]),
                     story(["Patrick Stewart's best roles, ranked", "The best Patrick Stewart performances"])]
-        app.story_terms([stewart] + tributes)
+        keyterms.story_terms([stewart] + tributes)
         terms = [k["term"] for k in stewart["keywords"]]
         self.assertEqual(terms[0], "Patrick Stewart")
         self.assertIn("Star Trek", terms)                 # quoted title in Title Case headlines
         self.assertNotIn("Trek", terms)
-        self.assertEqual(app._name_candidates("Sir Patrick Stewart, Beloved For Star Trek, X-Men And More, Dies Aged 86"), {})
+        self.assertEqual(keyterms._name_candidates("Sir Patrick Stewart, Beloved For Star Trek, X-Men And More, Dies Aged 86"), {})
 
     def test_description_mentions_break_ties(self):
         def story(titles):
             return {"title": titles[0], "score": 10, "sources": [{"title": t} for t in titles]}
         a = story(["Valve and Nintendo team up", "Nintendo and Valve team up"])
-        app.story_terms([a], bodies=[["Valve's hardware chief explained the deal.", "Valve said more soon."]])
+        keyterms.story_terms([a], bodies=[["Valve's hardware chief explained the deal.", "Valve said more soon."]])
         self.assertEqual(a["keywords"][0]["term"], "Valve")
 
     def test_names_with_connectors_are_kept_whole(self):
@@ -1021,7 +928,7 @@ class KeywordTests(unittest.TestCase):
                           "South of Midnight creative director would have turned off Xbox money tap"])
         cod = story(["Call of Duty: Modern Warfare 4 DMZ patch nerfs UAV towers",
                      "Review: Call Of Duty: Modern Warfare 4", "Call of Duty: Modern Warfare 4 DMZ Season 1 trailer"])
-        app.story_terms([laufey, midnight, cod])
+        keyterms.story_terms([laufey, midnight, cod])
         terms = lambda s: [k["term"] for k in s["keywords"]]
         self.assertIn("God of War Laufey", terms(laufey))
         self.assertNotIn("War Laufey", terms(laufey))
@@ -1029,10 +936,10 @@ class KeywordTests(unittest.TestCase):
         self.assertFalse(any(t in terms(midnight) for t in ("South", "Midnight", "Midnight director")))
         self.assertIn("Call of Duty", terms(cod))
         self.assertIn("Modern Warfare 4", terms(cod))
-        self.assertEqual(sorted(app._name_candidates("New Xbox Series X Revealed").values(), key=len)[-1], "Xbox Series X")
+        self.assertEqual(sorted(keyterms._name_candidates("New Xbox Series X Revealed").values(), key=len)[-1], "Xbox Series X")
         quoted = story(["South of Midnight director says he wouldn’t have funded it ‘Rome burns’",
                         "‘There’s always a night when Rome burns’: South of Midnight director speaks"])
-        app.story_terms([quoted])                                    # curly quotes and contractions: no crash
+        keyterms.story_terms([quoted])                                    # curly quotes and contractions: no crash
         self.assertIn("South of Midnight", [k["term"] for k in quoted["keywords"]])
 
 

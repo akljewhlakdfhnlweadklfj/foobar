@@ -169,10 +169,6 @@ class _UnionFind:
             self.parent[rb] = ra
 
 
-def _weighted_jaccard(idf: dict[str, float], a: frozenset[str], b: frozenset[str]) -> float:
-    return sum(idf[t] for t in a & b) / sum(idf[t] for t in a | b)
-
-
 def _weighted_cosine(idf: dict[str, float], a: frozenset[str], b: frozenset[str]) -> float:
     """Cosine similarity of IDF-weighted binary token vectors."""
     return sum(idf[t] ** 2 for t in a & b) / math.sqrt(sum(idf[t] ** 2 for t in a) * sum(idf[t] ** 2 for t in b))
@@ -210,7 +206,7 @@ def _drop_feed_boilerplate(items: list[Item], min_items: int = 10, share: float 
 
 
 # What text the matcher compares: "title", "title+lead" (title + the description's first
-# sentence) or "title+description". Chosen with eval_matching.py --realistic.
+# sentence) or "title+description". Chosen with eval_realistic.py.
 TEXT_MODE = "title+lead"
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s")
 
@@ -358,20 +354,17 @@ def cluster(items: list[Item], threshold: float = DEFAULT_THRESHOLD, min_shared:
     return agglomerate(items, lexical_similarities(items, min_shared), threshold, linkage, max_span_hours)
 
 
-def lead_item(story: Story) -> Item:
-    """The story's lead headline: from the most prestigious outlet; among equally weighted
-    outlets, the headline sharing the most tokens with the rest of the cluster (most typical)."""
-    if len(story.items) == 1:
-        return story.items[0]
-    top = max(i.weight for i in story.items)
-    best, best_score = story.items[0], float("-inf")
-    for a in (i for i in story.items if i.weight == top):
-        score = sum(len(a.tokens & b.tokens) for b in story.items if b is not a)
-        score -= len(a.title) / 10000  # prefer shorter headlines on ties (less fluff)
-        if score > best_score:
-            best, best_score = a, score
-    return best
+MIN_HEADLINE_WORDS = 4
+# Headlines labelled as a format rather than the news itself ("Opinion |", "WATCH:", "Review:").
+LABELLED = re.compile(r"^\s*(opinion|op-ed|watch|video|videos|listen|podcast|live|live updates|analysis|editorial|"
+                      r"explainer|review|reviews|preview|quiz|letters?|photos?|in pictures|the latest|perspective|"
+                      r"column|commentary|interview|recap)\b\s*[:|\-–—]", re.I)
 
 
-def representative_title(story: Story) -> str:
-    return lead_item(story).title
+def pick_headline(items: list, title=lambda x: x.title, weight=lambda x: x.weight, published=lambda x: x.published):
+    """The headline to show: the shortest one with at least MIN_HEADLINE_WORDS words that isn't a
+    labelled format piece (each rule dropped when nothing passes it); ties go to the higher-weighted
+    outlet, then the earlier one. Used per outlet (digest.py) and per story (groups.py)."""
+    full = [x for x in items if len(title(x).split()) >= MIN_HEADLINE_WORDS] or items
+    plain = [x for x in full if not LABELLED.match(title(x))] or full
+    return min(plain, key=lambda x: (len(title(x)), -weight(x), published(x)))

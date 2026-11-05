@@ -1,7 +1,7 @@
 # AI headline test (one-time, Nov 5, 2026)
 
 Can an LLM write a shorter, still coherent headline for each story than the app's current rule
-(the shortest outlet headline)? Not part of the app: nothing here runs in the server or the page.
+(the shortest outlet headline)? Kept as a record: the app now has this as a feature ("AI summary" per filter group, `ai.py`), and nothing here is used by it.
 
 ## Setup
 

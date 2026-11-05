@@ -39,10 +39,10 @@ CREATE TABLE IF NOT EXISTS feeds (
     via          TEXT,              -- 'direct' or 'feedly' (how the last successful fetch got its items)
     name         TEXT,              -- display name from the seed file; falls back to the feed's own title
     weight       REAL,              -- outlet prestige 0..10, seeds use 1..5; NULL = default
-    enabled      INTEGER NOT NULL DEFAULT 1,  -- 0 = switched off in the UI: still fetched, left out of stories
+    enabled      INTEGER NOT NULL DEFAULT 1,  -- 0 = off by default in filter groups (still fetched)
     backfilled_since REAL,          -- oldest point Feedly history has been loaded back to
     last_run     TEXT,              -- id of the last scrape run that finished this feed (for resuming)
-    required     INTEGER NOT NULL DEFAULT 0, -- 1 = stories must include this outlet (see build_stories)
+    required     INTEGER NOT NULL DEFAULT 0, -- unused since filter groups (seeded into them once)
     only         TEXT               -- comma-separated keywords: only use items mentioning one (NULL = all)
 );
 CREATE TABLE IF NOT EXISTS items (
@@ -119,6 +119,7 @@ class Store:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self.version = 0  # bumped on every write; lets callers cache derived results
+        self.catalog_version = 0  # bumped when the outlet list, names, weights or defaults change
         with self._conn() as c:
             prior = c.execute("PRAGMA user_version").fetchone()[0]
             self.is_new = prior == 0 and not c.execute(
@@ -155,6 +156,12 @@ class Store:
             yield c
         self.version += 1
 
+    @contextmanager
+    def _catalog_write(self) -> Iterator[sqlite3.Connection]:
+        with self._write() as c:
+            yield c
+        self.catalog_version += 1
+
     # --- feeds ---------------------------------------------------------------------------------
 
     def list_feeds(self) -> list[dict]:
@@ -169,7 +176,7 @@ class Store:
 
     def add_feed(self, url: str, name: str | None = None, weight: float | None = None,
                  only: str | None = None) -> int:
-        with self._write() as c:
+        with self._catalog_write() as c:
             return c.execute("INSERT INTO feeds (url, added_at, name, weight, only) VALUES (?, ?, ?, ?, ?)",
                              (url, time.time(), name, weight, only)).lastrowid
 
@@ -186,7 +193,7 @@ class Store:
     def sync_seed(self, feeds_: dict[str, SeedFeed]) -> None:
         """Apply seed-file names to existing feeds, and seed-file weights where none is set yet
         (a weight changed in the UI is kept)."""
-        with self._write() as c:
+        with self._catalog_write() as c:
             c.executemany("UPDATE feeds SET name = ? WHERE url = ?",
                           [(s.name, u) for u, s in feeds_.items() if s.name])
             c.executemany("UPDATE feeds SET weight = ? WHERE url = ? AND weight IS NULL",
@@ -195,39 +202,27 @@ class Store:
                           [(s.only, u) for u, s in feeds_.items() if s.only])
 
     def update_feed(self, feed_id: int, weight: float | None = None, enabled: bool | None = None,
-                    required: bool | None = None, only: str | None = None) -> bool:
-        """only="" clears the keyword filter; None leaves it unchanged."""
+                    only: str | None = None) -> bool:
+        """Catalog defaults: weight, enabled (on by default in groups) and the keyword filter
+        (only="" clears it; None leaves it unchanged)."""
         sets, args = [], []
         if only is not None:
             sets.append("only = ?"); args.append(only.strip() or None)
-        if required is not None:
-            sets.append("required = ?"); args.append(int(required))
         if weight is not None:
             sets.append("weight = ?"); args.append(weight)
         if enabled is not None:
             sets.append("enabled = ?"); args.append(int(enabled))
         if not sets:
             return self.get_feed(feed_id) is not None
-        with self._write() as c:
+        with self._catalog_write() as c:
             return c.execute(f"UPDATE feeds SET {', '.join(sets)} WHERE id = ?", (*args, feed_id)).rowcount > 0
 
-    def set_weight(self, feed_id: int, weight: float) -> bool:
-        return self.update_feed(feed_id, weight=weight)
-
-    def required_feed_ids(self) -> set[int]:
-        with self._conn() as c:
-            return {r[0] for r in c.execute("SELECT id FROM feeds WHERE required = 1")}
-
-    def clear_required(self) -> int:
-        with self._write() as c:
-            return c.execute("UPDATE feeds SET required = 0 WHERE required = 1").rowcount
-
     def set_all_enabled(self, enabled: bool) -> int:
-        with self._write() as c:
+        with self._catalog_write() as c:
             return c.execute("UPDATE feeds SET enabled = ?", (int(enabled),)).rowcount
 
     def delete_feed(self, feed_id: int) -> bool:
-        with self._write() as c:
+        with self._catalog_write() as c:
             return c.execute("DELETE FROM feeds WHERE id = ?", (feed_id,)).rowcount > 0
 
     def mark_backfilled(self, feed_id: int, since: float) -> None:
@@ -288,7 +283,7 @@ class Store:
                 items.append(matching.Item(**dict(r)))
         return items
 
-    # --- settings (story filters for this vertical) ---------------------------------------------
+    # --- settings (only match strictness is used now; older versions kept story filters here) ---------------------------------------------
 
     def get_settings(self) -> dict:
         with self._conn() as c:
@@ -303,27 +298,3 @@ class Store:
     def reset_settings(self) -> None:
         with self._write() as c:
             c.execute("DELETE FROM settings")
-
-    # --- watched phrases -----------------------------------------------------------------------
-
-    def list_phrases(self) -> list[dict]:
-        with self._conn() as c:
-            return [dict(r) for r in c.execute("SELECT * FROM phrases ORDER BY phrase COLLATE NOCASE")]
-
-    def add_phrase(self, phrase: str, bonus: float = DEFAULT_BONUS) -> int:
-        with self._write() as c:
-            return c.execute("INSERT INTO phrases (phrase, bonus, added_at) VALUES (?, ?, ?)",
-                             (phrase, bonus, time.time())).lastrowid
-
-    def get_phrase(self, phrase_id: int) -> dict | None:
-        with self._conn() as c:
-            r = c.execute("SELECT * FROM phrases WHERE id = ?", (phrase_id,)).fetchone()
-            return dict(r) if r else None
-
-    def update_phrase(self, phrase_id: int, bonus: float) -> bool:
-        with self._write() as c:
-            return c.execute("UPDATE phrases SET bonus = ? WHERE id = ?", (bonus, phrase_id)).rowcount > 0
-
-    def delete_phrase(self, phrase_id: int) -> bool:
-        with self._write() as c:
-            return c.execute("DELETE FROM phrases WHERE id = ?", (phrase_id,)).rowcount > 0

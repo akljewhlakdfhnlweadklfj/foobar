@@ -25,7 +25,6 @@ sys.path.insert(0, str(ROOT))
 
 import app  # noqa: E402
 import groups as groups_mod  # noqa: E402
-import digest as digest_mod  # noqa: E402
 import matching  # noqa: E402
 
 SHIM = r"""
@@ -67,7 +66,8 @@ def _swap(html: str, old: str, new: str) -> str:
 
 
 def build(data_dir: Path, out: Path) -> dict:
-    stores = app.open_stores(data_dir, seed=False)
+    # Only the verticals that have a database (opening one doesn't create it here).
+    stores = {v.key: app.Store(data_dir / f"{v.key}.db") for v in app.VERTICALS if (data_dir / f"{v.key}.db").exists()}
     digests = app.make_digests(stores)       # in memory only
     now = time.time()
     if (data_dir / "groups.db").exists():
@@ -75,12 +75,11 @@ def build(data_dir: Path, out: Path) -> dict:
     else:
         group_store = groups_mod.GroupStore(Path(tempfile.mkdtemp()) / "groups.db")
         app.seed_groups(group_store, stores)
-    views = groups_mod.Views(group_store, digests)
-    meta = {"verticals": [{"key": v.key, "label": v.label, "default_min_feeds": v.default_min_feeds}
-                          for v in app.VERTICALS if v.key in stores],
-            "default_threshold": matching.DEFAULT_THRESHOLD, "default_weight": matching.DEFAULT_WEIGHT,
-            "max_weight": app.MAX_WEIGHT, "default_bonus": app.DEFAULT_BONUS, "max_bonus": app.MAX_BONUS,
-            "windows": list(digest_mod.WINDOWS), "ai": {"available": False, "reason": "not in a snapshot"}}
+    views = groups_mod.Views(group_store, digests, stores)
+    meta = {"verticals": [{"key": v.key, "label": v.label} for v in app.VERTICALS if v.key in stores],
+            "default_weight": matching.DEFAULT_WEIGHT, "max_weight": app.MAX_WEIGHT,
+            "default_bonus": app.DEFAULT_BONUS, "max_bonus": app.MAX_BONUS, "retention_days": app.RETENTION_DAYS,
+            "ai": {"available": False, "reason": "not in a snapshot"}}
     snap = {"meta": meta,
             "scrape": {"state": "idle", "run": None, "resumable": False, "auto": False, "interval_minutes": 0,
                        "last_run": {"finished_at": now}},
