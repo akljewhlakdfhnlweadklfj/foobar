@@ -214,6 +214,7 @@ class Summarizer:
             batch = sorted(self._pending.items(), key=lambda kv: -kv[1][3])[:min(BATCH, budget)]
             for k, _ in batch:
                 del self._pending[k]
+        self._charge(len(batch))
         try:
             written = self._write_batch([v for _, v in batch])
         except Exception as e:  # noqa: BLE001 - keep serving the usual headlines
@@ -227,8 +228,8 @@ class Summarizer:
         return bool(self._pending)
 
     def _write_batch(self, stories: list[tuple]) -> int:
-        """Ask for headlines; on a refusal split the batch so one story can't block the others."""
-        self._charge(len(stories))
+        """Ask for headlines; on a refusal split the batch so one story can't block the others.
+        (The cap is charged once per story, in run_once, however many requests the split takes.)"""
         texts = self._ask([s[1] for s in stories])
         if texts is None:                                  # declined
             if len(stories) == 1:

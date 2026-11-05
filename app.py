@@ -162,6 +162,9 @@ def seed_groups(group_store: groups_mod.GroupStore, stores: dict[str, Store]) ->
     for v in VERTICALS:
         if v.key not in stores or group_store.was_seeded(v.key):
             continue
+        if group_store.upgraded and not stores[v.key].is_new:
+            group_store.mark_seeded(v.key)      # existed before groups were tracked: its group was deleted on purpose
+            continue
         settings = earlier_settings(v, stores[v.key])
         # Outlets marked "required" in the earlier design become this group's own setting.
         required = {str(f["id"]): {"req": True} for f in stores[v.key].list_feeds() if f.get("required")}
@@ -409,7 +412,9 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                     raise HTTPError(400, str(e))
                 return self._json({"group": group_store.get(group_store.create(cfg))}, 201)
             if store and rest == ["feeds"]:
-                url = str(body.get("url", "")).strip()
+                if not isinstance(body.get("url", ""), str):
+                    raise HTTPError(400, "url must be text")
+                url = body.get("url", "").strip()
                 try:
                     url = youtube.feed_url_for(url) or url          # a YouTube channel link or @handle
                 except feeds.FeedError as e:
@@ -456,14 +461,17 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                     raise HTTPError(404, "No such group")
                 return self._json({"group": group})
             if store and rest == ["settings"]:
+                before = threshold(store)
                 if body.get("reset") is True:
                     store.reset_settings()
                 elif set(body) == {"threshold"}:
                     store.set_settings({"threshold": self._number(body["threshold"], "threshold", *THRESHOLD_RANGE)})
                 else:
                     raise HTTPError(400, 'send {"threshold": number} or {"reset": true}')
-                digests.request_rebuild([self._vertical_key()])             # stories are grouped differently
-                return self._json({"threshold": threshold(store), "rebuilding": True})
+                changed = threshold(store) != before
+                if changed:
+                    digests.request_rebuild([self._vertical_key()])         # stories are grouped differently
+                return self._json({"threshold": threshold(store), "rebuilding": changed})
             if store and len(rest) == 2 and rest[0] == "feeds" and rest[1].isdigit():
                 enabled, only = body.get("enabled"), body.get("only")
                 if only is not None and (not isinstance(only, str) or len(only) > 500):

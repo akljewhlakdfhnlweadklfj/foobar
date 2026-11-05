@@ -122,6 +122,9 @@ class Scraper:
                 run = cand
                 if cand is held:
                     self.state.pop("held_backfill")
+                    if prev and prev is not held and prev["status"] in UNFINISHED:
+                        prev["status"] = "abandoned"           # a stopped refresh: recorded, not silently dropped
+                        self.state["last_run"] = prev
                 run.update(status="running", resumed_at=time.time(), trigger=trigger, error=None)
                 run["resumes"] = run.get("resumes", 0) + 1
             else:

@@ -4,7 +4,8 @@ Schema history (PRAGMA user_version): v1 feeds+items; v2 feeds.via; v3 feeds.nam
 v5 feeds.enabled; v6 feeds.backfilled_since + items.description; v7 feeds.last_run + feeds.required +
 phrases table; v8 settings table; v9 feeds.only (keyword filter); v10 items.image; v11 subreddit feeds
 removed; v12 items.views; v13 feeds.kind (rss/youtube), feeds.fetch_note (fallback note, not an error),
-feeds.views_checked_at (YouTube view counts read from the channel page).
+feeds.views_checked_at (YouTube view counts read from the channel page); v14 items.approx (published
+time is approximate: YouTube page dates).
 Older files are upgraded in place when opened.
 """
 
@@ -25,7 +26,7 @@ import matching
 import sources
 
 RETENTION_DAYS = 30
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 MAX_WEIGHT = 10.0
 MAX_BONUS = 100.0
 DEFAULT_BONUS = 5.0
@@ -74,7 +75,8 @@ _ADDED_COLUMNS = {
               ("backfilled_since", "REAL"), ("last_run", "TEXT"), ("required", "INTEGER NOT NULL DEFAULT 0"),
               ("only", "TEXT"), ("kind", "TEXT NOT NULL DEFAULT 'rss'"), ("fetch_note", "TEXT"),
               ("views_checked_at", "REAL")],
-    "items": [("description", "TEXT NOT NULL DEFAULT ''"), ("image", "TEXT NOT NULL DEFAULT ''"), ("views", "INTEGER")],
+    "items": [("description", "TEXT NOT NULL DEFAULT ''"), ("image", "TEXT NOT NULL DEFAULT ''"), ("views", "INTEGER"),
+              ("approx", "INTEGER NOT NULL DEFAULT 0")],
 }
 
 
@@ -125,6 +127,8 @@ class Store:
             prior = c.execute("PRAGMA user_version").fetchone()[0]
             self.is_new = prior == 0 and not c.execute(
                 "SELECT 1 FROM sqlite_master WHERE name = 'feeds'").fetchone()
+            if prior == SCHEMA_VERSION:
+                return            # up to date: opening takes no write lock (worker processes open it every build)
             c.executescript(SCHEMA)
             for table, cols in _ADDED_COLUMNS.items():
                 have = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
@@ -218,15 +222,18 @@ class Store:
             sets.append("enabled = ?"); args.append(int(enabled))
         if not sets:
             return self.get_feed(feed_id) is not None
-        if only is not None:
-            self.items_version += 1        # a keyword filter changes which headlines are grouped
         with self._catalog_write() as c:
-            return c.execute(f"UPDATE feeds SET {', '.join(sets)} WHERE id = ?", (*args, feed_id)).rowcount > 0
+            ok = c.execute(f"UPDATE feeds SET {', '.join(sets)} WHERE id = ?", (*args, feed_id)).rowcount > 0
+        if ok and only is not None:
+            self.items_version += 1        # a keyword filter changes which headlines are grouped
+        return ok
 
     def delete_feed(self, feed_id: int) -> bool:
-        self.items_version += 1
         with self._catalog_write() as c:
-            return c.execute("DELETE FROM feeds WHERE id = ?", (feed_id,)).rowcount > 0
+            ok = c.execute("DELETE FROM feeds WHERE id = ?", (feed_id,)).rowcount > 0
+        if ok:
+            self.items_version += 1
+        return ok
 
     def mark_backfilled(self, feed_id: int, since: float) -> None:
         with self._write() as c:
@@ -242,41 +249,46 @@ class Store:
     def save_fetch(self, feed_id: int, parsed: feeds.ParsedFeed | None, error: str | None, via: str = "direct",
                    note: str | None = None) -> None:
         """Store a fetch: its items (parsed), or the error when it failed (parsed=None; earlier items kept).
-        via: where the items came from (sources.VIA); note: why a fallback was used."""
+        via: where the items came from (sources.VIA); note: why a fallback was used. An entry with an
+        exact time corrects an approximate one stored earlier (YouTube page dates)."""
         now = time.time()
         with self._write() as c:
             before = c.total_changes
             c.execute("DELETE FROM items WHERE published < ?", (now - RETENTION_DAYS * 86400,))
             if parsed is None:
-                if c.total_changes != before:
-                    self.items_version += 1
                 c.execute("UPDATE feeds SET last_fetched = ?, last_error = ? WHERE id = ?", (now, error, feed_id))
-                return
-            c.executemany(
-                """INSERT INTO items (feed_id, guid, title, link, published, fetched_at, description, image, views)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT (feed_id, guid) DO UPDATE SET title = excluded.title, link = excluded.link,
-                       description = CASE WHEN excluded.description != '' THEN excluded.description
-                                          ELSE items.description END,
-                       image = CASE WHEN excluded.image != '' THEN excluded.image ELSE items.image END,
-                       views = COALESCE(excluded.views, items.views)
-                   WHERE items.title IS NOT excluded.title OR items.link IS NOT excluded.link
-                      OR (excluded.description != '' AND items.description IS NOT excluded.description)
-                      OR (excluded.image != '' AND items.image IS NOT excluded.image)
-                      OR (excluded.views IS NOT NULL AND items.views IS NOT excluded.views)""",
-                [(feed_id, e.guid, e.title, e.link, min(e.published, now), now, e.description, e.image, e.views)
-                 for e in parsed.entries if e.title and e.published >= now - RETENTION_DAYS * 86400],
-            )
-            if c.total_changes != before:          # only real changes (unchanged rows aren't updated)
-                self.items_version += 1
-            c.execute(
-                """UPDATE feeds SET last_fetched = ?, last_error = ?, via = ?, fetch_note = ?,
-                   views_checked_at = COALESCE(?, views_checked_at),
-                   title = CASE WHEN ? != '' THEN ? ELSE title END,
-                   item_count = (SELECT COUNT(*) FROM items WHERE feed_id = ?)
-                   WHERE id = ?""",
-                (now, error, via, note, parsed.views_checked_at, parsed.title, parsed.title, feed_id, feed_id),
-            )
+                changed = c.total_changes - before > 1
+            else:
+                c.executemany(
+                    """INSERT INTO items (feed_id, guid, title, link, published, fetched_at, description, image, views, approx)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT (feed_id, guid) DO UPDATE SET title = excluded.title, link = excluded.link,
+                           description = CASE WHEN excluded.description != '' THEN excluded.description
+                                              ELSE items.description END,
+                           image = CASE WHEN excluded.image != '' THEN excluded.image ELSE items.image END,
+                           views = COALESCE(excluded.views, items.views),
+                           published = CASE WHEN items.approx AND NOT excluded.approx THEN excluded.published
+                                            ELSE items.published END,
+                           approx = items.approx AND excluded.approx
+                       WHERE items.title IS NOT excluded.title OR items.link IS NOT excluded.link
+                          OR (excluded.description != '' AND items.description IS NOT excluded.description)
+                          OR (excluded.image != '' AND items.image IS NOT excluded.image)
+                          OR (excluded.views IS NOT NULL AND items.views IS NOT excluded.views)
+                          OR (items.approx AND NOT excluded.approx)""",
+                    [(feed_id, e.guid, e.title, e.link, min(e.published, now), now, e.description, e.image, e.views,
+                      int(e.approx)) for e in parsed.entries if e.title and e.published >= now - RETENTION_DAYS * 86400],
+                )
+                changed = c.total_changes != before    # only real changes (unchanged rows aren't updated)
+                c.execute(
+                    """UPDATE feeds SET last_fetched = ?, last_error = ?, via = ?, fetch_note = ?,
+                       views_checked_at = COALESCE(?, views_checked_at),
+                       title = CASE WHEN ? != '' THEN ? ELSE title END,
+                       item_count = (SELECT COUNT(*) FROM items WHERE feed_id = ?)
+                       WHERE id = ?""",
+                    (now, error, via, note, parsed.views_checked_at, parsed.title, parsed.title, feed_id, feed_id),
+                )
+        if changed:
+            self.items_version += 1        # after the commit, so a rebuild that sees it also sees the rows
 
     def items_since(self, since: float, include_disabled: bool = False) -> list[matching.Item]:
         """Items published at or after `since`, from switched-on feeds (or all feeds), with each feed's

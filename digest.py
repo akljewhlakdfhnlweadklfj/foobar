@@ -25,6 +25,7 @@ import json
 import os
 import re
 import tempfile
+import zlib
 import threading
 import time
 import traceback
@@ -128,7 +129,7 @@ class Digests:
                     gz = path.read_bytes()
                     body = gzip.decompress(gz)
                     data = json.loads(body)
-                except (OSError, EOFError, ValueError):   # damaged (e.g. a crash mid-write): rebuild it instead
+                except (OSError, EOFError, ValueError, zlib.error):   # damaged (e.g. a crash mid-write): rebuild it instead
                     self.log(f"digest {path.name} is damaged; it will be rebuilt")
                     path.unlink(missing_ok=True)
                     continue

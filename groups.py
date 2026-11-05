@@ -173,6 +173,7 @@ class GroupStore:
                       "updated_at REAL NOT NULL)")
             have_seeded = c.execute("SELECT 1 FROM sqlite_master WHERE name = 'seeded'").fetchone()
             c.execute("CREATE TABLE IF NOT EXISTS seeded (vertical TEXT PRIMARY KEY)")
+            self.upgraded = not have_seeded and bool(c.execute("SELECT 1 FROM groups").fetchone())
             if not have_seeded:   # groups.db from before this table: verticals already in a group were seeded
                 verticals = {v for (cfg,) in c.execute("SELECT config FROM groups") for v in json.loads(cfg)["verticals"]}
                 c.executemany("INSERT OR IGNORE INTO seeded (vertical) VALUES (?)", [(v,) for v in verticals])
@@ -336,7 +337,8 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], catalog_fo
             extra = len(counted) < need or score < cfg["min_score"]
             # Headline, description and picture come from articles when the story has any (video titles
             # are written for clicks); a story made only of videos uses those.
-            articles = [x for x in counted if not x.get("y")] or counted
+            articles = ([x for x in counted if not x.get("y")] or [x for x in srcs if not x.get("y")]
+                        or counted)            # counted articles, then any article, then videos
             lead = matching.pick_headline(articles, title=lambda x: x["t"], weight=weight, published=lambda x: x["p"])
             best = sorted(srcs, key=lambda x: (bool(x.get("y")), -weight(x), -x["p"]))
             ordered = [lead] + sorted((x for x in srcs if x is not lead), key=lambda x: (-weight(x), x["p"]))

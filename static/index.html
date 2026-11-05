@@ -619,15 +619,14 @@ async function loadStories(force = false) {
   if (PREFS.sort === "latest") stories.sort((a, b) => b.latest - a.latest);
   else stories.sort((a, b) => b.score - a.score || b.coverage - a.coverage || b.latest - a.latest);
   // Last seen: hide stories first shown here more than an hour ago.
-  const now = Date.now() / 1000, visible = document.visibilityState === "visible";
+  const now = Date.now() / 1000;
   let hidden = 0;
   stories = stories.filter((s) => {
-    s.firstShown = firstShown(s, now, visible);
+    s.firstShown = firstShown(s, now, false);     // recorded when actually drawn (renderStoryList)
     s.seen = now - s.firstShown > SEEN_BUFFER;
     if (s.seen && !PREFS.show_seen) { hidden++; return false; }
     return true;
   });
-  saveSeen();
   const fresh = stories.filter((s) => !s.seen).length;
   let ai = "";
   if (view.ai.on) ai = !view.ai.available ? ` · AI headlines unavailable: ${view.ai.reason}`
@@ -659,6 +658,11 @@ function renderStoryList(allStories, force, hidden = 0) {
   }
   shownStories = stories;
   const shown = stories.slice(0, renderLimit);     // long lists render in steps ("Show more")
+  if (document.visibilityState === "visible") {    // "last seen": only stories actually on screen count as shown
+    const now = Date.now() / 1000;
+    for (const s of shown) firstShown(s, now, true);
+    saveSeen();
+  }
   $("stories").innerHTML = shown.map((s, idx) => {
     const re = phraseRe(s.watched.map((w) => w.phrase));
     const key = storyKey(s), isOpen = openStories.has(key);

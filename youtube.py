@@ -51,15 +51,18 @@ def feed_url_for(text: str) -> str | None:
         return FEED_URL.format(_FEED_RE.search(text).group(1))
     if text.startswith("@"):
         text = "https://www.youtube.com/" + text
-    parts = urlsplit(text if "//" in text else "https://" + text)
-    host = (parts.hostname or "").lower()
+    try:
+        parts = urlsplit(text if "//" in text else "https://" + text)
+        host = (parts.hostname or "").lower()
+    except ValueError:                       # e.g. "https://[bad"
+        return None
     if not (host == "youtube.com" or host.endswith(".youtube.com")):
         return None
     m = re.match(r"/channel/(UC[\w-]{22})", parts.path)
     if m:
         return FEED_URL.format(m.group(1))
     if parts.path.startswith(("/@", "/c/", "/user/")):
-        html = _page(f"https://www.youtube.com{parts.path.split('/videos')[0]}")
+        html = _page("https://www.youtube.com" + re.sub(r"/(videos|featured|streams|shorts)/?$", "", parts.path))
         m = re.search(r'"externalId":"(UC[\w-]{22})"', html) or re.search(r'channel_id=(UC[\w-]{22})', html)
         if m:
             return FEED_URL.format(m.group(1))
@@ -110,7 +113,7 @@ def channel_videos(channel_id: str) -> tuple[str, list[feeds.ParsedEntry]]:
                 vid = lv["contentId"]
                 if title:
                     found[vid] = feeds.ParsedEntry(f"yt:video:{vid}", title, f"https://www.youtube.com/watch?v={vid}",
-                                                   pub, "", f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg", views)
+                                                   pub, "", f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg", views, approx=True)
             for v in o.values():
                 walk(v)
         elif isinstance(o, list):

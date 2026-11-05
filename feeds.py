@@ -41,6 +41,7 @@ class ParsedEntry:
     description: str = ""  # plain-text summary, trimmed to DESCRIPTION_CHARS
     image: str = ""        # http(s) URL of a picture for the item, if the feed has one
     views: int | None = None  # view count (YouTube videos), when known
+    approx: bool = False      # published is approximate (YouTube page dates like "1 day ago")
 
 
 @dataclass
@@ -63,7 +64,11 @@ FETCH_DEADLINE = 45.0  # seconds for the whole download, however slowly the serv
 
 def check_url(url: str) -> None:
     """Raise FeedError unless url is http(s) and its host resolves only to public addresses."""
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        parts.hostname, parts.port                    # raise ValueError for malformed hosts/ports
+    except ValueError:
+        raise FeedError("That isn't a valid URL") from None
     if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
         raise FeedError("Feed URL must start with http:// or https://")
     if ALLOW_PRIVATE:

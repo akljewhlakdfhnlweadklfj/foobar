@@ -471,8 +471,10 @@ class GroupTests(unittest.TestCase):
         c.execute("INSERT INTO groups (config, updated_at) VALUES (?, 0)",
                   (json.dumps(self.groups.clean({"name": "Mine", "verticals": ["games"], "position": 0}, None, ["games"])),))
         c.commit(); c.close()
+        books = app.Store(self.tmp / "books.db")                         # existed before; its group was deleted
         gs = self.groups.GroupStore(db)
-        stores = {"games": self.store, "tech": app.Store(self.tmp / "tech.db")}
+        stores = {"games": self.store, "books": app.Store(self.tmp / "books.db"), "tech": app.Store(self.tmp / "tech.db")}
+        self.assertTrue(books.is_new and not stores["books"].is_new)
         self.assertEqual(app.seed_groups(gs, stores), 1)                       # only the new vertical
         self.assertEqual([(g["name"], g["verticals"]) for g in gs.list()], [("Mine", ["games"]), ("Consumer Tech", ["tech"])])
         self.assertEqual(app.seed_groups(gs, stores), 0)
@@ -722,6 +724,72 @@ Here is everything.</media:description>
         self.assertLessEqual(set(s["mv"]), {"t", "l", "o", "i", "p", "v"})
 
 
+class ReviewRegressionTests(unittest.TestCase):
+    """Bugs found in the second review round."""
+
+    def test_corrupt_digest_file_is_rebuilt_not_fatal(self):
+        import gzip as _gz, digest
+        d = Path(tempfile.mkdtemp())
+        good = _gz.compress(b'{"stories": []}')
+        (d / "games-48.json.gz").write_bytes(good[:12] + b"\x00garbage" * 4 + good[-8:])   # valid header, bad body
+        digest.Digests(d, lambda k, w: {}, ["games"])                    # doesn't raise
+        self.assertFalse((d / "games-48.json.gz").exists())
+
+    def test_refused_batch_charged_once_per_story(self):
+        import ai, types
+        def create(**kw):
+            return types.SimpleNamespace(stop_reason="refusal", content=[])
+        msgs = types.SimpleNamespace(create=create)
+        s = ai.Summarizer(None, client=types.SimpleNamespace(messages=msgs, beta=types.SimpleNamespace(messages=msgs)))
+        for i in range(20):
+            s.want([f"k{i}"], [f"Story {i}"], 2, float(i))
+        s.run_once()
+        self.assertEqual(s.status()["written_today"], 20)
+
+    def test_store_open_takes_no_write_lock_when_current(self):
+        import sqlite3 as _sql
+        db = Path(tempfile.mkdtemp()) / "x.db"
+        app.Store(db)
+        holder = _sql.connect(db, timeout=0.1)
+        holder.execute("BEGIN IMMEDIATE")                                  # another writer holds the lock
+        try:
+            with mock.patch.object(app.Store, "_conn", app.Store._conn):
+                app.Store(db)                                              # opening doesn't wait for it
+        finally:
+            holder.rollback(); holder.close()
+
+    def test_exact_time_corrects_an_approximate_one(self):
+        st = app.Store(Path(tempfile.mkdtemp()) / "a.db")
+        fid = st.add_feed("https://www.youtube.com/feeds/videos.xml?channel_id=UCaaaaaaaaaaaaaaaaaaaaaa")
+        now = time.time()
+        st.save_fetch(fid, feeds.ParsedFeed("", [feeds.ParsedEntry("yt:video:aaaaaaaaaaa", "Video", "l", now - 86400, approx=True)]), None)
+        v = st.items_version
+        st.save_fetch(fid, feeds.ParsedFeed("", [feeds.ParsedEntry("yt:video:aaaaaaaaaaa", "Video", "l", now - 3600)]), None)
+        self.assertAlmostEqual(st.items_since(0)[0].published, now - 3600, delta=1)
+        self.assertEqual(st.items_version, v + 1)
+        st.save_fetch(fid, feeds.ParsedFeed("", [feeds.ParsedEntry("yt:video:aaaaaaaaaaa", "Video", "l", now - 99999, approx=True)]), None)
+        self.assertAlmostEqual(st.items_since(0)[0].published, now - 3600, delta=1)   # an approximate one doesn't undo it
+
+    def test_handle_and_bad_urls(self):
+        import youtube
+        self.assertIsNone(youtube.feed_url_for("https://[bad"))
+        seen = []
+        with mock.patch.object(youtube, "_page", lambda url: seen.append(url) or '"externalId":"UCaaaaaaaaaaaaaaaaaaaaaa"'):
+            youtube.feed_url_for("https://www.youtube.com/c/videosbyjoe/videos")
+        self.assertEqual(seen, ["https://www.youtube.com/c/videosbyjoe"])
+
+    def test_lead_prefers_any_article_over_videos(self):
+        rows = [{"f": 1, "t": "Nintendo reveals Switch 3 hardware and price", "l": "a", "p": 1, "d": "", "i": ""},
+                {"f": 2, "t": "Switch 3 hardware price!", "l": "b", "p": 2, "d": "", "i": "", "y": 1},
+                {"f": 3, "t": "Switch 3 hardware price reaction", "l": "c", "p": 3, "d": "", "i": "", "y": 1}]
+        digest_ = {"generated_at": 0, "stories": [{"id": "s", "k": [], "s": [dict(r, p=time.time() - 60 * r["p"]) for r in rows]}]}
+        cat = [{"id": 1, "name": "A", "weight": 1, "enabled": True}, {"id": 2, "name": "C1", "weight": 3, "enabled": True},
+               {"id": 3, "name": "C2", "weight": 3, "enabled": True}]
+        g = groups.clean({"name": "G", "verticals": ["games"], "settings": {"min_feeds": 2, "min_weight": 2}}, None, ["games"])
+        st = groups.build_view(g, lambda v, h: digest_, lambda v: cat)["stories"][0]
+        self.assertEqual((st["cov"], st["t"]), (2, "Nintendo reveals Switch 3 hardware and price"))
+
+
 class HttpTestCase(unittest.TestCase):
     """Starts the real handler on a free port."""
 
@@ -888,6 +956,9 @@ class SettingsApiTests(HttpTestCase):
         got = self.call("GET", "/api/games/settings")[1]
         self.assertEqual((got["threshold"], got["grouped_threshold"]), (matching.DEFAULT_THRESHOLD, matching.DEFAULT_THRESHOLD))
         self.assertEqual(self.call("PATCH", "/api/games/settings", {"threshold": 0.2})[1], {"threshold": 0.2, "rebuilding": True})
+        self.assertEqual(self.call("PATCH", "/api/games/settings", {"threshold": 0.2})[1], {"threshold": 0.2, "rebuilding": False})
+        self.assertEqual(self.call("POST", "/api/games/feeds", {"url": ["x"]})[0], 400)
+        self.assertEqual(self.call("POST", "/api/games/feeds", {"url": "https://[bad"})[0], 400)
         for bad in ({"threshold": 2}, {"threshold": "0.2"}, {"min_feeds": 3}, {}):
             self.assertEqual(self.call("PATCH", "/api/games/settings", bad)[0], 400, bad)
         self.assertEqual(self.call("PATCH", "/api/games/settings", {"reset": True})[1]["threshold"], matching.DEFAULT_THRESHOLD)
