@@ -34,7 +34,6 @@ from typing import Callable
 
 import keyterms
 import matching
-import youtube
 from store import Store
 
 WINDOWS = (48, 168, 720)          # hours: 2 days, 7 days, 30 days. Browsers pick the smallest that covers theirs.
@@ -57,7 +56,7 @@ def _per_outlet(items: list[matching.Item]) -> list[matching.Item]:
 
 def _source(i: matching.Item) -> dict:
     s = {"f": i.feed_id, "t": i.title, "l": i.link, "p": round(i.published), "d": i.description[:DESCRIPTION_CHARS], "i": i.image}
-    if youtube.is_video(i.link):
+    if i.kind == "youtube":
         s["y"] = 1                         # a YouTube video
         if i.views is not None:
             s["v"] = i.views

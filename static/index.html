@@ -856,7 +856,7 @@ async function renderGroupOutlets() {
       <ul class="feeds">${list.map((o) => {
         const me = outletState(v, o);
         return `<li class="${me.on ? "" : "off"}${me.req ? " required" : ""}" data-search="${esc((o.name + " " + o.url).toLowerCase())}">
-          <div class="info"><div class="name">${esc(o.name)}${/youtube\.com\/feeds\//.test(o.url) ? ` <span class="ytag">YouTube</span>` : ""}</div><div class="sub">${me.custom ? "set for this group" : "catalog default"}${o.only ? " · keyword-filtered" : ""}</div></div>
+          <div class="info"><div class="name">${esc(o.name)}${o.kind === "youtube" ? ` <span class="ytag">YouTube</span>` : ""}</div><div class="sub">${me.custom ? "set for this group" : "catalog default"}${o.only ? " · keyword-filtered" : ""}</div></div>
           <div class="ctl"><div class="row">
             <label class="switch"><input type="checkbox" ${me.on ? "checked" : ""} data-gon="${o.id}" data-v="${v}" aria-label="Use ${esc(o.name)}">${me.on ? "On" : "Off"}</label>
             <label class="req" title="Only show stories this outlet reports"><input type="checkbox" ${me.req ? "checked" : ""} data-greq="${o.id}" data-v="${v}" aria-label="Require ${esc(o.name)}"> Required</label></div>
@@ -964,13 +964,13 @@ function showThreshold() {
   if (document.activeElement !== $("a_threshold")) $("a_threshold").value = th;
 }
 function catalogRow(o) {
-  const viaFeedly = o.via === "feedly", failed = o.last_error && !viaFeedly;
-  const state = failed ? "err" : (viaFeedly ? "warn" : (o.last_fetched ? "" : "pending"));
-  const via = viaFeedly ? ` · <span class="warn" title="${esc(o.last_error || "")}">via Feedly</span>` : "";
+  const fallback = o.via && o.via !== "direct" && o.via !== "cache", failed = !!o.last_error;
+  const state = failed ? "err" : (fallback ? "warn" : (o.last_fetched ? "" : "pending"));
+  const via = fallback ? ` · <span class="warn" title="${esc(o.fetch_note || "")}">via ${o.via === "page" ? "YouTube page" : "Feedly"}</span>` : "";
   const sub = failed ? `<div class="sub err">${esc(o.last_error)}</div>` : `<div class="sub">${o.item_count ?? 0} items · fetched ${ago(o.last_fetched)}${via}</div>`;
   return `<li class="${o.enabled ? "" : "off"}" data-search="${esc((o.name + " " + o.url).toLowerCase())}">
     <span class="dot ${state}"></span>
-    <div class="info"><div class="name">${esc(o.name)}${/youtube\.com\/feeds\//.test(o.url) ? ` <span class="ytag">YouTube</span>` : ""}</div><div class="sub">${esc(o.url)}</div>${sub}
+    <div class="info"><div class="name">${esc(o.name)}${o.kind === "youtube" ? ` <span class="ytag">YouTube</span>` : ""}</div><div class="sub">${esc(o.url)}</div>${sub}
       <div class="catrow"><label for="kw${o.id}">Keyword filter</label>
         <input type="text" id="kw${o.id}" value="${esc(o.only || "")}" data-only="${o.id}" maxlength="500" placeholder="Comma-separated words; blank = all items"></div></div>
     <div class="ctl">

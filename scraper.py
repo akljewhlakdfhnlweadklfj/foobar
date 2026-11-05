@@ -25,50 +25,16 @@ from pathlib import Path
 from typing import Callable
 
 import feedly
-import youtube
 import feeds
+import sources
 from store import RETENTION_DAYS, Store
 
 KINDS = ("refresh", "backfill")
 UNFINISHED = ("running", "stopping", "stopped", "interrupted")
 
 
-def _from_feedly(entries: list[dict], title: str = "", feed_url: str = "") -> feeds.ParsedFeed:
-    now = time.time()
-    parsed = []
-    for e in entries:
-        guid, t, link, pub, desc, image = feedly.entry_fields(e)
-        t = feeds.clean_title(feeds.clean_text(t), feed_url)
-        if not image:  # fall back to the first <img> in the HTML summary
-            m = feeds._IMG_SRC.search(desc or "")
-            image = m.group(1) if m else ""
-        if not image.lower().startswith(("http://", "https://")):
-            image = ""
-        if t:
-            parsed.append(feeds.ParsedEntry(guid, t, link, min(pub or now, now), feeds.clean_description(desc), image))
-    return feeds.ParsedFeed(title=title, entries=parsed)
-
-
-def fetch_with_fallback(url: str) -> tuple[feeds.ParsedFeed, str, str | None]:
-    """(parsed feed, via, note). Tries the feed directly, then Feedly's copy of it (YouTube channels:
-    see youtube.fetch)."""
-    if youtube.is_youtube(url):
-        return youtube.fetch(url, _from_feedly)
-    try:
-        return feeds.fetch_and_parse(url), "direct", None
-    except feeds.FeedError as direct_err:
-        if str(direct_err).startswith("Refusing to fetch"):
-            raise  # blocked by the private-address guard: don't route around it via Feedly
-        try:
-            title, entries = feedly.recent(url)  # doesn't wait out a rate-limit cooldown
-        except feedly.RateLimited:
-            raise feeds.FeedError(f"{direct_err}; Feedly fallback is rate-limited right now, "
-                                  "will retry at the next refresh (existing headlines are kept)") from None
-        except Exception:  # noqa: BLE001
-            raise direct_err
-        if not entries:
-            raise direct_err
-        return _from_feedly(entries, title, url), "feedly", f"Direct fetch failed ({direct_err}); using Feedly's copy"
+# Fetching a single source (with fallbacks) lives in sources.py; the name is kept for callers and tests.
+fetch_with_fallback = sources.fetch
 
 
 class Scraper:
@@ -289,8 +255,8 @@ class Scraper:
         self._progress(run, label, started=True)
         ok = True
         try:
-            parsed, via, note = fetch_with_fallback(feed["url"])
-            store.save_fetch(feed["id"], parsed, note, via)
+            parsed, via, note = fetch_with_fallback(feed["url"], views_checked_at=feed.get("views_checked_at") or 0)
+            store.save_fetch(feed["id"], parsed, None, via, note)
         except feeds.FeedError as e:
             ok = False
             store.save_fetch(feed["id"], None, str(e))
@@ -319,7 +285,7 @@ class Scraper:
         def save():
             nonlocal got, buf
             if buf:
-                store.save_fetch(feed["id"], _from_feedly(buf, feed_url=feed["url"]), feed.get("last_error"),
+                store.save_fetch(feed["id"], feedly.to_parsed(buf, feed_url=feed["url"]), feed.get("last_error"),
                                  feed.get("via") or "feedly")
                 got += len(buf)
                 buf = []

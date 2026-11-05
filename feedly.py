@@ -21,6 +21,8 @@ import urllib.parse
 import urllib.request
 from typing import Iterator
 
+import feeds
+
 API = "https://cloud.feedly.com/v3"
 USER_AGENT = "Mozilla/5.0 (compatible; NewsAggregator/1.0)"
 
@@ -181,6 +183,24 @@ def entry_fields(e: dict) -> tuple[str, str, str, float, str, str]:
     desc = (e.get("summary") or e.get("content") or {}).get("content", "")
     return (e.get("originId") or e["id"], (e.get("title") or "").strip(), link, e.get("published", 0) / 1000,
             desc, entry_image(e))
+
+
+
+def to_parsed(entries: list[dict], title: str = "", feed_url: str = "") -> feeds.ParsedFeed:
+    """Feedly entries as a ParsedFeed (titles cleaned, descriptions as plain text, images)."""
+    now = time.time()
+    parsed = []
+    for e in entries:
+        guid, t, link, pub, desc, image = entry_fields(e)
+        t = feeds.clean_title(feeds.clean_text(t), feed_url)
+        if not image:  # fall back to the first <img> in the HTML summary
+            m = feeds._IMG_SRC.search(desc or "")
+            image = m.group(1) if m else ""
+        if not image.lower().startswith(("http://", "https://")):
+            image = ""
+        if t:
+            parsed.append(feeds.ParsedEntry(guid, t, link, min(pub or now, now), feeds.clean_description(desc), image))
+    return feeds.ParsedFeed(title=title, entries=parsed)
 
 
 if __name__ == "__main__":

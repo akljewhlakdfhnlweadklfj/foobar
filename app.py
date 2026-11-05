@@ -34,8 +34,9 @@ import groups as groups_mod
 import feeds
 import matching
 import seedcache
+import sources
 import youtube
-from scraper import Scraper, fetch_with_fallback
+from scraper import Scraper
 from store import DEFAULT_BONUS, MAX_BONUS, MAX_WEIGHT, RETENTION_DAYS, Store, read_feed_list
 
 ROOT = Path(__file__).parent
@@ -150,7 +151,7 @@ def make_digests(stores: dict[str, Store], out_dir: Path | None = None, log=None
         return digests_mod.build_from_file(*args)
 
     def stamp(key: str):
-        return stores[key].version, threshold(stores[key])
+        return stores[key].items_version, threshold(stores[key])
     return digests_mod.Digests(out_dir, builder, list(stores), log=log, stamp=stamp)
 
 
@@ -416,7 +417,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 if not url.lower().startswith(("http://", "https://")):
                     raise HTTPError(400, "URL must start with http:// or https:// (or be a YouTube @handle)")
                 try:
-                    parsed, via, note = fetch_with_fallback(url)  # validate before saving
+                    parsed, via, note = sources.fetch(url)  # validate before saving
                 except feeds.FeedError as e:
                     raise HTTPError(400, str(e))
                 try:
@@ -424,7 +425,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 except sqlite3.IntegrityError:
                     raise HTTPError(409, "That feed is already added")
                 group_store.forget_outlet(self._vertical_key(), feed_id)   # an id can be reused after a delete
-                store.save_fetch(feed_id, parsed, note, via)
+                store.save_fetch(feed_id, parsed, None, via, note)
                 digests.request_rebuild([self._vertical_key()])             # new headlines to group
                 return self._json({"feed": store.get_feed(feed_id)}, 201)
             raise HTTPError(404, "Not found")

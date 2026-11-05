@@ -6,38 +6,32 @@ What a channel's feed (https://www.youtube.com/feeds/videos.xml?channel_id=UC...
 media:title, media:description (the full description), media:thumbnail (480x360), media:content (the
 player), and media:community with media:starRating (likes count) and media:statistics (views).
 
-YouTube refuses that feed from some servers (HTTP 404 from cloud machines). Then:
-1. Feedly's copy of the feed: titles, descriptions, thumbnails, exact times, but no view counts;
-2. the channel's videos page: its ~30 latest videos with view counts ("8.1M") and approximate ages
-   ("1d ago"). Used for view counts (at most every VIEWS_EVERY seconds per channel) and, when Feedly
-   doesn't have the channel either, for the videos themselves (without descriptions).
+YouTube refuses that feed from some servers (HTTP 404 from cloud machines); sources.py then falls back
+to Feedly's copy plus the channel's videos page (its ~30 latest videos with view counts like "8.1M" and
+ages like "1d ago"), or the page alone.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import threading
 import time
 from urllib.parse import urlsplit
 
 import feeds
-import feedly
 
 FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={}"
 _CHANNEL_ID = re.compile(r"(UC[\w-]{22})")
 _FEED_RE = re.compile(r"youtube\.com/feeds/videos\.xml\?channel_id=(UC[\w-]{22})")
-VIEWS_EVERY = 3 * 3600
-_views_checked: dict[str, float] = {}
-_views_lock = threading.Lock()
+VIEWS_EVERY = 3 * 3600   # seconds between reading a channel page for view counts (when its feed is refused)
 
 
 def is_youtube(url: str) -> bool:
     return bool(_FEED_RE.search(url or ""))
 
 
-def is_video(link: str) -> bool:
-    return bool(re.search(r"(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)[\w-]{11}", link or ""))
+def channel_id(feed_url: str) -> str:
+    return _FEED_RE.search(feed_url).group(1)
 
 
 def video_id(link: str) -> str:
@@ -124,45 +118,3 @@ def channel_videos(channel_id: str) -> tuple[str, list[feeds.ParsedEntry]]:
                 walk(v)
     walk(data)
     return name, list(found.values())
-
-
-def fetch(url: str, from_feedly) -> tuple[feeds.ParsedFeed, str, str | None]:
-    """(parsed feed, via, note) for a channel feed: the feed itself, or Feedly plus the channel page.
-    from_feedly converts Feedly entries (scraper._from_feedly)."""
-    cid = _FEED_RE.search(url).group(1)
-    try:
-        parsed = feeds.fetch_and_parse(url)
-        with _views_lock:
-            _views_checked[cid] = time.time()      # the feed has view counts itself
-        return parsed, "direct", None
-    except feeds.FeedError as direct_err:
-        if str(direct_err).startswith("Refusing to fetch"):
-            raise
-        err = direct_err
-    parsed, via, note = None, "feedly", f"YouTube's feed failed ({err}); using Feedly's copy"
-    try:
-        title, entries = feedly.recent(url)
-        if entries:
-            parsed = from_feedly(entries, title, url)
-    except Exception:  # noqa: BLE001 - try the channel page instead
-        pass
-    with _views_lock:
-        due = parsed is None or time.time() - _views_checked.get(cid, 0) >= VIEWS_EVERY
-        if due:
-            _views_checked[cid] = time.time()
-    if due:
-        try:
-            name, videos = channel_videos(cid)
-        except Exception as e:  # noqa: BLE001
-            if parsed is None:
-                raise feeds.FeedError(f"{err}; the channel page failed too ({e})") from None
-            return parsed, via, note
-        if parsed is None:
-            return feeds.ParsedFeed(name, videos), "youtube page", f"YouTube's feed failed ({err}); using the channel page"
-        views = {video_id(v.link): v.views for v in videos}
-        known = {e.guid for e in parsed.entries}
-        for e in parsed.entries:
-            e.views = views.get(video_id(e.link), e.views)
-        parsed.entries += [v for v in videos if v.guid not in known]   # older ones: updates their view counts
-        note += " and the channel page for view counts"
-    return parsed, via, note

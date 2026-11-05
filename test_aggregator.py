@@ -12,6 +12,7 @@ import app
 import feeds
 import groups
 import keyterms
+import sources
 import matching
 from matching import Item
 
@@ -282,7 +283,7 @@ class FeedlyThrottlingTests(unittest.TestCase):
         with mock.patch.object(feeds, "fetch", side_effect=feeds.FeedError("blocked")), \
              mock.patch("feedly.recent", side_effect=self.feedly.RateLimited(30)):
             with self.assertRaises(feeds.FeedError) as cm:
-                app.fetch_with_fallback("https://a.example/rss")
+                sources.fetch("https://a.example/rss")
         self.assertIn("rate-limited", str(cm.exception))
 
     def test_backfill_keeps_partial_results_and_resumes(self):
@@ -656,28 +657,43 @@ Here is everything.</media:description>
         self.assertEqual([youtube.parse_count(t) for t in ("8.1M", "12K views", "935", "1.2B", "")], [8100000, 12000, 935, 1200000000, None])
 
     def test_fallback_chain_feedly_plus_page_views(self):
-        import youtube, scraper
+        import youtube
         cid = "UCBJycsmduvYEL83R_U4JriQ"
+        url = youtube.FEED_URL.format(cid)
         feedly_entry = {"originId": "yt:video:g6Die8gVFn0", "title": "OLED iPad Mini", "published": time.time() * 1000,
                         "alternate": [{"href": "https://www.youtube.com/watch?v=g6Die8gVFn0"}], "content": {"content": "A refresh.<br>More"}}
-        page_vids = [feeds.ParsedEntry("yt:video:g6Die8gVFn0", "OLED iPad Mini", "https://www.youtube.com/watch?v=g6Die8gVFn0", 0, "", "", 8100000),
-                     feeds.ParsedEntry("yt:video:zzzzzzzzzzz", "Older video", "https://www.youtube.com/watch?v=zzzzzzzzzzz", 0, "", "", 500)]
-        youtube._views_checked.clear()
+        page_vids = [feeds.ParsedEntry("yt:video:g6Die8gVFn0", "OLED iPad Mini", "https://www.youtube.com/watch?v=g6Die8gVFn0", time.time(), "", "", 8100000),
+                     feeds.ParsedEntry("yt:video:zzzzzzzzzzz", "Older video", "https://www.youtube.com/watch?v=zzzzzzzzzzz", time.time(), "", "", 500)]
         with mock.patch.object(feeds, "fetch_and_parse", side_effect=feeds.FeedError("Fetch failed: HTTP 404 Not Found")), \
              mock.patch("feedly.recent", lambda url, **kw: ("MKBHD", [feedly_entry])), \
              mock.patch.object(youtube, "channel_videos", lambda c: ("MKBHD", page_vids)):
-            parsed, via, note = scraper.fetch_with_fallback(youtube.FEED_URL.format(cid))
+            parsed, via, note = sources.fetch(url)                       # views never read: read the page
             self.assertEqual(via, "feedly")
             first = next(e for e in parsed.entries if e.guid.endswith("g6Die8gVFn0"))
             self.assertEqual((first.views, first.description), (8100000, "A refresh. More"))
-            self.assertEqual(len(parsed.entries), 2)                       # the older video updates its count too
-            parsed, via, _ = scraper.fetch_with_fallback(youtube.FEED_URL.format(cid))
-            self.assertEqual((len(parsed.entries), parsed.entries[0].views), (1, None))   # page checked at most every 3h
+            self.assertEqual(len(parsed.entries), 2)                    # the older video updates its count too
+            self.assertIsNotNone(parsed.views_checked_at)
+            parsed, via, _ = sources.fetch(url, views_checked_at=time.time() - 60)    # read a minute ago: skip the page
+            self.assertEqual((len(parsed.entries), parsed.entries[0].views, parsed.views_checked_at), (1, None, None))
         with mock.patch.object(feeds, "fetch_and_parse", side_effect=feeds.FeedError("404")), \
              mock.patch("feedly.recent", lambda url, **kw: ("", [])), \
              mock.patch.object(youtube, "channel_videos", lambda c: ("MKBHD", page_vids)):
-            parsed, via, _ = scraper.fetch_with_fallback(youtube.FEED_URL.format(cid))
-        self.assertEqual((via, len(parsed.entries)), ("youtube page", 2))
+            parsed, via, _ = sources.fetch(url)
+        self.assertEqual((via, len(parsed.entries)), ("page", 2))
+        store = app.Store(Path(tempfile.mkdtemp()) / "y.db")             # the kind is stored, the time is kept
+        fid = store.add_feed(url)
+        store.save_fetch(fid, parsed, None, via, "note")
+        f = store.get_feed(fid)
+        self.assertEqual((f["kind"], f["via"], f["fetch_note"], f["last_error"]), ("youtube", "page", "note", None))
+        self.assertIsNotNone(f["views_checked_at"])
+        self.assertEqual({i.kind for i in store.items_since(0)}, {"youtube"})
+
+    def test_youtube_link_in_an_rss_feed_is_not_a_video(self):
+        import digest
+        it = matching.Item(id=1, feed_id=1, title="Trailer", link="https://www.youtube.com/watch?v=aaaaaaaaaaa")
+        self.assertNotIn("y", digest._source(it))
+        it.kind = "youtube"
+        self.assertEqual(digest._source(it)["y"], 1)
 
     def test_story_prefers_article_headline_and_shows_top_video(self):
         tmp = Path(tempfile.mkdtemp())
@@ -771,7 +787,7 @@ class ScrapeControlTests(HttpTestCase):
         for n in range(20):
             self.store.add_feed(f"https://{n}.example/rss", f"F{n}")
         self.fetched = []
-        def slow_fetch(url):
+        def slow_fetch(url, **kw):
             self.fetched.append(url); time.sleep(0.4)
             return feeds.ParsedFeed("T", [feeds.ParsedEntry("g", "Headline " + url, url, time.time())]), "direct", None
         p = mock.patch("scraper.fetch_with_fallback", slow_fetch)
@@ -1151,7 +1167,7 @@ class AppTests(unittest.TestCase):
                  "alternate": [{"href": "https://a.example/1"}]}
         with mock.patch.object(feeds, "fetch", side_effect=feeds.FeedError("blocked")), \
              mock.patch("feedly.recent", return_value=("Feed A", [entry])):
-            parsed, via, note = app.fetch_with_fallback("https://a.example/rss")
+            parsed, via, note = sources.fetch("https://a.example/rss")
         self.assertEqual((via, parsed.title, parsed.entries[0].title), ("feedly", "Feed A", "Hello & welcome"))
         self.assertIn("blocked", note)
 

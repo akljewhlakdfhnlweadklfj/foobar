@@ -128,6 +128,7 @@ class Item:
     description: str = ""
     image: str = ""
     views: int | None = None  # YouTube videos: view count, when known
+    kind: str = "rss"         # the source's kind (sources.KINDS): "youtube" items are videos
     tokens: frozenset[str] = field(default_factory=frozenset)
 
 

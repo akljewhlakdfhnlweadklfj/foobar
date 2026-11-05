@@ -47,6 +47,7 @@ class ParsedEntry:
 class ParsedFeed:
     title: str
     entries: list[ParsedEntry]
+    views_checked_at: float | None = None   # YouTube: when view counts were read (see sources.py)
 
 
 class FeedError(Exception):

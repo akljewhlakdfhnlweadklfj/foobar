@@ -2,7 +2,9 @@
 
 Schema history (PRAGMA user_version): v1 feeds+items; v2 feeds.via; v3 feeds.name; v4 feeds.weight;
 v5 feeds.enabled; v6 feeds.backfilled_since + items.description; v7 feeds.last_run + feeds.required +
-phrases table; v8 settings table; v9 feeds.only (keyword filter); v10 items.image.
+phrases table; v8 settings table; v9 feeds.only (keyword filter); v10 items.image; v11 subreddit feeds
+removed; v12 items.views; v13 feeds.kind (rss/youtube), feeds.fetch_note (fallback note, not an error),
+feeds.views_checked_at (YouTube view counts read from the channel page).
 Older files are upgraded in place when opened.
 """
 
@@ -20,9 +22,10 @@ from typing import Iterator
 
 import feeds
 import matching
+import sources
 
 RETENTION_DAYS = 30
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 MAX_WEIGHT = 10.0
 MAX_BONUS = 100.0
 DEFAULT_BONUS = 5.0
@@ -36,7 +39,7 @@ CREATE TABLE IF NOT EXISTS feeds (
     last_fetched REAL,
     last_error   TEXT,
     item_count   INTEGER NOT NULL DEFAULT 0,
-    via          TEXT,              -- 'direct' or 'feedly' (how the last successful fetch got its items)
+    via          TEXT,              -- where the last successful fetch got its items (sources.VIA)
     name         TEXT,              -- display name from the seed file; falls back to the feed's own title
     weight       REAL,              -- outlet prestige 0..10, seeds use 1..5; NULL = default
     enabled      INTEGER NOT NULL DEFAULT 1,  -- 0 = off by default in filter groups (still fetched)
@@ -75,7 +78,8 @@ CREATE TABLE IF NOT EXISTS phrases (
 _ADDED_COLUMNS = {
     "feeds": [("via", "TEXT"), ("name", "TEXT"), ("weight", "REAL"), ("enabled", "INTEGER NOT NULL DEFAULT 1"),
               ("backfilled_since", "REAL"), ("last_run", "TEXT"), ("required", "INTEGER NOT NULL DEFAULT 0"),
-              ("only", "TEXT")],
+              ("only", "TEXT"), ("kind", "TEXT NOT NULL DEFAULT 'rss'"), ("fetch_note", "TEXT"),
+              ("views_checked_at", "REAL")],
     "items": [("description", "TEXT NOT NULL DEFAULT ''"), ("image", "TEXT NOT NULL DEFAULT ''"), ("views", "INTEGER")],
 }
 
@@ -119,8 +123,10 @@ class Store:
         self.path = str(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self.version = 0  # bumped on every write; lets callers cache derived results
+        self.version = 0  # bumped on every write (including run bookkeeping)
         self.catalog_version = 0  # bumped when the outlet list, names, weights or defaults change
+        self.items_version = 0  # bumped when the headlines grouped into stories change (new/changed items,
+                                # removed feeds, keyword filters): what decides whether to regroup
         with self._conn() as c:
             prior = c.execute("PRAGMA user_version").fetchone()[0]
             self.is_new = prior == 0 and not c.execute(
@@ -137,6 +143,9 @@ class Store:
             if 0 < prior < 11:  # v11 dropped the subreddit feeds (throttled, mostly discussion)
                 c.execute("DELETE FROM items WHERE feed_id IN (SELECT id FROM feeds WHERE url LIKE '%reddit.com/%')")
                 c.execute("DELETE FROM feeds WHERE url LIKE '%reddit.com/%'")
+            if 0 < prior < 13:  # v13: the kind of source is stored, not inferred from the URL
+                c.execute("UPDATE feeds SET kind = 'youtube' WHERE url LIKE '%youtube.com/feeds/videos.xml%'")
+                c.execute("UPDATE feeds SET fetch_note = last_error, last_error = NULL WHERE via != 'direct' AND last_error IS NOT NULL")
             c.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
@@ -178,8 +187,8 @@ class Store:
     def add_feed(self, url: str, name: str | None = None, weight: float | None = None,
                  only: str | None = None) -> int:
         with self._catalog_write() as c:
-            return c.execute("INSERT INTO feeds (url, added_at, name, weight, only) VALUES (?, ?, ?, ?, ?)",
-                             (url, time.time(), name, weight, only)).lastrowid
+            return c.execute("INSERT INTO feeds (url, added_at, name, weight, only, kind) VALUES (?, ?, ?, ?, ?, ?)",
+                             (url, time.time(), name, weight, only, sources.kind_of(url))).lastrowid
 
     def add_feeds(self, feeds_: dict[str, SeedFeed]) -> int:
         added = 0
@@ -215,6 +224,8 @@ class Store:
             sets.append("enabled = ?"); args.append(int(enabled))
         if not sets:
             return self.get_feed(feed_id) is not None
+        if only is not None:
+            self.items_version += 1        # a keyword filter changes which headlines are grouped
         with self._catalog_write() as c:
             return c.execute(f"UPDATE feeds SET {', '.join(sets)} WHERE id = ?", (*args, feed_id)).rowcount > 0
 
@@ -223,6 +234,7 @@ class Store:
             return c.execute("UPDATE feeds SET enabled = ?", (int(enabled),)).rowcount
 
     def delete_feed(self, feed_id: int) -> bool:
+        self.items_version += 1
         with self._catalog_write() as c:
             return c.execute("DELETE FROM feeds WHERE id = ?", (feed_id,)).rowcount > 0
 
@@ -237,11 +249,17 @@ class Store:
 
     # --- items ---------------------------------------------------------------------------------
 
-    def save_fetch(self, feed_id: int, parsed: feeds.ParsedFeed | None, error: str | None, via: str = "direct") -> None:
+    def save_fetch(self, feed_id: int, parsed: feeds.ParsedFeed | None, error: str | None, via: str = "direct",
+                   note: str | None = None) -> None:
+        """Store a fetch: its items (parsed), or the error when it failed (parsed=None; earlier items kept).
+        via: where the items came from (sources.VIA); note: why a fallback was used."""
         now = time.time()
         with self._write() as c:
+            before = c.total_changes
             c.execute("DELETE FROM items WHERE published < ?", (now - RETENTION_DAYS * 86400,))
             if parsed is None:
+                if c.total_changes != before:
+                    self.items_version += 1
                 c.execute("UPDATE feeds SET last_fetched = ?, last_error = ? WHERE id = ?", (now, error, feed_id))
                 return
             c.executemany(
@@ -251,16 +269,23 @@ class Store:
                        description = CASE WHEN excluded.description != '' THEN excluded.description
                                           ELSE items.description END,
                        image = CASE WHEN excluded.image != '' THEN excluded.image ELSE items.image END,
-                       views = COALESCE(excluded.views, items.views)""",
+                       views = COALESCE(excluded.views, items.views)
+                   WHERE items.title IS NOT excluded.title OR items.link IS NOT excluded.link
+                      OR (excluded.description != '' AND items.description IS NOT excluded.description)
+                      OR (excluded.image != '' AND items.image IS NOT excluded.image)
+                      OR (excluded.views IS NOT NULL AND items.views IS NOT excluded.views)""",
                 [(feed_id, e.guid, e.title, e.link, min(e.published, now), now, e.description, e.image, e.views)
                  for e in parsed.entries if e.title and e.published >= now - RETENTION_DAYS * 86400],
             )
+            if c.total_changes != before:          # only real changes (unchanged rows aren't updated)
+                self.items_version += 1
             c.execute(
-                """UPDATE feeds SET last_fetched = ?, last_error = ?, via = ?,
+                """UPDATE feeds SET last_fetched = ?, last_error = ?, via = ?, fetch_note = ?,
+                   views_checked_at = COALESCE(?, views_checked_at),
                    title = CASE WHEN ? != '' THEN ? ELSE title END,
                    item_count = (SELECT COUNT(*) FROM items WHERE feed_id = ?)
                    WHERE id = ?""",
-                (now, error, via, parsed.title, parsed.title, feed_id, feed_id),
+                (now, error, via, note, parsed.views_checked_at, parsed.title, parsed.title, feed_id, feed_id),
             )
 
     def items_since(self, since: float, include_disabled: bool = False) -> list[matching.Item]:
@@ -271,7 +296,7 @@ class Store:
             filters = {r["id"]: keyword_regex(r["only"]) for r in
                        c.execute("SELECT id, only FROM feeds WHERE only IS NOT NULL")}
             rows = c.execute(
-                """SELECT i.id, i.feed_id, i.title, i.link, i.published, i.description, i.image, i.views,
+                """SELECT i.id, i.feed_id, i.title, i.link, i.published, i.description, i.image, i.views, f.kind,
                           COALESCE(f.name, NULLIF(f.title, ''), f.url) AS feed_title,
                           COALESCE(f.weight, ?) AS weight
                    FROM items i JOIN feeds f ON f.id = i.feed_id
