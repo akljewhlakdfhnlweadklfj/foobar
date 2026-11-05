@@ -1,8 +1,8 @@
 # Consensus News
 
 An RSS/Atom aggregator that only shows stories reported by **at least N** of your feeds, ranked by the
-prestige of the outlets covering them, with tabs for **Games**, **Movies & TV**, **Books** and
-**General News**. You can watch for key phrases, which are highlighted and add bonus points.
+prestige of the outlets covering them, for six verticals: **Games**, **Movies & TV**, **Books**,
+**General News**, **Anime** and **Manga**. You can watch for key phrases, which are highlighted and add bonus points.
 
 No dependencies: Python 3.10+ standard library only.
 
@@ -78,11 +78,14 @@ The header always shows scraping status, with a quick Refresh / Stop.
 | Movies & TV | `feeds/movies.txt` | `data/movies.db` |
 | Books | `feeds/books.txt` | `data/books.db` |
 | General News | `feeds/news.txt` | `data/news.db` |
+| Anime | `feeds/anime.txt` | `data/anime.db` |
+| Manga | `feeds/manga.txt` | `data/manga.db` |
 
 - **Separate databases**: each tab is one self-contained SQLite file (feeds, headlines, watched
   phrases, story settings). To migrate, copy the `.db` file and point `--data` at its folder. Older databases are
   upgraded in place (schema version in `PRAGMA user_version`; history in `store.py`).
-- **Seed lists** are read once, when a tab's database is created. Format: `URL  # Display name | w=N | notes`.
+- **Seed lists** are read once, when a tab's database is created. Format:
+  `URL  # Display name | w=N | only=keyword, keyword | notes` (`only=` is optional).
   After that:
   - **Display names** are re-applied on every start.
   - **New URLs** are not added automatically. Add them with
@@ -92,6 +95,12 @@ The header always shows scraping status, with a quick Refresh / Stop.
   - **Weights** only fill feeds that have none, so change an existing feed's weight in the UI.
 - **One feed per publisher** in each vertical. Two feeds from the same newsroom (e.g. NYT Movies and
   NYT Television) often carry identical headlines and would count one story twice toward N.
+- **Keyword filters** (`only=`, or "Keyword filter" under an outlet in Settings): the outlet only
+  contributes items whose headline or description mentions one of the keywords (matched at word
+  starts, so "manga" also matches "mangaka"). Applied when stories are built, so changing it is
+  instant. Manga uses this because no anime/manga outlet has a manga-only feed: the shared feeds
+  (Anime News Network, MyAnimeList, ComicBook.com, Anime Mojo) and mixed ones (ICv2, The Outerhaven,
+  Publishers Weekly Comics) only count their manga items.
 - **Games** sources are the outlets [Overworld](https://www.overworld.vg/) aggregates, extracted from
   its full story archive. The other verticals mix trade publications with section feeds of general
   publications (NYT, WSJ, Guardian, etc.).
@@ -152,6 +161,26 @@ Movies & TV). The weights are editorial judgment calls assigned by Claude, not m
 | 4 | ABC News (Top Stories), Al Jazeera English, Axios, CBC News (World), CBS News (Latest), Deutsche Welle (English), Los Angeles Times (World & Nation), NBC News (Top Stories), NPR (News), PBS NewsHour (Latest), Politico (Top Stories), The Guardian (World) |
 | 3 | Christian Science Monitor (World), Euronews, Fox News (Politics), France 24 (English), RFI (English), Semafor, Sky News (World), South China Morning Post (News), The Hill (Just In), The Independent (World), The Japan Times, TIME |
 | 2 | UPI (Top News) |
+
+**Anime** (14 feeds)
+
+| Weight | Outlets |
+|---|---|
+| 5 | Anime News Network |
+| 4 | Crunchyroll News, MyAnimeList News |
+| 3 | Animation Magazine, Anime Corner, Anime Trending, Cartoon Brew |
+| 2 | Animehunch, CBR (Anime News), ComicBook.com (Anime), Screen Rant (Anime News) |
+| 1 | Anime Mojo, Game Rant (Anime), OtakuKart |
+
+**Manga** (9 feeds)
+
+| Weight | Outlets |
+|---|---|
+| 5 | Anime News Network (keyword-filtered) |
+| 4 | ICv2 (keyword-filtered), Publishers Weekly (Comics) (keyword-filtered) |
+| 3 | MyAnimeList News (keyword-filtered), The Beat (Manga) |
+| 2 | ComicBook.com (Anime) (keyword-filtered), Seven Seas Entertainment |
+| 1 | Anime Mojo (keyword-filtered), The Outerhaven (keyword-filtered) |
 
 ## Scraping: API, scheduling and resume
 
@@ -254,7 +283,7 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 | GET | `/api/verticals` | tab list and defaults |
 | GET | `/api/<v>/feeds` | feeds, their status, and scrape status |
 | POST | `/api/<v>/feeds` `{"url": ...}` | add a feed (validated first) |
-| PATCH | `/api/<v>/feeds/{id}` `{"weight": 4, "enabled": false, "required": true}` | change one feed |
+| PATCH | `/api/<v>/feeds/{id}` `{"weight": 4, "enabled": false, "required": true, "only": "manga, manhwa"}` | change one feed (`"only": ""` clears the filter) |
 | PATCH | `/api/<v>/feeds` `{"enabled": true}` / `{"required": false}` | switch every feed on or off / clear required |
 | DELETE | `/api/<v>/feeds/{id}` | remove a feed and its items |
 | GET | `/api/<v>/phrases` | watched phrases |

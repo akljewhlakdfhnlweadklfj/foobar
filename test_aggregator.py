@@ -184,6 +184,21 @@ class OutletToggleTests(unittest.TestCase):
         self.assertEqual(self.store.clear_required(), 1)
         self.assertEqual(self.store.required_feed_ids(), set())
 
+    def test_keyword_filter_limits_a_feeds_items(self):
+        now = time.time()
+        self.store.save_fetch(1, feeds.ParsedFeed("x", [
+            feeds.ParsedEntry("m1", "Frieren anime gets season 3", "", now),
+            feeds.ParsedEntry("m2", "Dandadan creator talks", "", now, "The mangaka discussed the next arc.")]), None)
+        before = {i.title for i in self.store.items_since(0) if i.feed_id == 1}
+        self.store.update_feed(1, only="manga, light novel")
+        after = {i.title for i in self.store.items_since(0) if i.feed_id == 1}
+        self.assertIn("Frieren anime gets season 3", before)
+        self.assertEqual(after, {"Dandadan creator talks"})          # matched "mangaka" in the description
+        self.store.update_feed(1, only="")                            # blank clears the filter
+        self.assertEqual({i.title for i in self.store.items_since(0) if i.feed_id == 1}, before)
+        seeds = app.read_feed_list(app.FEEDS_DIR / "manga.txt")
+        self.assertTrue(seeds["http://www.animenewsnetwork.com/newsfeed/rss.xml"].only.startswith("manga"))
+
     def test_min_weight_controls_what_counts(self):
         self.store.update_feed(1, weight=5); self.store.update_feed(2, weight=1)
         story = lambda **kw: app.build_stories(self.store, 1, 48, 0.12, **kw)["stories"][0]

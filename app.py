@@ -51,6 +51,8 @@ VERTICALS = [
     Vertical("movies", "Movies & TV", 3),
     Vertical("books", "Books", 2),
     Vertical("news", "General News", 4),
+    Vertical("anime", "Anime", 3),
+    Vertical("manga", "Manga", 2),
 ]
 VERTICALS_BY_KEY = {v.key: v for v in VERTICALS}
 
@@ -479,6 +481,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
         def _PATCH(self):
             """/api/<v>/feeds/<id> {"weight": 0..10, "enabled": bool}  - change one feed.
             /api/<v>/feeds/<id> {"required": bool}                     - stories must include this outlet.
+            /api/<v>/feeds/<id> {"only": "manga, light novel"}         - keyword filter ("" clears).
             /api/<v>/feeds {"enabled": bool} / {"required": false}     - all feeds on/off; clear required.
             /api/<v>/phrases/<id> {"bonus": 0..100}                    - change a phrase's bonus."""
             rest, _, store = self._route()
@@ -498,7 +501,9 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 if store.update_phrase(int(rest[1]), bonus):
                     return self._json({"phrase": store.get_phrase(int(rest[1]))})
                 raise HTTPError(404, "Not found")
-            enabled, required = body.get("enabled"), body.get("required")
+            enabled, required, only = body.get("enabled"), body.get("required"), body.get("only")
+            if only is not None and (not isinstance(only, str) or len(only) > 500):
+                raise HTTPError(400, "only must be text: comma-separated keywords (empty to clear)")
             for name, val in (("enabled", enabled), ("required", required)):
                 if val is not None and not isinstance(val, bool):
                     raise HTTPError(400, f"{name} must be true or false")
@@ -511,9 +516,9 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 return self._json({"updated": updated})
             if store and len(rest) == 2 and rest[0] == "feeds" and rest[1].isdigit():
                 weight = self._number(body["weight"], "weight", 0, MAX_WEIGHT) if "weight" in body else None
-                if weight is None and enabled is None and required is None:
-                    raise HTTPError(400, "send weight, enabled and/or required")
-                if store.update_feed(int(rest[1]), weight=weight, enabled=enabled, required=required):
+                if weight is None and enabled is None and required is None and only is None:
+                    raise HTTPError(400, "send weight, enabled, required and/or only")
+                if store.update_feed(int(rest[1]), weight=weight, enabled=enabled, required=required, only=only):
                     return self._json({"feed": store.get_feed(int(rest[1]))})
             raise HTTPError(404, "Not found")
 

@@ -2,7 +2,7 @@
 
 Schema history (PRAGMA user_version): v1 feeds+items; v2 feeds.via; v3 feeds.name; v4 feeds.weight;
 v5 feeds.enabled; v6 feeds.backfilled_since + items.description; v7 feeds.last_run + feeds.required +
-phrases table; v8 settings table.
+phrases table; v8 settings table; v9 feeds.only (keyword filter).
 Older files are upgraded in place when opened.
 """
 
@@ -22,7 +22,7 @@ import feeds
 import matching
 
 RETENTION_DAYS = 14
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 MAX_WEIGHT = 10.0
 MAX_BONUS = 100.0
 DEFAULT_BONUS = 5.0
@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS feeds (
     enabled      INTEGER NOT NULL DEFAULT 1,  -- 0 = switched off in the UI: still fetched, left out of stories
     backfilled_since REAL,          -- oldest point Feedly history has been loaded back to
     last_run     TEXT,              -- id of the last scrape run that finished this feed (for resuming)
-    required     INTEGER NOT NULL DEFAULT 0  -- 1 = stories must include this outlet (see build_stories)
+    required     INTEGER NOT NULL DEFAULT 0, -- 1 = stories must include this outlet (see build_stories)
+    only         TEXT               -- comma-separated keywords: only use items mentioning one (NULL = all)
 );
 CREATE TABLE IF NOT EXISTS items (
     id          INTEGER PRIMARY KEY,
@@ -71,7 +72,8 @@ CREATE TABLE IF NOT EXISTS phrases (
 # Columns added after v1, for upgrading older files in place.
 _ADDED_COLUMNS = {
     "feeds": [("via", "TEXT"), ("name", "TEXT"), ("weight", "REAL"), ("enabled", "INTEGER NOT NULL DEFAULT 1"),
-              ("backfilled_since", "REAL"), ("last_run", "TEXT"), ("required", "INTEGER NOT NULL DEFAULT 0")],
+              ("backfilled_since", "REAL"), ("last_run", "TEXT"), ("required", "INTEGER NOT NULL DEFAULT 0"),
+              ("only", "TEXT")],
     "items": [("description", "TEXT NOT NULL DEFAULT ''")],
 }
 
@@ -80,11 +82,23 @@ _ADDED_COLUMNS = {
 class SeedFeed:
     name: str | None = None
     weight: float | None = None
+    only: str | None = None
+
+
+def keyword_regex(only: str | None) -> re.Pattern | None:
+    """Regex for a feed's keyword filter ("manga, light novel"): case-insensitive, each keyword
+    matched at a word start (so "manga" also matches "mangaka"); any whitespace inside a phrase."""
+    words = [w.strip() for w in (only or "").split(",") if w.strip()]
+    if not words:
+        return None
+    alts = "|".join(r"\s+".join(re.escape(p) for p in w.split()) for w in words)
+    return re.compile(rf"(?<!\w)(?:{alts})", re.I)
 
 
 def read_feed_list(path: Path) -> dict[str, SeedFeed]:
     """{url: SeedFeed} from a seed file: one URL per line, then an optional comment
-    "# Display name | w=4 | free-form notes". The first field is the name; "w=N" is the weight."""
+    "# Display name | w=4 | only=manga, manhwa | free-form notes". The first field is the name;
+    "w=N" is the weight; "only=..." limits the feed to items mentioning one of those keywords."""
     feeds_ = {}
     for line in path.read_text().splitlines():
         url, _, comment = line.partition("#")
@@ -93,7 +107,8 @@ def read_feed_list(path: Path) -> dict[str, SeedFeed]:
             continue
         fields = [f.strip() for f in comment.split("|")]
         weight = next((float(f[2:]) for f in fields[1:] if re.fullmatch(r"w=\d+(\.\d+)?", f)), None)
-        feeds_[url] = SeedFeed(fields[0] or None, weight)
+        only = next((f[5:].strip() for f in fields[1:] if f.startswith("only=")), None)
+        feeds_[url] = SeedFeed(fields[0] or None, weight, only or None)
     return feeds_
 
 
@@ -144,16 +159,17 @@ class Store:
             r = c.execute("SELECT * FROM feeds WHERE id = ?", (feed_id,)).fetchone()
             return dict(r) if r else None
 
-    def add_feed(self, url: str, name: str | None = None, weight: float | None = None) -> int:
+    def add_feed(self, url: str, name: str | None = None, weight: float | None = None,
+                 only: str | None = None) -> int:
         with self._write() as c:
-            return c.execute("INSERT INTO feeds (url, added_at, name, weight) VALUES (?, ?, ?, ?)",
-                             (url, time.time(), name, weight)).lastrowid
+            return c.execute("INSERT INTO feeds (url, added_at, name, weight, only) VALUES (?, ?, ?, ?, ?)",
+                             (url, time.time(), name, weight, only)).lastrowid
 
     def add_feeds(self, feeds_: dict[str, SeedFeed]) -> int:
         added = 0
         for url, seed in feeds_.items():
             try:
-                self.add_feed(url, seed.name, seed.weight)
+                self.add_feed(url, seed.name, seed.weight, seed.only)
                 added += 1
             except sqlite3.IntegrityError:
                 pass
@@ -167,10 +183,15 @@ class Store:
                           [(s.name, u) for u, s in feeds_.items() if s.name])
             c.executemany("UPDATE feeds SET weight = ? WHERE url = ? AND weight IS NULL",
                           [(s.weight, u) for u, s in feeds_.items() if s.weight is not None])
+            c.executemany("UPDATE feeds SET only = ? WHERE url = ? AND only IS NULL",
+                          [(s.only, u) for u, s in feeds_.items() if s.only])
 
     def update_feed(self, feed_id: int, weight: float | None = None, enabled: bool | None = None,
-                    required: bool | None = None) -> bool:
+                    required: bool | None = None, only: str | None = None) -> bool:
+        """only="" clears the keyword filter; None leaves it unchanged."""
         sets, args = [], []
+        if only is not None:
+            sets.append("only = ?"); args.append(only.strip() or None)
         if required is not None:
             sets.append("required = ?"); args.append(int(required))
         if weight is not None:
@@ -239,6 +260,8 @@ class Store:
     def items_since(self, since: float) -> list[matching.Item]:
         """Items from switched-on feeds published at or after `since`."""
         with self._conn() as c:
+            filters = {r["id"]: keyword_regex(r["only"]) for r in
+                       c.execute("SELECT id, only FROM feeds WHERE enabled = 1 AND only IS NOT NULL")}
             rows = c.execute(
                 """SELECT i.id, i.feed_id, i.title, i.link, i.published, i.description,
                           COALESCE(f.name, NULLIF(f.title, ''), f.url) AS feed_title,
@@ -247,7 +270,12 @@ class Store:
                    WHERE i.published >= ? AND f.enabled = 1""",
                 (matching.DEFAULT_WEIGHT, since),
             ).fetchall()
-        return [matching.Item(**dict(r)) for r in rows]
+        items = []
+        for r in rows:
+            rx = filters.get(r["feed_id"])
+            if rx is None or rx.search(r["title"]) or rx.search(r["description"]):
+                items.append(matching.Item(**dict(r)))
+        return items
 
     # --- settings (story filters for this vertical) ---------------------------------------------
 

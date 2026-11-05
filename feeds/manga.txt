@@ -1,0 +1,16 @@
+# Manga feeds - verified via Feedly on 2026-11-05
+# One feed per publisher: two feeds from one newsroom would count the same story twice toward N.
+# No anime/manga outlet has a manga-only feed, so shared and mixed feeds carry a keyword filter
+# (only=...): only their items mentioning one of those words are used in this vertical.
+# --- Industry ---
+http://www.animenewsnetwork.com/newsfeed/rss.xml                         # Anime News Network | w=5 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | industry | ~106/wk
+http://www.icv2.com/rss.php                                              # ICv2 | w=4 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | industry | ~54/wk
+http://myanimelist.net/rss.php?type=news                                 # MyAnimeList News | w=3 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | industry | ~21/wk
+https://www.comicsbeat.com/category/manga/feed/                          # The Beat (Manga) | w=3 | industry | ~3/wk
+http://www.sevenseasentertainment.com/feed/                              # Seven Seas Entertainment | w=2 | industry | ~7/wk
+https://animemojo.com/rss/                                               # Anime Mojo | w=1 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | industry | ~23/wk
+http://www.theouterhaven.net/feed/                                       # The Outerhaven | w=1 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | industry | ~48/wk
+
+# --- General publications ---
+http://www.publishersweekly.com/pw/feeds/section/book-news/comics/index.xml # Publishers Weekly (Comics) | w=4 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | general | ~4/wk
+https://comicbook.com/category/anime/feed/                               # ComicBook.com (Anime) | w=2 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | general | ~81/wk

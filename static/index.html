@@ -145,6 +145,10 @@
   ul.feeds .ctl { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
   ul.feeds .ctl .row { display: flex; gap: 6px; align-items: center; }
   input.weight { width: 4.4em; padding: 3px 6px; font-size: 13px; text-align: right; }
+  details.kw { margin-top: 4px; }
+  details.kw summary { font-size: 12px; overflow-wrap: anywhere; }
+  details.kw[data-set] summary { color: var(--accent); }
+  details.kw input { margin-top: 4px; padding: 4px 8px; font-size: 13px; }
   .req { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
   .switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
   .switch input { appearance: none; -webkit-appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px;
@@ -564,7 +568,13 @@ function feedRow(f, v) {
   const on = f.enabled !== 0, req = f.required === 1;
   return `<li class="${on ? "" : "off"}${req ? " required" : ""}" data-search="${esc((name + " " + f.url).toLowerCase())}">
     <span class="dot ${state}"></span>
-    <div class="info"><div class="name">${esc(name)}</div><div class="sub">${esc(f.url)}</div>${sub}</div>
+    <div class="info"><div class="name">${esc(name)}</div><div class="sub">${esc(f.url)}</div>${sub}
+      <details class="kw" ${f.only ? "data-set" : ""}>
+        <summary>${f.only ? `Only items mentioning: ${esc(f.only.length > 70 ? f.only.slice(0, 70) + "…" : f.only)}` : "Keyword filter"}</summary>
+        <label class="sr-only" for="kw${f.id}">Keyword filter for ${esc(name)}</label>
+        <input type="text" id="kw${f.id}" value="${esc(f.only || "")}" data-only="${f.id}" data-v="${v}" maxlength="500"
+               placeholder="Comma-separated words; only matching items are used (blank = all)">
+      </details></div>
     <div class="ctl">
       <div class="row">
         <label class="switch" title="${on ? "Used in stories" : "Not used in stories"}"><input type="checkbox" ${on ? "checked" : ""} data-toggle="${f.id}" data-v="${v}" aria-label="Use ${esc(name)}">${on ? "On" : "Off"}</label>
@@ -616,13 +626,14 @@ $("feeds").addEventListener("change", (e) => {
   const t = e.target, { v } = t.dataset; if (!v) return;
   if (t.dataset.toggle) { t.closest("li").classList.toggle("off", !t.checked); return feedChange(v, t.dataset.toggle, { enabled: t.checked }, "outlet setting"); }
   if (t.dataset.require) { t.closest("li").classList.toggle("required", t.checked); return feedChange(v, t.dataset.require, { required: t.checked }, "required setting"); }
+  if (t.dataset.only) { t.blur(); return feedChange(v, t.dataset.only, { only: t.value }, "keyword filter"); }
   if (t.dataset.weight) {
     const w = parseFloat(t.value);
     if (!Number.isFinite(w) || w < 0 || w > META.max_weight) { $("add_msg").className = "msg err"; $("add_msg").textContent = `Weights go from 0 to ${META.max_weight}.`; return loadFeeds(true); }
     t.blur(); return feedChange(v, t.dataset.weight, { weight: w }, "weight");
   }
 });
-$("feeds").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.weight) e.target.blur(); });
+$("feeds").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.target.dataset.weight || e.target.dataset.only)) e.target.blur(); });
 $("feeds").addEventListener("click", async (e) => {
   const { del: id, v } = e.target.dataset;
   if (!id || !confirm("Remove this feed and its stored headlines?")) return;

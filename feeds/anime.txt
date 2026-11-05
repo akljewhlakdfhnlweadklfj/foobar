@@ -1,0 +1,19 @@
+# Anime feeds - verified via Feedly on 2026-11-05
+# One feed per publisher: two feeds from one newsroom would count the same story twice toward N.
+# --- Industry ---
+http://www.animenewsnetwork.com/newsfeed/rss.xml                         # Anime News Network | w=5 | industry | ~106/wk
+https://cr-news-api-service.prd.crunchyrollsvc.com/v1/en-US/rss          # Crunchyroll News | w=4 | industry | ~90/wk
+http://myanimelist.net/rss.php?type=news                                 # MyAnimeList News | w=4 | industry | ~21/wk
+https://animecorner.me/feed/                                             # Anime Corner | w=3 | industry | ~28/wk
+https://anitrendz.net/news/feed/                                         # Anime Trending | w=3 | industry | ~48/wk
+https://animehunch.com/feed/                                             # Animehunch | w=2 | industry | ~8/wk
+https://animemojo.com/rss/                                               # Anime Mojo | w=1 | industry | ~23/wk
+https://otakukart.com/feed/                                              # OtakuKart | w=1 | industry | ~150/wk
+
+# --- General publications ---
+http://www.cartoonbrew.com/feed                                          # Cartoon Brew | w=3 | general | ~29/wk
+http://www.animationmagazine.net/feed/                                   # Animation Magazine | w=3 | general | ~42/wk
+https://www.cbr.com/feed/category/anime-news/                            # CBR (Anime News) | w=2 | general | ~50/wk
+https://comicbook.com/category/anime/feed/                               # ComicBook.com (Anime) | w=2 | general | ~81/wk
+https://screenrant.com/feed/anime-news/                                  # Screen Rant (Anime News) | w=2 | general | ~10/wk
+https://gamerant.com/feed/anime/                                         # Game Rant (Anime) | w=1 | general | ~98/wk
