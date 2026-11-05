@@ -112,8 +112,10 @@ The header always shows scraping status, with a quick Refresh / Stop.
    result per group, rebuilt only when its inputs change or a story's oldest headline leaves the
    window (one request rebuilds; others get the previous copy meanwhile), served at
    `GET /api/groups/<id>/stories` as the same bytes for everyone with gzip, an `ETag` (unchanged =
-   304) and `Cache-Control: public, max-age=30`. Stories that miss a group's minimums are a separate
-   file (`/extras`), downloaded only by viewers who show watched stories below the minimums.
+   304) and `Cache-Control: public, max-age=30`. ETags of digests and views ignore the build time, so
+   a regroup that changes nothing doesn't make browsers download again. Stories that miss a group's
+   minimums are a separate file (`/extras`, encoded on first request), downloaded only by viewers who
+   show watched stories below the minimums.
 3. **The browser** only does what's personal: watched phrases (highlight, bonus, re-sort, filters)
    and "last seen". Both live in `localStorage`; the server keeps no per-viewer state. Long lists
    render 300 stories at a time, and a story's details are built when it's opened.
@@ -318,7 +320,8 @@ has been loaded, so a later backfill for the same or fewer days skips it.
 Most feeds only expose their latest few dozen items. [Feedly](https://feedly.com)'s public API keeps
 the full history of any feed its users subscribe to, with no account needed (`feedly.py`). The app
 uses it for backfills, and as a fallback when a feed can't be fetched directly (blocked, down);
-those feeds show an amber dot and "via Feedly".
+those feeds show an amber dot and "via Feedly". After a good Feedly fetch, the next one asks only for
+what Feedly crawled since (with an hour's overlap), so known items aren't downloaded again.
 
 Feedly rate-limits by IP and doesn't publish its limits, so requests are paced (about 2 per second,
 shared by all threads). A `429 Too Many Requests` pauses all Feedly traffic for 30 s, doubling on each

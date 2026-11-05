@@ -258,7 +258,11 @@ class Scraper:
         self._progress(run, label, started=True)
         ok = True
         try:
-            parsed, via, note = fetch_with_fallback(feed["url"], views_checked_at=feed.get("views_checked_at") or 0)
+            # After a good Feedly fetch, ask Feedly only for what it crawled since (an hour's overlap).
+            since = (feed["last_fetched"] - 3600 if feed.get("via") == "feedly" and not feed.get("last_error")
+                     and feed.get("last_fetched") else None)
+            parsed, via, note = fetch_with_fallback(feed["url"], views_checked_at=feed.get("views_checked_at") or 0,
+                                                    feedly_since=since)
             store.save_fetch(feed["id"], parsed, None, via, note)
         except feeds.FeedError as e:
             ok = False

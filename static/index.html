@@ -453,10 +453,24 @@ let seenDirty = false;
 function mergeSeen(other) {   // another tab's records: keep the earliest time per article
   for (const k in other || {}) if (SEEN[k] === undefined || other[k] < SEEN[k]) SEEN[k] = other[k];
 }
+// One key per article shown, so a 30-day group adds tens of thousands: keep the newest SEEN_MAX
+// (~2.5 MB) and, if the browser's storage is still full, halve until it fits.
+const SEEN_MAX = 100000;
+function pruneSeen(keep) {
+  const keys = Object.keys(SEEN);
+  if (keys.length <= keep) return;
+  keys.sort((a, b) => SEEN[b] - SEEN[a]);
+  for (const k of keys.slice(keep)) delete SEEN[k];
+}
 function saveSeen() {
   if (!seenDirty) return;
   mergeSeen(loadJson(SEEN_KEY, {}));
-  saveJson(SEEN_KEY, SEEN); seenDirty = false;
+  if (Object.keys(SEEN).length > SEEN_MAX) pruneSeen(Math.floor(SEEN_MAX * 0.8));
+  for (let tries = 0; tries < 8; tries++) {
+    try { localStorage.setItem(SEEN_KEY, JSON.stringify(SEEN)); break; }
+    catch (e) { if (!/quota/i.test(e?.name || "")) break; pruneSeen(Math.floor(Object.keys(SEEN).length / 2)); }
+  }
+  seenDirty = false;
 }
 window.addEventListener("storage", (e) => { if (e.key === SEEN_KEY) mergeSeen(loadJson(SEEN_KEY, {})); });
 

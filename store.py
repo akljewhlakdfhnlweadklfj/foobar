@@ -11,6 +11,7 @@ Older files are upgraded in place when opened.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import sqlite3
@@ -123,6 +124,14 @@ class Store:
         self.catalog_version = 0  # bumped when the outlet list, names, weights or defaults change
         self.items_version = 0  # bumped when the headlines grouped into stories change (new/changed items,
                                 # removed feeds, keyword filters): what decides whether to regroup
+        with contextlib.closing(sqlite3.connect(self.path, timeout=30)) as c:
+            # WAL (stored in the file, so set once): a regroup reading 30 days doesn't stall the
+            # scraper's writes, and commits need fewer fsyncs.
+            if c.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+                try:
+                    c.execute("PRAGMA journal_mode = WAL")
+                except sqlite3.OperationalError:
+                    pass                  # busy (another process has it open): try again next start
         with self._conn() as c:
             prior = c.execute("PRAGMA user_version").fetchone()[0]
             self.is_new = prior == 0 and not c.execute(
@@ -152,6 +161,7 @@ class Store:
         c = sqlite3.connect(self.path, timeout=30)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys = ON")
+        c.execute("PRAGMA synchronous = NORMAL")   # safe with WAL: a power cut can lose the last commit, not corrupt
         try:
             with c:
                 yield c

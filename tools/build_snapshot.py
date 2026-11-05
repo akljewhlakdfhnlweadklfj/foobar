@@ -12,6 +12,7 @@ It's written for publishing as a claude.ai Artifact, whose wrapper supplies <htm
 
 from __future__ import annotations
 
+import gzip
 import json
 import re
 import sys
@@ -84,7 +85,7 @@ def build(data_dir: Path, out: Path) -> dict:
             "groups": group_store.list(), "views": {}}
     counts = {}
     for g in snap["groups"]:
-        view = views.get(g["id"])["view"]
+        view = json.loads(gzip.decompress(views.get(g["id"])["gz"]))
         snap["views"][str(g["id"])] = view
         counts[g["name"]] = sum(1 for st in view["stories"] if "x" not in st)
 

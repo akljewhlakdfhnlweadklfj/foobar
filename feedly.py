@@ -138,10 +138,14 @@ def history(feed_url: str, since: float = 0, until: float | None = None, max_pag
         newer_ms = nxt
 
 
-def recent(feed_url: str, count: int = 100, wait: bool = False) -> tuple[str, list[dict]]:
+def recent(feed_url: str, count: int = 100, wait: bool = False, since: float | None = None) -> tuple[str, list[dict]]:
     """(feed title, newest entries) - a fallback for when the feed itself can't be fetched.
+    since: only entries Feedly crawled after this (unix seconds), so known ones aren't downloaded again.
     By default doesn't wait out a rate-limit cooldown (raises RateLimited instead)."""
-    d = _get("streams/contents", {"streamId": "feed/" + feed_url, "count": count, "ranked": "newest"}, wait=wait)
+    params = {"streamId": "feed/" + feed_url, "count": count, "ranked": "newest"}
+    if since:
+        params["newerThan"] = int(since * 1000)
+    d = _get("streams/contents", params, wait=wait)
     return d.get("title", ""), d.get("items", [])
 
 

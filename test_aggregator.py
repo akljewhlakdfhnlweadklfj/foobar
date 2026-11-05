@@ -1,5 +1,6 @@
 """Tests: python3 -m unittest -v"""
 
+import gzip
 import json
 import sqlite3
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import app
+import digest
 import feeds
 import groups
 import keyterms
@@ -322,6 +324,15 @@ class FeedlyThrottlingTests(unittest.TestCase):
 
 
 class DigestTests(unittest.TestCase):
+    def test_etag_ignores_build_time(self):
+        a = digest.payload({"stories": [1, 2], "generated_at": 100}, volatile="generated_at")
+        b = digest.payload({"stories": [1, 2], "generated_at": 200}, volatile="generated_at")
+        c = digest.payload({"stories": [1, 3], "generated_at": 100}, volatile="generated_at")
+        self.assertEqual(a["etag"], b["etag"])
+        self.assertNotEqual(a["etag"], c["etag"])
+        self.assertEqual(json.loads(gzip.decompress(b["gz"])), {"stories": [1, 2], "generated_at": 200})
+        self.assertEqual(json.loads(gzip.decompress(digest.payload({})["gz"])), {})
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.store = app.Store(self.tmp / "games.db")

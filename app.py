@@ -256,7 +256,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 self.end_headers()
                 return
             gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
-            body = entry["gz"] if gz else entry.get("json") or gzip.decompress(entry["gz"])
+            body = entry["gz"] if gz else gzip.decompress(entry["gz"])      # only non-browser clients
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             if gz:
@@ -353,10 +353,10 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                     raise HTTPError(404, "No such group")
                 self._send_digest(entry, max_age=30)
             elif len(rest) == 4 and rest[:2] == ["api", "groups"] and rest[2].isdigit() and rest[3] == "extras":
-                entry = views.get(int(rest[2]))           # stories below the group's minimums (watched phrases)
+                entry = views.extras(int(rest[2]))        # stories below the group's minimums (watched phrases)
                 if entry is None:
                     raise HTTPError(404, "No such group")
-                self._send_digest(entry["extras"], max_age=30)
+                self._send_digest(entry, max_age=30)
             elif path == "/api/scrape/status":
                 self._json(scraper.status())
             elif store and rest == ["digest"]:

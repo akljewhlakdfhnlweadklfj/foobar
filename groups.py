@@ -373,11 +373,6 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], catalog_fo
             "ai": ai, "stories": stories}
 
 
-def _payload(obj) -> dict:
-    body = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode()
-    return {"json": body, "gz": gzip.compress(body, 6), "etag": '"%s"' % hashlib.sha1(body).hexdigest()[:16]}
-
-
 class Views:
     """Each group's view as ready-to-send bytes (gzip + ETag), the same for every viewer. Rebuilt only
     when an input changes (the group, its verticals' digests and catalogs, its AI headlines) or a
@@ -420,7 +415,8 @@ class Views:
         return hit[2] if hit and hit[0] == key and time.time() < hit[1] else None
 
     def get(self, gid: int) -> dict | None:
-        """{"json", "gz", "etag", "view", "extras": {"json", "gz", "etag"}} or None for no such group."""
+        """{"gz", "etag", ...} (the view, ready to send) or None for no such group. Stories below the
+        minimums are in extras(gid)."""
         group = self.groups.get(gid)
         if group is None:
             with self._lock:
@@ -444,7 +440,8 @@ class Views:
             extras = [st for st in view["stories"] if "x" in st]
             view["stories"] = [st for st in view["stories"] if "x" not in st]
             view["extras_count"] = len(extras)
-            entry = {**_payload(view), "view": view, "extras": _payload({"stories": extras})}
+            # Only the gzipped bytes are kept; the extras payload is encoded on its first request.
+            entry = {**digest_mod.payload(view, volatile="generated_at"), "pending_extras": extras, "extras": None}
             with self._lock:
                 self._cache[gid] = (key, expires, entry)
         finally:
@@ -452,3 +449,13 @@ class Views:
         if self.summarizer is not None and group.get("ai_summary"):
             self.summarizer.kick()
         return entry
+
+    def extras(self, gid: int) -> dict | None:
+        """The group's stories below its minimums ({"gz", "etag"}), or None for no such group."""
+        entry = self.get(gid)
+        if entry is None:
+            return None
+        with self._lock:
+            if entry["extras"] is None:
+                entry["extras"] = digest_mod.payload({"stories": entry.pop("pending_extras")})
+            return entry["extras"]

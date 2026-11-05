@@ -27,21 +27,25 @@ def kind_of(url: str) -> str:
     return "youtube" if youtube.is_youtube(url) else "rss"
 
 
-def _feedly(url: str, direct_err: feeds.FeedError) -> feeds.ParsedFeed | None:
-    """Feedly's copy, None if it has nothing; raises FeedError if it's rate-limiting us."""
+def _feedly(url: str, direct_err: feeds.FeedError, since: float | None = None) -> feeds.ParsedFeed | None:
+    """Feedly's copy, None if it has nothing; raises FeedError if it's rate-limiting us. since: only
+    what Feedly crawled after then (nothing new is then an empty feed, not a failure)."""
     try:
-        title, entries = feedly.recent(url)            # doesn't wait out a rate-limit cooldown
+        title, entries = feedly.recent(url, since=since)    # doesn't wait out a rate-limit cooldown
     except feedly.RateLimited:
         raise feeds.FeedError(f"{direct_err}; Feedly fallback is rate-limited right now, "
                               "will retry at the next refresh (existing headlines are kept)") from None
     except Exception:  # noqa: BLE001 - Feedly unreachable or doesn't know the feed
         return None
-    return feedly.to_parsed(entries, title, url) if entries else None
+    return feedly.to_parsed(entries, title, url) if entries or since else None
 
 
-def fetch(url: str, views_checked_at: float = 0.0) -> tuple[feeds.ParsedFeed, str, str | None]:
+def fetch(url: str, views_checked_at: float = 0.0, feedly_since: float | None = None
+          ) -> tuple[feeds.ParsedFeed, str, str | None]:
     """(parsed feed, via, note). views_checked_at: when this YouTube channel's view counts were last
-    read from its page; parsed.views_checked_at is set when they're read now (stored by the caller)."""
+    read from its page; parsed.views_checked_at is set when they're read now (stored by the caller).
+    feedly_since: when the Feedly fallback last worked for this source (it then sends only newer
+    entries); None to get its latest 100."""
     try:
         parsed = feeds.fetch_and_parse(url)
         if kind_of(url) == "youtube":
@@ -52,17 +56,17 @@ def fetch(url: str, views_checked_at: float = 0.0) -> tuple[feeds.ParsedFeed, st
             raise                                       # the private-address guard: never route around it
         err = direct_err
     if kind_of(url) == "rss":
-        parsed = _feedly(url, err)
+        parsed = _feedly(url, err, feedly_since)
         if parsed is None:
             raise err
         return parsed, "feedly", f"Direct fetch failed ({err}); using Feedly's copy"
-    return _youtube_fallback(url, err, views_checked_at)
+    return _youtube_fallback(url, err, views_checked_at, feedly_since)
 
 
-def _youtube_fallback(url: str, err: feeds.FeedError, views_checked_at: float):
+def _youtube_fallback(url: str, err: feeds.FeedError, views_checked_at: float, feedly_since: float | None):
     cid = youtube.channel_id(url)
     try:
-        parsed = _feedly(url, err)
+        parsed = _feedly(url, err, feedly_since)
     except feeds.FeedError:
         parsed = None                                   # rate-limited: the channel page still works
     if parsed is not None and time.time() - views_checked_at < youtube.VIEWS_EVERY:

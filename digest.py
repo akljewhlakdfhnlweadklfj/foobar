@@ -97,6 +97,19 @@ def build_from_file(db_path: str, key: str, label: str, hours: int, threshold: f
 REBUILD_AT_LEAST_EVERY = 3600   # seconds: even with no new headlines (old ones leave the window)
 
 
+def payload(obj: dict, volatile: str | None = None) -> dict:
+    """{"gz", "etag"} for a JSON object. The ETag ignores the `volatile` field (a build time), so a
+    rebuild with the same content still answers 304; that field is written last."""
+    rest = {k: v for k, v in obj.items() if k != volatile}
+    content = json.dumps(rest, separators=(",", ":"), ensure_ascii=False).encode()
+    body = content
+    if volatile in obj:
+        tail = json.dumps({volatile: obj[volatile]}, separators=(",", ":")).encode()
+        body = content[:-1] + (b"," if rest else b"") + tail[1:]
+    return {"gz": gzip.compress(body, 6), "etag": '"%s"' % hashlib.sha1(content).hexdigest()[:16]}
+
+
+
 class Digests:
     """Builds digests in the background after scrapes or catalog changes, and serves the latest.
     builder(key, window) does the work (app.make_digests can run it in worker processes, so serving
@@ -127,25 +140,21 @@ class Digests:
             if m and m.group(1) in self.verticals:
                 try:
                     gz = path.read_bytes()
-                    body = gzip.decompress(gz)
-                    data = json.loads(body)
+                    data = json.loads(gzip.decompress(gz))
                 except (OSError, EOFError, ValueError, zlib.error):   # damaged (e.g. a crash mid-write): rebuild it instead
                     self.log(f"digest {path.name} is damaged; it will be rebuilt")
                     path.unlink(missing_ok=True)
                     continue
                 self._cache[(m.group(1), int(m.group(2)))] = {
-                    "gz": gz, "etag": self._etag(body), "at": path.stat().st_mtime, "data": data}
+                    "gz": gz, "etag": payload(data, volatile="generated_at")["etag"], "at": path.stat().st_mtime,
+                    "data": data}
                 path.with_suffix("").with_suffix(".json").unlink(missing_ok=True)   # plain copies of earlier versions
 
-    @staticmethod
-    def _etag(body: bytes) -> str:
-        return '"%s"' % hashlib.sha1(body).hexdigest()[:16]
-
     def _store(self, key: str, window: int, digest: dict) -> None:
-        body = json.dumps(digest, separators=(",", ":"), ensure_ascii=False).encode()
-        gz = gzip.compress(body, 6)
-        # Kept: the gzipped bytes (served) and the dict (read by filter groups), not the plain JSON.
-        entry = {"gz": gz, "etag": self._etag(body), "at": time.time(), "data": digest}
+        # Kept: the gzipped bytes (served) and the dict (read by filter groups), not the plain JSON. The
+        # ETag ignores generated_at: an unchanged digest doesn't make browsers or group views refresh.
+        entry = {**payload(digest, volatile="generated_at"), "at": time.time(), "data": digest}
+        gz = entry["gz"]
         with self._lock:
             self._cache[(key, window)] = entry
         if self.out_dir:  # also written to disk: survives restarts, and can be served by a CDN as static files
