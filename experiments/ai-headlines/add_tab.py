@@ -28,10 +28,10 @@ def sw(a, b):
     global h
     assert h.count(a) >= 1, a
     h = h.replace(a, b, 1)
-sw('<a href="#stories/all" data-top="stories">Stories</a>', '<a href="#stories/all" data-top="stories">Stories</a>\n    <a href="#ai" data-top="ai">AI headlines</a>')
+sw('<a href="#stories/" data-top="stories">Stories</a>', '<a href="#stories/" data-top="stories">Stories</a>\n    <a href="#ai" data-top="ai">AI headlines</a>')
 sw("</style>", css + "</style>")
-sw("  <!-- ===== Stories ===== -->", section + "  <!-- ===== Stories ===== -->")
-sw('  const [top, sub] = location.hash.replace(/^#/, "").split("/");', '  const [top, sub] = location.hash.replace(/^#/, "").split("/");\n  if (top === "ai") return { top, sub: "" };')
-sw('  const subs = route.top === "stories"', '  $("view_ai").hidden = route.top !== "ai";\n  if (route.top === "ai") { $("sub_tabs").innerHTML = ""; $("view_stories").hidden = $("view_vertical").hidden = $("view_scraping").hidden = true; document.title = "AI headlines · Consensus News"; return; }\n  const subs = route.top === "stories"')
+sw("  <!-- ===== Stories (one tab per filter group) ===== -->", section + "  <!-- ===== Stories (one tab per filter group) ===== -->")
+sw('  const [top, sub, extra] = location.hash.replace(/^#/, "").split("/");', '  const [top, sub, extra] = location.hash.replace(/^#/, "").split("/");\n  if (top === "ai") return { top, sub: "" };')
+sw('  const subs = route.top === "stories"', '  $("view_ai").hidden = route.top !== "ai";\n  if (route.top === "ai") { $("sub_tabs").innerHTML = ""; SECTIONS.forEach((id) => { $(id).hidden = true; }); document.title = "AI headlines · Consensus News"; return; }\n  const subs = route.top === "stories"')
 open(snap, "w").write(h)
 print("ok")

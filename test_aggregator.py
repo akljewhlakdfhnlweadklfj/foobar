@@ -426,6 +426,170 @@ class DigestTests(unittest.TestCase):
         self.assertNotEqual(self.digests.get("games", 48)["etag"], etag)
 
 
+class GroupTests(unittest.TestCase):
+    """Filter groups: validation, views (server-side filters), API."""
+
+    def setUp(self):
+        import groups
+        self.groups = groups
+        self.tmp = Path(tempfile.mkdtemp())
+        self.store = app.Store(self.tmp / "games.db")
+        now = time.time()
+        # Story A: outlets 1-4 (weights 1..4); story B: outlets 1-2 only.
+        for n in (1, 2, 3, 4):
+            fid = self.store.add_feed(f"https://{n}.example/rss", f"Outlet {n}", n)
+            entries = [feeds.ParsedEntry(f"a{n}", f"Valve announces Steam Machine hardware price {n}", f"Desc {n}", now - 5400)]
+            if n <= 2:
+                entries.append(feeds.ParsedEntry(f"b{n}", f"Nintendo Direct dated for Thursday morning {n}", "", now - 1800))
+            self.store.save_fetch(fid, feeds.ParsedFeed(f"Outlet {n}", entries), None)
+        self.stores = {"games": self.store}
+        self.digests = app.make_digests(self.stores)
+        self.gs = groups.GroupStore(self.tmp / "groups.db")
+
+    def view(self, **cfg):
+        body = {"name": "G", "verticals": ["games"], **cfg}
+        group = self.groups.clean(body, None, ["games"])
+        return self.groups.build_view(group, lambda v, h: self.digests.data(v, h)[1])
+
+    def shown(self, view):
+        return sorted(len(s["s"]) for s in view["stories"] if "x" not in s)
+
+    def test_clean_validates(self):
+        c = self.groups.clean
+        g = c({"name": " Big  stories ", "verticals": ["games"], "settings": {"min_feeds": 3}}, None, ["games"])
+        self.assertEqual((g["name"], g["settings"]["min_feeds"], g["settings"]["hours"]), ("Big stories", 3, 48.0))
+        for bad in ({"name": ""}, {"verticals": []}, {"verticals": ["nope"]}, {"settings": {"min_feeds": 0}},
+                    {"settings": {"hours": 1000}}, {"settings": {"min_feeds_mode": "share"}}, {"ai_summary": "yes"},
+                    {"outlets": {"games": {"x": {"on": False}}}}, {"outlets": {"games": {"1": {"w": 11}}}}, {"color": "red"}):
+            with self.assertRaises(ValueError, msg=bad):
+                c({"name": "G", "verticals": ["games"], **bad}, None, ["games"])
+        g = c({"outlets": {"games": {"1": {"on": False, "w": 3}}}}, g, ["games"])
+        self.assertEqual(g["outlets"], {"games": {"1": {"on": False, "w": 3.0}}})
+        g = c({"outlets": {"games": {"1": {"on": None}}}}, g, ["games"])
+        self.assertEqual(g["outlets"], {"games": {"1": {"w": 3.0}}})
+        self.assertEqual(c({"outlets": {"games": {"1": None}}}, g, ["games"])["outlets"], {})
+
+    def test_view_applies_filters_on_the_server(self):
+        self.assertEqual(self.shown(self.view(settings={"min_feeds": 2})), [2, 4])
+        v = self.view(settings={"min_feeds": 3})
+        self.assertEqual(self.shown(v), [4])
+        self.assertEqual([len(s["s"]) for s in v["stories"] if "x" in s], [2])      # kept for watched phrases
+        # Weight floor: outlets 1-2 don't count; percent of the outlets that can count (2 of 4).
+        v = self.view(settings={"min_weight": 3, "min_feeds_mode": "percent", "min_feeds_percent": 100})
+        self.assertEqual((v["min_outlets"], v["countable"]), ({"games": 2}, {"games": 2}))
+        self.assertEqual(self.shown(v), [4])
+        a = next(s for s in v["stories"] if "x" not in s)
+        self.assertEqual((a["cov"], a["sc"]), (2, 7))
+        # Outlet overrides: switch 3 and 4 off -> story A has 2 outlets; weight override changes the score.
+        v = self.view(settings={"min_feeds": 2}, outlets={"games": {"3": {"on": False}, "4": {"on": False}, "1": {"w": 9}}})
+        self.assertEqual(self.shown(v), [2, 2])
+        self.assertEqual(sorted(s["sc"] for s in v["stories"]), [11, 11])
+        # Required outlet 3: only story A.
+        self.assertEqual(self.shown(self.view(settings={"min_feeds": 2}, outlets={"games": {"3": {"req": True}}})), [4])
+        # Minimum score: A scores 10, B scores 3.
+        self.assertEqual(self.shown(self.view(settings={"min_feeds": 2, "min_score": 5})), [4])
+        # Time window: B is 30 min old, A 90 minutes.
+        self.assertEqual(self.shown(self.view(settings={"min_feeds": 2, "hours": 1})), [2])
+        self.assertEqual(self.shown(self.view(settings={"min_feeds": 2, "hours": 2})), [2, 4])
+        s = self.view(settings={"min_feeds": 2})["stories"][0]
+        self.assertEqual(len(s["h"]), len(s["s"]))
+        self.assertTrue(all(len(k) == 10 for k in s["h"]))
+
+    def test_seed_and_api(self):
+        self.assertEqual(app.seed_groups(self.gs, self.stores), 1)
+        self.assertEqual(app.seed_groups(self.gs, self.stores), 0)
+        g = self.gs.list()[0]
+        self.assertEqual((g["name"], g["verticals"], g["settings"]["min_feeds"]), ("Games", ["games"], 4))
+        import threading, urllib.request
+        from http.server import ThreadingHTTPServer
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), app.make_handler(self.stores, app.Scraper({}, auto=False),
+                                                                      digests=self.digests, group_store=self.gs))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+
+        def call(method, path, body=None, headers=None):
+            req = urllib.request.Request(base + path, data=json.dumps(body).encode() if body is not None else None, method=method,
+                                         headers={"Content-Type": "application/json", **(headers or {})})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    return r.status, json.loads(r.read() or b"{}"), r.headers
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read() or b"{}"), e.headers
+
+        with mock.patch.dict("os.environ", {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}):
+            code, d, _ = call("POST", "/api/groups", {"name": "Two+", "verticals": ["games"], "settings": {"min_feeds": 2}})
+            self.assertEqual(code, 201)
+            gid = d["group"]["id"]
+            self.assertEqual(d["group"]["position"], 1)
+            code, v, h = call("GET", f"/api/groups/{gid}/stories")
+            self.assertEqual((code, len([s for s in v["stories"] if "x" not in s])), (200, 2))
+            self.assertEqual(call("GET", f"/api/groups/{gid}/stories", headers={"If-None-Match": h["ETag"]})[0], 304)
+            code, d, _ = call("PATCH", f"/api/groups/{gid}", {"settings": {"min_feeds": 3}, "outlets": {"games": {"4": {"on": False}}}})
+            self.assertEqual((code, d["group"]["settings"]["min_feeds"]), (200, 3))
+            v = call("GET", f"/api/groups/{gid}/stories")[1]
+            self.assertEqual([len(s["s"]) for s in v["stories"] if "x" not in s], [3])
+            self.assertEqual(call("PATCH", f"/api/groups/{gid}", {"settings": {"min_feeds": "3"}})[0], 400)
+            self.assertEqual(call("PATCH", "/api/groups/999", {"name": "x"})[0], 404)
+            self.assertEqual(len(call("GET", "/api/groups")[1]["groups"]), 2)
+            self.assertEqual(call("DELETE", f"/api/groups/{gid}")[0], 200)
+            self.assertEqual(call("DELETE", f"/api/groups/{g['id']}")[0], 400)    # keep at least one
+            self.assertEqual(call("GET", f"/api/groups/{gid}/stories")[0], 404)
+
+
+class SummarizerTests(unittest.TestCase):
+    """AI headlines with a fake Claude client."""
+
+    def fake(self, refuse=False, reject_fallbacks=False):
+        import types
+        calls = []
+
+        def create(**kw):
+            calls.append(kw)
+            if reject_fallbacks and "fallbacks" in kw:
+                raise type("BadRequestError", (Exception,), {})("fallbacks not supported")
+            n = kw["messages"][0]["content"].count("[")
+            body = {"headlines": [{"n": i, "headline": f"  Short   headline {i} "} for i in range(1, n + 1)]}
+            return types.SimpleNamespace(stop_reason="refusal" if refuse else "end_turn",
+                                         content=[types.SimpleNamespace(type="text", text=json.dumps(body))])
+        msgs = types.SimpleNamespace(create=create)
+        return types.SimpleNamespace(messages=msgs, beta=types.SimpleNamespace(messages=msgs)), calls
+
+    def test_writes_caches_and_rewrites_when_story_grows(self):
+        import ai
+        client, calls = self.fake()
+        s = ai.Summarizer(Path(tempfile.mkdtemp()) / "ai.db", model="m", client=client)
+        self.assertIsNone(s.lookup(["a", "b"], 2))
+        s.want(["a", "b"], ["Valve announces Steam Machine", "Steam Machine revealed"], 2, 200.0)
+        s.want(["c", "d"], ["Nintendo Direct Thursday", "Direct dated"], 2, 100.0)   # older: written second
+        self.assertFalse(s.run_once())
+        self.assertEqual(s.lookup(["a", "b"], 2), "Short headline 1")
+        self.assertEqual(s.lookup(["b", "z"], 3), "Short headline 1")      # same story, an outlet joined
+        self.assertIsNone(s.lookup(["a", "b"], 5))                          # grew a lot: write again
+        self.assertEqual(calls[0]["fallbacks"], "default")
+        self.assertEqual(calls[0]["output_config"]["effort"], "low")
+        self.assertIn("- Steam Machine revealed", calls[0]["messages"][0]["content"])
+        again = ai.Summarizer(Path(s.path), client=client)                  # kept on disk
+        self.assertEqual(again.lookup(["c"], 2), "Short headline 2")
+
+    def test_refusal_fallback_rejection_and_missing_key(self):
+        import ai
+        client, _ = self.fake(refuse=True)
+        s = ai.Summarizer(None, client=client)
+        s.want(["a"], ["x"], 2, 0); s.run_once()
+        self.assertIsNone(s.lookup(["a"], 2))
+        client, calls = self.fake(reject_fallbacks=True)
+        s = ai.Summarizer(None, client=client)
+        s.want(["a"], ["x"], 2, 0); s.run_once()
+        self.assertEqual(s.lookup(["a"], 2), "Short headline 1")
+        self.assertEqual(["fallbacks" in c for c in calls], [True, False])
+        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "", "ANTHROPIC_AUTH_TOKEN": ""}):
+            st = ai.Summarizer(None).status()
+        self.assertFalse(st["available"])
+        self.assertTrue(st["reason"])
+        self.assertFalse(ai.Summarizer(None, enabled=False).available)
+
+
 class HttpTestCase(unittest.TestCase):
     """Starts the real handler on a free port."""
 

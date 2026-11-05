@@ -50,8 +50,8 @@ unless you trust everyone with the link.
 
 The app has two sections (top left):
 
-**Stories**: the reader. Pick **All** (every vertical, each using its own settings, with a label on
-each story) or a single vertical, and sort by **Top** (score) or **Latest**.
+**Stories**: one tab per **filter group** (see Settings › Groups), the same for everyone. Sort by
+**Top** (score) or **Latest**.
 - The list is compact: one line per story, **`Key term: Headline`**.
   - **Key term**: the story's most prominent proper noun (a person, title, brand or place: "Suda51",
     "God of War Laufey", "China Miéville"), kept whole when it's a name with small connecting words.
@@ -64,29 +64,36 @@ each story) or a single vertical, and sort by **Top** (score) or **Latest**.
     since there's no part-of-speech tagger). Shown in the accent colour; click it to show only
     stories mentioning it.
   - **Headline**: the shortest one among the story's outlets (4+ words; labelled pieces like
-    "Opinion |" or "WATCH:" are skipped when possible).
+    "Opinion |" or "WATCH:" are skipped when possible), or, in groups with **AI summary** on, one
+    written by Claude from all the outlets' headlines (marked "AI").
+- **Last seen**: the page remembers when it first showed you each story. A story stays in the list
+  for an hour after that (so coming back within the hour shows the same items), then it's hidden and
+  you only see new stories. **Show seen** brings them back, dimmed. A story counts as seen in every
+  group once it's been shown in one. Kept in this browser (`localStorage`), for 31 days.
 - Click a story (or its arrow) to expand it: outlets and score, outlet and times, description,
   image (when the feeds have one; loaded only when expanded), watched-phrase chips, and every outlet's
   headline. Description and image fall back to the highest-weighted outlet that has them.
-  Watched phrases are highlighted.
 
-**Settings**: one sub-tab per vertical, plus **Scraping**. Your settings, watched phrases and outlet
-choices are **saved in your browser** (each viewer has their own; see [Architecture](#architecture-many-viewers-little-server-work)).
-- **Which stories show** (per vertical): reported by at least N outlets, or at
-  least a percentage of the outlets that can count: switched on and weighted at least the
-  "only count outlets weighted at least" value (rounded up, minimum 1; it follows both settings), time window, only count outlets weighted at least X (lower-weighted outlets still help group headlines
-  but don't count toward N or the score), minimum score, match strictness, and, when outlets are
-  marked required, whether stories need any or all of them. Time windows go up to 30 days.
-  Changes save automatically; **Reset to defaults** returns to the vertical's defaults.
-- **Watched phrases**: add a phrase and a bonus (0–100). Stories mentioning it in any outlet's title
-  or description are outlined and highlighted, and the bonus is added to the score. Options: only
-  show watched stories; show watched stories even if fewer outlets report them.
-- **Outlets**: switch each on or off for you (off = left out of your stories); mark **Required**
-  (stories must include it); set your own weight (0–10); search; all on / all off.
-  **Catalog (all users)** under an outlet changes the shared catalog: its default weight, keyword
-  filter, or removing it. **Shared catalog (admin)** adds feeds and sets the match strictness. These
-  go to the server and regroup stories for everyone; until the new grouping is ready (seconds, up to
-  about half a minute for General News) a "Re-grouping in progress…" flag shows and your new value stays put.
+**Settings**:
+- **Groups** (shared, saved on the server): create, rename, reorder and delete filter groups. A
+  group covers one or more verticals; a vertical can be in any number of groups. Each group has:
+  - **Reported by at least** N outlets, or a percentage of the outlets that can count (switched on and
+    weighted at least the "only count outlets weighted at least" value; rounded up, minimum 1).
+  - **Time window** (up to 30 days), **only count outlets weighted at least** X (lower-weighted
+    outlets still help group headlines but don't count toward N or the score) and a **minimum score**.
+  - **Outlets**, per vertical: on/off, **Required** (stories must include it; with several, any or
+    all of them) and weight, each defaulting to the vertical's catalog until changed.
+  - **AI summary**: Claude-written headlines (see [AI summary](#ai-summary)).
+  The first start creates one group per vertical from that vertical's earlier settings.
+- **Watched phrases** (yours, in this browser): add a phrase and a bonus (0–100). Stories mentioning
+  it in any outlet's title or description are outlined and highlighted in every group, and the bonus
+  is added to the score. Options: only show watched stories; show watched stories even if they miss a
+  group's minimums.
+- **One page per vertical** (shared catalog): the outlets it fetches, with status, default on/off
+  and weight (used by groups that haven't set their own), keyword filter, remove; **Add feed**; and
+  **match strictness**. These regroup stories for everyone; until the new grouping is ready (seconds,
+  up to about half a minute for General News) a "Re-grouping in progress…" flag shows and your new
+  value stays put.
 - **Scraping**: progress of the current run, Refresh all, Stop, Resume, Backfill N days, and the
   automatic schedule (on/off and interval).
 
@@ -94,26 +101,42 @@ The header always shows scraping status, with a quick Refresh / Stop.
 
 ## Architecture: many viewers, little server work
 
-Grouping headlines into stories is the only expensive step, and it doesn't depend on who is looking.
-So the server does it **once per vertical after each scrape** (and after a catalog change), for
-three windows (2, 7 and 30 days), and saves the result as a static **digest**:
-`data/digests/<vertical>-<hours>.json` (plus `.json.gz`), also kept in memory and served by
-`GET /api/<v>/digest?hours=N` with gzip, an `ETag` (unchanged digests cost a 304) and
-`Cache-Control: public, max-age=60`. Every viewer downloads the same file, so the files can sit behind
-a CDN or be served by any static host.
+1. **Grouping** headlines into stories is the expensive step, so it runs once per vertical after each
+   scrape (and after a catalog change), for three windows (2, 7 and 30 days). The result is a
+   **digest**: `data/digests/<vertical>-<hours>.json` (plus `.json.gz`), kept in memory too.
+2. **Filter groups** are applied on the server to those digests (`groups.py`): one result per group,
+   rebuilt only when its digests, its settings or its AI headlines change (and at most once a minute
+   for the moving time window), served at `GET /api/groups/<id>/stories` as the same bytes for
+   everyone, with gzip, an `ETag` (unchanged = 304) and `Cache-Control: public, max-age=30`. Serving
+   many viewers costs about as much as serving a static file, and it can sit behind a CDN.
+3. **The browser** only does what's personal: watched phrases (highlight, bonus, re-sort, "only
+   watched", "show watched below the minimums", for which the group result also lists the stories
+   that miss its minimums, flagged) and "last seen". Both live in `localStorage`; the server keeps
+   no per-viewer state.
 
-The browser does everything personal: which outlets are on, weights, required outlets, "only count
-outlets weighted at least", watched phrases and bonuses, "reported by at least N / N%", minimum
-score, the exact time window (cut from the smallest digest that covers it), sorting and key-term
-filters. Preferences live in `localStorage` (`consensus-prefs-v1`), so the server stores no per-user
-state. A digest holds every outlet in the catalog (including ones switched off by default), one
-headline per outlet per story (its shortest full one), descriptions trimmed to 240 characters, and the
-story's key terms. Stories reported by a single outlet are left out to keep files small, so the
-lowest "reported by" setting is effectively 2.
+Stories reported by a single outlet aren't in digests (smaller files), so the lowest useful "reported
+by" is 2. Rough sizes with 2 days of data: General News ~700 stories, digests ~480 KB gzipped, built
+in ~8 s; a group's result is 130–380 KB gzipped.
 
-Rough sizes (2 days of data): General News ~690 stories, ~480 KB gzipped, built in ~8 s; Games ~200
-stories, ~130 KB. Settings and phrases saved on the server by earlier versions remain as each
-vertical's defaults (`/api/<v>/settings`), but personal changes are now browser-only.
+## AI summary
+
+Turn it on per group (Settings › Groups). The server then asks Claude for one short headline per
+story in that group, written from all its outlets' headlines, and shows it instead of the shortest
+outlet headline.
+
+- **Setup**: `pip install anthropic` and set `ANTHROPIC_API_KEY` where the app runs (in Codespaces:
+  a Codespaces secret). Without them, groups with AI summary on show the usual headlines and say why.
+  `--ai-model` (or `$NEWS_AI_MODEL`) picks the model, default `claude-opus-5-5`; `--no-ai` never calls
+  the API.
+- **How**: in the background (`ai.py`), about 20 stories per request, low effort, JSON output.
+  Headlines are cached in `data/ai.db` by the stories' articles, shared by every group and viewer,
+  and kept while a story grows, until it has twice as many outlets (and at least 3 more) than when it
+  was written. Stories that miss a group's minimums get none. If Claude declines a request, the API
+  retries it on Anthropic's recommended fallback model (`fallbacks: "default"`).
+- **Cost**: roughly 250 input and 25 output tokens per story: about $0.0015 per story on Claude
+  Opus 5.5, $0.0008 on Sonnet 5.5, under $0.0001 on Haiku 5.5. At most 2,000 stories a day are
+  written (`ai.MAX_PER_DAY`), so at most about $3 a day on Opus 5.5. The one-time test in
+  `experiments/ai-headlines/` has examples and a comparison with the usual headlines.
 
 ## Verticals and data
 
@@ -341,7 +364,12 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 | Method | Path | |
 |---|---|---|
 | GET | `/api/verticals` | tab list, defaults, digest `windows`, `retention_days` |
-| GET | `/api/<v>/digest?hours=N` | the shared digest covering N hours (gzip, ETag, 60 s cache); what the UI uses |
+| GET | `/api/<v>/digest?hours=N` | the shared digest covering N hours (gzip, ETag, 60 s cache) |
+| GET | `/api/groups` | filter groups (and whether AI headlines are available) |
+| POST | `/api/groups` `{"name", "verticals": ["games"], "settings": {...}, "outlets": {...}, "ai_summary": false}` | create a group |
+| PATCH | `/api/groups/{id}` (any of those fields, plus `position`; outlets: `{"games": {"12": {"on": false, "req": true, "w": 4}}}`, `null` = catalog default) | change a group |
+| DELETE | `/api/groups/{id}` | delete a group (one must remain) |
+| GET | `/api/groups/{id}/stories` | the group's stories (gzip, ETag, 30 s cache); what the UI uses |
 | GET | `/api/<v>/feeds` | feeds, their status, and scrape status |
 | POST | `/api/<v>/feeds` `{"url": ...}` | add a feed (validated first) |
 | PATCH | `/api/<v>/feeds/{id}` `{"weight": 4, "enabled": false, "required": true, "only": "manga, manhwa"}` | change one feed (`"only": ""` clears the filter) |
@@ -369,6 +397,8 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 | `eval_matching.py`, `eval_realistic.py` | matching evaluations |
 | `seedcache.py`, `tools/build_seed_cache.py` | cached history for new verticals (load / build) |
 | `digest.py` | shared per-vertical story digests (build, cache, disk, background rebuilds) |
+| `groups.py` | filter groups: storage, validation, applying them to digests, cached results |
+| `ai.py` | AI headlines for groups with AI summary on (Claude API, cache, daily cap) |
 | `tools/build_snapshot.py` | static snapshot of the UI with the digests embedded (for sharing as a page) |
 | `static/index.html` | the UI |
 

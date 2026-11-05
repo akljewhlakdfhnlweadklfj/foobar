@@ -18,6 +18,7 @@ import os
 import re
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 from collections import Counter, defaultdict
@@ -26,7 +27,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import ai as ai_mod
 import digest as digests_mod
+import groups as groups_mod
 import feeds
 import matching
 import seedcache
@@ -796,10 +799,28 @@ def make_digests(stores: dict[str, Store], out_dir: Path | None = None, log=None
     return digests_mod.Digests(out_dir, builder, list(stores), log=log)
 
 
+def seed_groups(group_store: groups_mod.GroupStore, stores: dict[str, Store]) -> int:
+    """First start: one filter group per vertical, from that vertical's saved story settings."""
+    if not group_store.is_empty():
+        return 0
+    for pos, v in enumerate(v for v in VERTICALS if v.key in stores):
+        cfg = effective_settings(v, stores[v.key])
+        settings = {k: cfg[k] for k in groups_mod.SETTING_SPECS}
+        group_store.create(groups_mod.clean({"name": v.label, "verticals": [v.key], "position": pos,
+                                             "settings": settings}, None, list(stores)))
+    return len(stores)
+
+
 def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security | None = None,
-                 digests: digests_mod.Digests | None = None):
+                 digests: digests_mod.Digests | None = None, group_store: groups_mod.GroupStore | None = None,
+                 summarizer: ai_mod.Summarizer | None = None):
     security = security or Security()
     digests = digests or make_digests(stores)
+    if group_store is None:
+        group_store = groups_mod.GroupStore(Path(tempfile.mkdtemp()) / "groups.db")
+        seed_groups(group_store, stores)
+    summarizer = summarizer or ai_mod.Summarizer(None, enabled=False)
+    views = groups_mod.Views(group_store, digests, summarizer)
     seen_hosts: set[str] = set()
 
     class Handler(BaseHTTPRequestHandler):
@@ -862,8 +883,8 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             if self.command == "POST" and ctype != "application/json":
                 raise HTTPError(415, "Send changes as Content-Type: application/json")
 
-        def _send_digest(self, entry: dict):
-            """A shared digest: same bytes for everyone, so it's cacheable (ETag, gzip, max-age)."""
+        def _send_digest(self, entry: dict, max_age: int = 60):
+            """A shared digest or group view: same bytes for everyone, so it's cacheable (ETag, gzip, max-age)."""
             if self.headers.get("If-None-Match") == entry["etag"]:
                 self.send_response(304)
                 self.send_header("ETag", entry["etag"])
@@ -877,7 +898,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 self.send_header("Content-Encoding", "gzip")
             self.send_header("Vary", "Accept-Encoding")
             self.send_header("ETag", entry["etag"])
-            self.send_header("Cache-Control", "public, max-age=60")
+            self.send_header("Cache-Control", f"public, max-age={max_age}")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -946,7 +967,15 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                     "max_bonus": MAX_BONUS,
                     "windows": list(digests_mod.WINDOWS),
                     "retention_days": RETENTION_DAYS,
+                    "ai": summarizer.status(),
                 })
+            elif path == "/api/groups":
+                self._json({"groups": group_store.list(), "ai": summarizer.status()})
+            elif len(rest) == 4 and rest[:2] == ["api", "groups"] and rest[2].isdigit() and rest[3] == "stories":
+                entry = views.get(int(rest[2]))
+                if entry is None:
+                    raise HTTPError(404, "No such group")
+                self._send_digest(entry, max_age=30)
             elif path == "/api/scrape/status":
                 self._json(scraper.status())
             elif store and rest == ["digest"]:
@@ -1005,6 +1034,14 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                                              or not 1 <= interval <= 24 * 60):
                     raise HTTPError(400, "interval_minutes must be between 1 and 1440")
                 return self._json(scraper.set_schedule(auto, interval))
+            if path == "/api/groups":
+                try:
+                    cfg = groups_mod.clean(body, None, list(stores))
+                except ValueError as e:
+                    raise HTTPError(400, str(e))
+                if "position" not in body:
+                    cfg["position"] = 1 + max((g["position"] for g in group_store.list()), default=-1)
+                return self._json({"group": group_store.get(group_store.create(cfg))}, 201)
             if store and rest == ["feeds"]:
                 url = str(body.get("url", "")).strip()
                 if not url.lower().startswith(("http://", "https://")):
@@ -1049,6 +1086,16 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             /api/<v>/phrases/<id> {"bonus": 0..100}                    - change a phrase's bonus."""
             rest, _, store = self._route()
             body = self._body()
+            if len(rest) == 3 and rest[:2] == ["api", "groups"] and rest[2].isdigit():
+                current = group_store.get(int(rest[2]))
+                if current is None:
+                    raise HTTPError(404, "No such group")
+                try:
+                    cfg = groups_mod.clean(body, current, list(stores))
+                except ValueError as e:
+                    raise HTTPError(400, str(e))
+                group_store.update(int(rest[2]), cfg)
+                return self._json({"group": group_store.get(int(rest[2]))})
             if store and rest == ["settings"]:
                 if body.get("reset") is True:
                     store.reset_settings()
@@ -1089,6 +1136,12 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
 
         def _DELETE(self):
             rest, _, store = self._route()
+            if len(rest) == 3 and rest[:2] == ["api", "groups"] and rest[2].isdigit():
+                if len(group_store.list()) <= 1:
+                    raise HTTPError(400, "Keep at least one group")
+                if group_store.delete(int(rest[2])):
+                    return self._json({"ok": True})
+                raise HTTPError(404, "No such group")
             if store and len(rest) == 2 and rest[1].isdigit():
                 if rest[0] == "feeds" and store.delete_feed(int(rest[1])):
                     return self._json({"ok": True})
@@ -1158,6 +1211,10 @@ def main():
                          "default: $NEWS_API_TOKEN")
     ap.add_argument("--allow-host", action="append", default=[], metavar="HOST",
                     help="extra hostname allowed to make changes through the UI/API ('*' = any)")
+    ap.add_argument("--ai-model", default=os.environ.get("NEWS_AI_MODEL", ai_mod.DEFAULT_MODEL),
+                    help=f"Claude model for AI headlines in groups that turn them on (default {ai_mod.DEFAULT_MODEL}; "
+                         "needs ANTHROPIC_API_KEY)")
+    ap.add_argument("--no-ai", action="store_true", help="never call the Claude API, even for groups with AI summary on")
     ap.add_argument("--allow-private-feeds", action="store_true",
                     help="allow feed URLs on localhost/private networks (off by default to prevent SSRF)")
     args = ap.parse_args()
@@ -1187,7 +1244,13 @@ def main():
     digests.request_rebuild()   # fresh digests from whatever is stored now
     security = Security(api_token=args.api_token, allowed_hosts=tuple(h.lower() for h in args.allow_host)
                         + ((args.host.lower(),) if args.host not in ("0.0.0.0", "::") else ()))
-    srv = ThreadingHTTPServer((args.host, args.port), make_handler(stores, scraper, security, digests))
+    group_store = groups_mod.GroupStore(data_dir / "groups.db")
+    if seed_groups(group_store, stores):
+        print("Created one filter group per vertical (edit them under Settings › Groups)")
+    summarizer = ai_mod.Summarizer(data_dir / "ai.db", model=args.ai_model, log=print, enabled=not args.no_ai)
+    st_ai = summarizer.status()
+    print(f"AI headlines: {'available (' + st_ai['model'] + ')' if st_ai['available'] else 'off: ' + st_ai['reason']}")
+    srv = ThreadingHTTPServer((args.host, args.port), make_handler(stores, scraper, security, digests, group_store, summarizer))
     print(f"News aggregator running at http://{args.host}:{args.port}  (data: {args.data})")
     st = scraper.status()
     print(f"Scraping: {'every %g min' % st['interval_minutes'] if st['auto'] else 'manual (POST /api/scrape/start)'}"

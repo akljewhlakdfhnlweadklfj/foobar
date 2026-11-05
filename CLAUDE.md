@@ -6,9 +6,10 @@
   `report_preview_port` was tried; the user's app said "preview isn't available in this session"
   (it only works for local/SSH sessions). Don't offer it again from a cloud session.
 - **What works: a static snapshot published as a claude.ai Artifact.**
-  `tools/build_snapshot.py <data dir> <out.html>` renders the real UI with the shared digests (2- and
-  7-day windows) embedded. Since personalization is all client-side, Stories and the per-vertical
-  Settings work in it (kept in the viewer's browser); catalog/admin controls and Scraping are hidden.
+  `tools/build_snapshot.py <data dir> <out.html>` renders the real UI with each filter group's stories
+  embedded: Stories (group tabs), last seen and Settings › Watched phrases work; the group editor,
+  catalogs and Scraping are hidden. `experiments/ai-headlines/add_tab.py <out.html> experiments/ai-headlines`
+  adds the one-time AI headline test as a tab.
   Publish it with the Artifact tool. To update the existing
   snapshot, publish the same file path again (or pass the artifact's URL) so the link stays the same:
   https://claude.ai/artifact/WM6AWSgespPKpaW8r2JAcd
@@ -24,8 +25,10 @@ rebuild with a 14-day backfill into a scratch data dir, then `python3 tools/buil
 ## Architecture
 
 The server groups stories once per vertical after each scrape (digest.py: 48h/168h/720h digests on
-disk and in memory); the browser applies every personal setting (static/index.html, localStorage).
-Keep per-user work out of the server: new filters belong in the page's `computeStories`.
+disk and in memory), then applies each filter group's settings to them (groups.py; cached per group,
+served as static bytes). The browser only does watched phrases and "last seen" (localStorage). Keep
+per-viewer state out of the server and per-group work out of the browser. AI headlines (ai.py) are
+optional and need ANTHROPIC_API_KEY; tests use a fake client.
 
 ## Conventions
 

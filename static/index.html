@@ -206,14 +206,37 @@
   .btnrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
   code { font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
   pre { font-size: 12px; background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 0; }
+  /* ---- Groups, last seen, AI ---- */
+  .check.inline { display: inline-flex; align-items: center; gap: 6px; margin: 0 12px 0 0; }
+  .check.inline input { margin: 0; }
+  .viewbar .check.inline { font-size: 13px; }
+  .story.seen h3 { color: var(--muted); font-weight: 500; }
+  .aibadge { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 10px; font-weight: 700; letter-spacing: .04em;
+             line-height: 16px; vertical-align: 2px; border-radius: 4px; color: var(--accent); background: var(--accent-soft); }
+  .grid.groups { grid-template-columns: minmax(220px, 1fr) minmax(0, 2.2fr); }
+  @media (max-width: 860px) { .grid.groups { grid-template-columns: 1fr; } }
+  ul.glist { list-style: none; margin: 0; padding: 0; }
+  ul.glist li { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 8px 6px; border-top: 1px solid var(--border); border-radius: 6px; }
+  ul.glist li:first-child { border-top: 0; }
+  ul.glist li.active { background: var(--accent-soft); }
+  ul.glist a { font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
+  ul.glist .gsub { grid-column: 1; font-size: 12px; color: var(--muted); }
+  ul.glist .gmove { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 4px; align-items: center; }
+  ul.glist .gmove button { padding: 2px 8px; font-size: 13px; }
+  .vchecks { display: flex; flex-wrap: wrap; gap: 6px 0; color: var(--text); }
+  .switch.big { font-size: 14px; color: var(--text); font-weight: 600; }
+  details.gout { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 10px; }
+  details.gout summary { font-size: 14px; color: var(--text); }
+  .catrow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .catrow input[type=text] { flex: 1; min-width: 140px; padding: 4px 8px; font-size: 13px; }
 </style>
 </head>
 <body>
 <header>
   <h1>Consensus <span>News</span></h1>
   <nav class="top" id="top_tabs" aria-label="Sections">
-    <a href="#stories/all" data-top="stories">Stories</a>
-    <a href="#settings/scraping" data-top="settings">Settings</a>
+    <a href="#stories/" data-top="stories">Stories</a>
+    <a href="#settings/groups" data-top="settings">Settings</a>
   </nav>
   <div class="scrape">
     <span id="status" aria-live="polite"></span>
@@ -221,70 +244,80 @@
     <button class="ghost" id="hdr_stop" hidden title="Stop after the feeds in progress; progress is kept">Stop</button>
   </div>
 </header>
-<div class="subbar"><nav class="sub" id="sub_tabs" aria-label="Verticals"></nav></div>
+<div class="subbar"><nav class="sub" id="sub_tabs" aria-label="Tabs"></nav></div>
 
 <main>
-  <!-- ===== Stories ===== -->
+  <!-- ===== Stories (one tab per filter group) ===== -->
   <section id="view_stories">
-    <div class="cloud" id="cloud" aria-label="Most prominent terms in these stories" hidden></div>
     <div class="viewbar">
       <div class="summary" id="summary">Loading…</div>
+      <label class="check inline"><input type="checkbox" id="show_seen"> Show seen</label>
       <label for="sort">Sort <select id="sort"><option value="score">Top</option><option value="latest">Latest</option></select></label>
     </div>
     <div class="stories" id="stories"></div>
   </section>
 
-  <!-- ===== Settings: one vertical ===== -->
-  <section id="view_vertical" hidden>
-    <div class="grid">
-      <div class="panel" id="filters_panel">
-        <h2>Which stories show <span class="saved" id="saved" hidden>Saved in this browser</span></h2>
-        <p class="intro">Your settings for this vertical's Stories tab and for “All”. They're saved in this browser.</p>
+  <!-- ===== Settings: filter groups ===== -->
+  <section id="view_groups" hidden>
+    <div class="grid groups">
+      <div class="panel">
+        <h2>Filter groups</h2>
+        <p class="intro">Each group is a tab under Stories, the same for everyone. A group can cover one or more verticals, and a vertical can be in any number of groups.</p>
+        <ul class="glist" id="glist"></ul>
+        <div class="btnrow"><button id="g_new">New group</button></div>
+        <div class="msg" id="glist_msg"></div>
+      </div>
+      <div class="panel" id="g_editor">
+        <h2><span id="g_title">Group</span> <span class="saved" id="g_saved" hidden>Saved for everyone</span></h2>
         <div class="fields">
+          <label class="field full">Name <input type="text" id="g_name" maxlength="60"></label>
+          <div class="field full"><span>Verticals</span><div class="vchecks" id="g_verticals"></div></div>
           <div class="field">
-            <label for="s_min_feeds">Reported by at least</label>
+            <label for="g_min_feeds">Reported by at least</label>
             <div style="display:flex;gap:6px">
-              <input type="number" id="s_min_feeds" min="1" max="100" step="1" aria-label="Number of outlets">
-              <input type="number" id="s_min_feeds_percent" min="1" max="100" step="1" aria-label="Percent of enabled outlets that count" hidden>
-              <select id="s_min_feeds_mode" aria-label="Unit" style="width:auto">
-                <option value="count">outlets</option><option value="percent">% of enabled outlets</option>
+              <input type="number" id="g_min_feeds" min="1" max="100" step="1" aria-label="Number of outlets">
+              <input type="number" id="g_min_feeds_percent" min="1" max="100" step="1" aria-label="Percent of outlets that count" hidden>
+              <select id="g_min_feeds_mode" aria-label="Unit" style="width:auto">
+                <option value="count">outlets</option><option value="percent">% of outlets that count</option>
               </select>
             </div>
-            <span class="hint" id="min_feeds_hint"></span>
+            <span class="hint" id="g_min_hint"></span>
           </div>
           <label class="field">Time window
-            <select id="s_hours">
+            <select id="g_hours">
               <option value="6">6 hours</option><option value="12">12 hours</option><option value="24">24 hours</option>
               <option value="48">48 hours</option><option value="72">3 days</option><option value="168">7 days</option>
               <option value="336">14 days</option><option value="720">30 days</option>
             </select>
           </label>
           <label class="field">Only count outlets weighted at least
-            <input type="number" id="s_min_weight" min="0" max="10" step="0.5">
+            <input type="number" id="g_min_weight" min="0" max="10" step="0.5">
             <span class="hint">Lower-weighted outlets still help group headlines, but don't count. 0 = all.</span>
           </label>
           <label class="field">Minimum score
-            <input type="number" id="s_min_score" min="0" step="1">
-            <span class="hint">Outlet weights + watched bonuses. 0 = no minimum.</span>
+            <input type="number" id="g_min_score" min="0" step="1">
+            <span class="hint">Sum of the weights of outlets that count. 0 = no minimum.</span>
           </label>
-          <p class="field full hint" id="grouping_info"></p>
-        </div>
-        <div class="required-note" id="required_note" hidden>
-          <div id="required_list"></div>
-          <div class="row">
-            <label for="s_require_all">Show stories that include</label>
-            <select id="s_require_all"><option value="false">any of them</option><option value="true">all of them</option></select>
-            <button type="button" class="ghost" id="clear_required">Clear</button>
+          <label class="field" id="g_require_all_field">With required outlets, show stories that include
+            <select id="g_require_all"><option value="false">any of them</option><option value="true">all of them</option></select>
+          </label>
+          <div class="field full">
+            <label class="switch big"><input type="checkbox" id="g_ai"> AI summary</label>
+            <span class="hint" id="g_ai_note">Claude writes one short headline per story from all its outlets' headlines, shown instead of the shortest outlet headline.</span>
           </div>
-          <div class="warn" id="required_warn" hidden></div>
         </div>
-        <div class="panel-foot"><button type="button" class="ghost" id="reset_settings">Reset to defaults</button>
-          <span class="msg" id="settings_msg"></span></div>
+        <div id="g_outlets"></div>
+        <div class="panel-foot"><button type="button" class="ghost" id="g_delete">Delete group</button><span class="msg" id="g_msg"></span></div>
       </div>
+    </div>
+  </section>
 
-      <div class="panel" id="watch_panel">
+  <!-- ===== Settings: watched phrases (this browser) ===== -->
+  <section id="view_phrases" hidden>
+    <div class="grid">
+      <div class="panel">
         <h2>Watched phrases</h2>
-        <p class="intro">Stories mentioning a phrase in any outlet's headline or description are highlighted, and its bonus is added to their score.</p>
+        <p class="intro">Yours, kept in this browser. Stories mentioning a phrase in any outlet's headline or description are highlighted in every group, and its bonus is added to their score.</p>
         <form class="row" id="watch_form">
           <label for="watch_phrase" class="sr-only">Phrase to watch</label>
           <input type="text" id="watch_phrase" placeholder="e.g. Switch 2, layoffs, Nolan" maxlength="100" required>
@@ -294,42 +327,36 @@
         </form>
         <div class="msg" id="watch_msg"></div>
         <ul class="phrases" id="phrases"></ul>
-        <label class="check"><input type="checkbox" id="s_only_watched"> Only show stories with a watched phrase</label>
-        <label class="check" style="margin-top:8px"><input type="checkbox" id="s_watched_any"> Show watched stories even if fewer outlets report them</label>
+        <label class="check"><input type="checkbox" id="p_only_watched"> Only show stories with a watched phrase</label>
+        <label class="check" style="margin-top:8px"><input type="checkbox" id="p_watched_any"> Show watched stories even if they don't meet a group's minimums</label>
       </div>
+    </div>
+  </section>
 
-      <div class="panel wide" id="outlets_panel">
-        <h2>Outlets (<span id="feed_count">0</span>)</h2>
-        <p class="intro">Your choices, saved in this browser: switch outlets on or off, mark ones a story must include,
-          and set your own prestige weight for each (1 = small blog, 5 = paper of record; 0–10 allowed).
-          “Catalog” under an outlet changes it for everyone (admin).</p>
-        <div class="msg" id="add_msg"></div>
+  <!-- ===== Settings: one vertical's catalog ===== -->
+  <section id="view_vertical" hidden>
+    <div class="grid">
+      <div class="panel wide">
+        <h2><span id="cat_title">Catalog</span> (<span id="feed_count">0</span> outlets)</h2>
+        <p class="intro">The outlets this vertical fetches, for everyone. Defaults apply to every group that hasn't set its own; groups choose which outlets they use under Settings › Groups.</p>
+        <form class="row" id="add_form">
+          <label for="feed_url" class="sr-only">Feed URL</label>
+          <input type="url" id="feed_url" placeholder="Add an RSS or Atom feed: https://example.com/rss.xml" required>
+          <button type="submit" id="add_btn">Add feed</button>
+        </form>
+        <div class="msg" id="admin_msg"></div>
         <div class="tools">
           <label for="feed_search" class="sr-only">Search outlets</label>
           <input type="search" id="feed_search" placeholder="Search outlets">
-          <button type="button" class="ghost" id="all_on">All on</button>
-          <button type="button" class="ghost" id="all_off">All off</button>
         </div>
-        <div class="using" id="using"></div>
         <ul class="feeds" id="feeds"></ul>
       </div>
-
-      <div class="panel wide" id="admin_panel">
-        <h2>Shared catalog (admin)</h2>
-        <p class="intro">Changes here apply to everyone using this server. From another machine they need the API token.</p>
-        <div class="fields">
-          <form class="row full" id="add_form">
-            <label for="feed_url" class="sr-only">Feed URL</label>
-            <input type="url" id="feed_url" placeholder="Add an RSS or Atom feed to this vertical: https://example.com/rss.xml" required>
-            <button type="submit" id="add_btn">Add feed</button>
-          </form>
-          <label class="field full">Match strictness for this vertical: <output id="threshold_out"></output>
-            <span class="wip" id="regrouping" hidden role="status">Re-grouping in progress…</span>
-            <input type="range" id="a_threshold" min="0.05" max="0.5" step="0.01">
-            <span class="hint">How similar headlines must be to count as one story. Lower groups loosely related headlines; higher only near-identical ones. Stories are re-grouped for everyone after a change.</span>
-          </label>
-        </div>
-        <div class="msg" id="admin_msg"></div>
+      <div class="panel wide">
+        <label class="field">Match strictness for this vertical: <output id="threshold_out"></output>
+          <span class="wip" id="regrouping" hidden role="status">Re-grouping in progress…</span>
+          <input type="range" id="a_threshold" min="0.05" max="0.5" step="0.01">
+          <span class="hint">How similar headlines must be to count as one story. Lower groups loosely related headlines; higher only near-identical ones. Stories are re-grouped for everyone after a change. A story's headlines are always within 24 hours of each other.</span>
+        </label>
       </div>
     </div>
   </section>
@@ -372,10 +399,11 @@ GET  /api/scrape/status</pre>
 </main>
 
 <script>
-// Consensus News: the browser does all per-viewer work.
-// The server publishes one shared digest per vertical and window (stories already grouped, with key
-// terms). Here we apply this viewer's settings, saved in localStorage: outlets on/off, weights,
-// required outlets, watched phrases, the "reported by" minimum, minimum score and the time window.
+// Consensus News.
+// The server groups headlines into stories and applies each filter group's settings once for everyone;
+// this page shows a group's stories. Only two things are per viewer, kept in this browser: watched
+// phrases (highlight, bonus, filters) and "last seen" (a story stays visible for an hour after it was
+// first shown here, then is hidden unless "Show seen" is on).
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : "#";
@@ -396,163 +424,138 @@ async function api(path, opts = {}) {
 }
 const patch = (path, body) => api(path, { method: "PATCH", body: JSON.stringify(body) });
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
+const del = (path) => api(path, { method: "DELETE" });
 
-let META = { verticals: [], default_weight: 2, max_weight: 10, default_bonus: 5, max_bonus: 100, windows: [48, 168, 720] };
+let META = { verticals: [], default_weight: 2, max_weight: 10, default_bonus: 5, max_bonus: 100, ai: {} };
+let GROUPS = [];
 const label = (key) => META.verticals.find((v) => v.key === key)?.label || key;
+const groupById = (id) => GROUPS.find((g) => g.id === id);
 
-// ---------- This viewer's preferences (localStorage) ----------
-const PREFS_KEY = "consensus-prefs-v1";
-let PREFS = {};
-try { PREFS = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") || {}; } catch { PREFS = {}; }
-function vp(v) {
-  PREFS[v] = PREFS[v] || {};
-  PREFS[v].settings = PREFS[v].settings || {};
-  PREFS[v].outlets = PREFS[v].outlets || {};
-  PREFS[v].phrases = PREFS[v].phrases || [];
-  return PREFS[v];
+// ---------- This viewer: watched phrases + options, and "last seen" (localStorage) ----------
+const PREFS_KEY = "consensus-prefs-v2", SEEN_KEY = "consensus-seen-v1", SEEN_BUFFER = 3600, SEEN_KEEP = 31 * 86400;
+function loadJson(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || "null") ?? fallback; } catch { return fallback; } }
+function saveJson(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+let PREFS = loadJson(PREFS_KEY, null);
+if (!PREFS) {   // carry over phrases from the per-vertical preferences of the previous version
+  PREFS = { phrases: [], only_watched: false, watched_any: false, show_seen: false, sort: "score" };
+  const old = loadJson("consensus-prefs-v1", {});
+  for (const v of Object.values(old || {})) for (const p of (v && v.phrases) || [])
+    if (!PREFS.phrases.some((q) => q.phrase.toLowerCase() === p.phrase.toLowerCase())) PREFS.phrases.push(p);
 }
-function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(PREFS)); } catch {} }
+const savePrefs = () => saveJson(PREFS_KEY, PREFS);
+let SEEN = loadJson(SEEN_KEY, {});
+(() => { const cut = Date.now() / 1000 - SEEN_KEEP; for (const k in SEEN) if (SEEN[k] < cut) delete SEEN[k]; })();
 
-// ---------- Shared digests ----------
-const DIGESTS = new Map();   // "v:window" -> {data, at}
-const windowFor = (h) => META.windows.find((w) => h <= w) ?? META.windows[META.windows.length - 1];
-async function getDigest(v, hours, force = false) {
-  const w = windowFor(hours), key = `${v}:${w}`, hit = DIGESTS.get(key);
-  if (hit && !force && Date.now() - hit.at < 55000) return hit.data;
-  // The browser may reuse its copy for up to a minute; forced reloads revalidate (a 304 when unchanged).
-  const res = await fetch(`/api/${v}/digest?hours=${w}`, force ? { cache: "no-cache" } : {});
+// When was this story first shown in this browser? Records it now when it's on screen.
+function firstShown(s, now, visible) {
+  let first = Infinity;
+  for (const h of s.h) if (SEEN[h] !== undefined && SEEN[h] < first) first = SEEN[h];
+  if (first === Infinity) first = now;
+  if (visible) for (const h of s.h) if (SEEN[h] === undefined) { SEEN[h] = first; seenDirty = true; }
+  return first;
+}
+let seenDirty = false;
+function saveSeen() { if (seenDirty) { saveJson(SEEN_KEY, SEEN); seenDirty = false; } }
+
+// ---------- Group views (built and cached by the server) ----------
+const VIEWS = new Map();   // group id -> {data, at}
+async function getView(gid, force = false) {
+  const hit = VIEWS.get(gid);
+  if (hit && !force && Date.now() - hit.at < 25000) return hit.data;
+  const res = await fetch(`/api/groups/${gid}/stories`, force ? { cache: "no-cache" } : {});
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   const data = await res.json();
-  DIGESTS.set(key, { data, at: Date.now() });
+  VIEWS.set(gid, { data, at: Date.now() });
   return data;
 }
-function forgetDigests(v) { for (const k of [...DIGESTS.keys()]) if (k.startsWith(v + ":")) DIGESTS.delete(k); }
 
-// Effective settings and outlet choices: the digest's defaults, overridden by this viewer's.
-const settingsFor = (v, d) => ({ ...d.defaults, ...vp(v).settings });
-function outletState(v, o) {
-  const p = vp(v).outlets[o.id] || {};
-  return { on: p.on ?? o.enabled, req: p.req ?? o.required, w: p.w ?? o.weight };
-}
-
-// ---------- Per-viewer story computation ----------
+// ---------- Watched phrases applied to a view ----------
 const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const phraseSource = (p) => p.trim().split(/\s+/).map(reEsc).join("\\s+");
 const wordRe = (src, flags = "iu") => new RegExp(`(?<![\\p{L}\\p{N}_])(?:${src})(?![\\p{L}\\p{N}_])`, flags);
-// Headlines labelled as a format rather than the news itself ("Opinion |", "WATCH:").
-const LABELLED = /^\s*(opinion|op-ed|watch|video|videos|listen|podcast|live|live updates|analysis|editorial|explainer|review|reviews|preview|quiz|letters?|photos?|in pictures|the latest|perspective|column|commentary|interview|recap)\b\s*[:|\-–—]/i;
-
 function snippetAround(text, m) {
   let start = Math.max(0, m.index - 70), end = Math.min(text.length, m.index + m[0].length + 110);
   if (start > 0) start = text.indexOf(" ", start) + 1 || start;
   if (end < text.length) { const sp = text.lastIndexOf(" ", end); if (sp > m.index + m[0].length) end = sp; }
   return (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
 }
-
-// Outlets that can count toward "reported by at least": switched on and weighted at least min_weight.
-// In percent mode the percentage is of these.
-function countable(v, digest, cfg) {
-  return digest.outlets.filter((o) => { const me = outletState(v, o); return me.on && me.w >= (cfg.min_weight || 0); }).length;
-}
-const minOutlets = (cfg, n) => cfg.min_feeds_mode === "percent" ? Math.max(1, Math.ceil(cfg.min_feeds_percent / 100 * n)) : cfg.min_feeds;
-const outletsText = (cfg, n) => `${n} enabled outlet${n === 1 ? "" : "s"}${cfg.min_weight > 0 ? ` weighted ≥ ${fmt(cfg.min_weight)}` : ""}`;
-
-function computeStories(v, digest, cfg) {
-  const now = Date.now() / 1000, cut = now - cfg.hours * 3600;
-  const outlets = new Map(digest.outlets.map((o) => [o.id, { ...o, ...outletState(v, o) }]));
-  const enabled = countable(v, digest, cfg);
-  const minN = minOutlets(cfg, enabled);
-  const required = new Set([...outlets.values()].filter((o) => o.req).map((o) => o.id));
-  const phrases = vp(v).phrases.map((p) => ({ ...p, re: wordRe(phraseSource(p.phrase)) }));
+function personalize(view) {
+  const phrases = PREFS.phrases.map((p) => ({ ...p, re: wordRe(phraseSource(p.phrase)) }));
+  const useAi = view.ai && view.ai.on;
   const out = [];
-  for (const st of digest.stories) {
-    const srcs = st.s.filter((x) => x.p >= cut && outlets.get(x.f)?.on);
-    if (!srcs.length) continue;
-    if (required.size) {
-      const have = new Set(srcs.map((x) => x.f).filter((f) => required.has(f)));
-      if (!have.size || (cfg.require_all && have.size < required.size)) continue;
-    }
-    const weight = (x) => outlets.get(x.f).w;
-    const counted = srcs.filter((x) => weight(x) >= cfg.min_weight);
-    if (!counted.length) continue;
-    const base = counted.reduce((t, x) => t + weight(x), 0);
+  for (const st of view.stories) {
     const hits = [], snippets = new Map(), watchedSrc = new Set();
     for (const p of phrases) {
       let found = false;
-      for (const x of srcs) {
+      for (const x of st.s) {
         if (p.re.test(x.t)) { found = true; watchedSrc.add(x); continue; }
         const m = x.d && x.d.match(p.re);
         if (m) { found = true; watchedSrc.add(x); if (!snippets.has(x)) snippets.set(x, snippetAround(x.d, m)); }
       }
       if (found) hits.push(p);
     }
-    if (cfg.only_watched && !hits.length) continue;
-    const bonus = hits.reduce((t, p) => t + p.bonus, 0), score = base + bonus;
-    if (!(hits.length && cfg.watched_any) && (counted.length < minN || score < cfg.min_score)) continue;
-    // Headline: the shortest one among counted outlets (4+ words, not a labelled format piece).
-    const pool = counted.filter((x) => x.t.split(/\s+/).length >= 4);
-    const plain = (pool.length ? pool : counted).filter((x) => !LABELLED.test(x.t));
-    const lead = (plain.length ? plain : (pool.length ? pool : counted))
-      .reduce((a, b) => (b.t.length < a.t.length || (b.t.length === a.t.length && weight(b) > weight(a)) ? b : a));
-    const best = [...srcs].sort((a, b) => weight(b) - weight(a) || b.p - a.p);
-    const desc = lead.d || best.find((x) => x.d)?.d || "";
-    const image = lead.i || best.find((x) => x.i)?.i || "";
-    const ordered = [lead, ...srcs.filter((x) => x !== lead).sort((a, b) => weight(b) - weight(a) || a.p - b.p)];
+    if (PREFS.only_watched && !hits.length) continue;
+    if (st.x && !(hits.length && PREFS.watched_any)) continue;   // below the group's minimums
+    const bonus = hits.reduce((t, p) => t + p.bonus, 0);
     out.push({
-      vertical: v, id: st.id, title: lead.t,
-      lead: { feed: outlets.get(lead.f).name, link: lead.l, weight: weight(lead), description: desc, image },
-      coverage: counted.length, outlets: srcs.length, base_score: base, bonus, score,
-      watched: hits.map((p) => ({ phrase: p.phrase, bonus: p.bonus })),
-      first_seen: Math.min(...srcs.map((x) => x.p)), latest: Math.max(...srcs.map((x) => x.p)),
+      id: st.id, vertical: st.v, h: st.h, title: useAi && st.a ? st.a : st.t, ai: !!(useAi && st.a), original: st.t,
+      lead: { feed: st.f, link: st.l, description: st.d, image: st.i },
+      coverage: st.cov, outlets: st.n, base_score: st.sc, bonus, score: st.sc + bonus,
+      watched: hits.map((p) => ({ phrase: p.phrase, bonus: p.bonus })), first_seen: st.p, latest: st.u,
       keywords: (st.k || []).map((k) => ({ term: k.t, weight: k.w, forms: k.f })),
-      sources: ordered.map((x) => ({ feed: outlets.get(x.f).name, title: x.t, link: x.l, published: x.p, weight: weight(x),
-                                     watched: watchedSrc.has(x), snippet: snippets.get(x) || "", counted: weight(x) >= cfg.min_weight })),
+      sources: st.s.map((x) => ({ feed: x.o, title: x.t, link: x.l, published: x.p, weight: x.w, counted: x.c,
+                                  watched: watchedSrc.has(x), snippet: snippets.get(x) || "" })),
     });
   }
-  return { stories: out, minN, enabled, scanned: digest.stories.length };
+  return out;
 }
 
-// ---------- Routing: #stories/<all|vertical>  and  #settings/<vertical|scraping> ----------
-let route = { top: "stories", sub: "all" };
+// ---------- Routing: #stories/<group>  and  #settings/<groups[/id]|phrases|vertical|scraping> ----------
+let route = { top: "stories", sub: null };
 function parseHash() {
-  const [top, sub] = location.hash.replace(/^#/, "").split("/");
-  const keys = META.verticals.map((v) => v.key);
-  if (top === "settings") return { top, sub: sub === "scraping" || keys.includes(sub) ? sub : "scraping" };
-  return { top: "stories", sub: sub === "all" || keys.includes(sub) ? sub : "all" };
+  const [top, sub, extra] = location.hash.replace(/^#/, "").split("/");
+  if (top === "settings") {
+    if (sub === "groups") return { top, sub, gid: Number(extra) || GROUPS[0]?.id || null };
+    if (sub === "phrases" || sub === "scraping" || META.verticals.some((v) => v.key === sub)) return { top, sub };
+    return { top, sub: "groups", gid: GROUPS[0]?.id || null };
+  }
+  const gid = Number(sub);
+  return { top: "stories", sub: groupById(gid) ? gid : GROUPS[0]?.id ?? null };
 }
+const SECTIONS = ["view_stories", "view_groups", "view_phrases", "view_vertical", "view_scraping"];
 function render() {
   route = parseHash();
   document.querySelectorAll("#top_tabs a").forEach((a) => {
     const on = a.dataset.top === route.top;
     a.classList.toggle("active", on); on ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current");
   });
-  document.querySelector('#top_tabs a[data-top="' + route.top + '"]').setAttribute("href", "#" + route.top + "/" + route.sub);
-  const subs = route.top === "stories"
-    ? [["all", "All"], ...META.verticals.map((v) => [v.key, v.label])]
-    : [...META.verticals.map((v) => [v.key, v.label]), ["scraping", "Scraping"]];
-  $("sub_tabs").innerHTML = subs.map(([k, l]) => `<a href="#${route.top}/${k}" ${k === route.sub ? 'class="active" aria-current="page"' : ""}>${esc(l)}</a>`).join("");
-  $("view_stories").hidden = route.top !== "stories";
-  $("view_vertical").hidden = !(route.top === "settings" && route.sub !== "scraping");
-  $("view_scraping").hidden = !(route.top === "settings" && route.sub === "scraping");
-  document.title = (route.top === "stories" ? (route.sub === "all" ? "All stories" : label(route.sub))
-                    : "Settings · " + (route.sub === "scraping" ? "Scraping" : label(route.sub))) + " · Consensus News";
+  document.querySelector('#top_tabs a[data-top="stories"]').setAttribute("href", "#stories/" + (route.top === "stories" ? route.sub : GROUPS[0]?.id ?? ""));
+  const subs = route.top === "stories" ? GROUPS.map((g) => [String(g.id), g.name])
+    : [["groups", "Groups"], ["phrases", "Watched phrases"], ...META.verticals.map((v) => [v.key, v.label]), ["scraping", "Scraping"]];
+  $("sub_tabs").innerHTML = subs.map(([k, l]) => `<a href="#${route.top}/${k}" ${k === String(route.sub) ? 'class="active" aria-current="page"' : ""}>${esc(l)}</a>`).join("");
+  const show = route.top === "stories" ? "view_stories" : { groups: "view_groups", phrases: "view_phrases", scraping: "view_scraping" }[route.sub] || "view_vertical";
+  SECTIONS.forEach((id) => { $(id).hidden = id !== show; });
+  const g = groupById(route.sub);
+  document.title = (route.top === "stories" ? (g ? g.name : "Stories")
+    : "Settings · " + ({ groups: "Groups", phrases: "Watched phrases", scraping: "Scraping" }[route.sub] || label(route.sub))) + " · Consensus News";
+  V = null;
   if (route.top === "stories") {
-    V = null; lastStoriesJson = ""; activeTerm = null; $("stories").innerHTML = ""; $("cloud").hidden = true;
-    $("summary").textContent = "Loading…"; loadStories(true);
-  } else if (route.sub === "scraping") { V = null; loadScrape(); }
+    lastStoriesJson = ""; activeTerm = null; $("stories").innerHTML = ""; $("summary").textContent = "Loading…"; loadStories(true);
+  } else if (route.sub === "groups") openGroup(route.gid);
+  else if (route.sub === "phrases") renderPhrases();
+  else if (route.sub === "scraping") loadScrape();
   else openVertical(route.sub);
 }
 window.addEventListener("hashchange", render);
 
 // ---------- Stories view ----------
 let storiesSeq = 0, lastStoriesJson = "";
-try { $("sort").value = localStorage.getItem("news-sort") || "score"; } catch {}
-$("sort").addEventListener("change", () => { try { localStorage.setItem("news-sort", $("sort").value); } catch {} loadStories(true); });
+$("sort").value = PREFS.sort || "score";
+$("show_seen").checked = !!PREFS.show_seen;
+$("sort").addEventListener("change", () => { PREFS.sort = $("sort").value; savePrefs(); loadStories(true); });
+$("show_seen").addEventListener("change", () => { PREFS.show_seen = $("show_seen").checked; savePrefs(); loadStories(true); });
 
-function phraseRe(phrases) {
-  if (!phrases.length) return null;
-  return wordRe(phrases.map(phraseSource).join("|"), "giu");
-}
+function phraseRe(phrases) { return phrases.length ? wordRe(phrases.map(phraseSource).join("|"), "giu") : null; }
 function hl(text, re) {
   text = String(text ?? "");
   if (!re) return esc(text);
@@ -562,10 +565,8 @@ function hl(text, re) {
 }
 const storyKey = (s) => s.vertical + "|" + s.id;
 const windowText = (h) => h >= 48 && h % 24 === 0 ? `${h / 24} days` : `${fmt(h)} hours`;
-
-let activeTerm = null, lastStories = [], shownStories = [], summaryBase = "";   // activeTerm: {term, forms}
+let activeTerm = null, lastStories = [], shownStories = [], summaryBase = "", multiVertical = false;
 const openStories = new Set();
-$("cloud").hidden = true;   // the per-story key term is shown inline instead
 function termRe(t) {
   const parts = t.term.includes(" ") ? [t.term.split(/\s+/).map(reEsc).join("\\W+")] : [...new Set([t.term, ...(t.forms || [])])].map(reEsc);
   return wordRe(parts.join("|"));
@@ -574,58 +575,72 @@ const mentions = (s, re) => re.test(s.title) || re.test(s.lead.description || ""
 function toggleTerm(t) {
   if (!t) return;
   activeTerm = activeTerm && activeTerm.term.toLowerCase() === t.term.toLowerCase() ? null : { term: t.term, forms: t.forms || [] };
-  renderStoryList(lastStories, route.sub, true);
+  renderStoryList(lastStories, true);
   if (activeTerm) $("view_stories").scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
+function describeGroup(view) {
+  const g = view.group, c = g.settings, mins = Object.values(view.min_outlets);
+  const lo = Math.min(...mins), hi = Math.max(...mins);
+  const n = lo === hi ? `${lo}` : `${lo}–${hi}`;
+  const how = c.min_feeds_mode === "percent" ? ` (${fmt(c.min_feeds_percent)}% of the outlets that count)` : "";
+  return `reported by ≥ ${n} outlet${hi === 1 ? "" : "s"}${how} in the last ${windowText(c.hours)}`;
+}
 async function loadStories(force = false) {
-  if (route.top !== "stories") return;
-  const sub = route.sub, seq = ++storiesSeq;
-  const keys = sub === "all" ? META.verticals.map((v) => v.key) : [sub];
-  let results;
-  try {
-    results = await Promise.all(keys.map(async (v) => {
-      const d0 = await getDigest(v, vp(v).settings.hours ?? 48);
-      const cfg = settingsFor(v, d0);
-      const d = windowFor(cfg.hours) === d0.window_hours ? d0 : await getDigest(v, cfg.hours);
-      return { v, cfg, ...computeStories(v, d, cfg) };
-    }));
-  } catch (e) {
+  if (route.top !== "stories" || route.sub == null) {
+    if (route.top === "stories") $("summary").textContent = "No groups yet. Create one under Settings › Groups.";
+    return;
+  }
+  const gid = route.sub, seq = ++storiesSeq;
+  let view;
+  try { view = await getView(gid, force); }
+  catch (e) {
     if (seq !== storiesSeq) return;
     $("summary").textContent = "Couldn't load stories: " + e.message; $("stories").innerHTML = ""; lastStoriesJson = "";
     return;
   }
-  if (seq !== storiesSeq || route.top !== "stories" || route.sub !== sub) return;
-  const stories = results.flatMap((r) => r.stories);
-  if ($("sort").value === "latest") stories.sort((a, b) => b.latest - a.latest);
+  if (seq !== storiesSeq || route.top !== "stories" || route.sub !== gid) return;
+  multiVertical = view.group.verticals.length > 1;
+  let stories = personalize(view);
+  if (PREFS.sort === "latest") stories.sort((a, b) => b.latest - a.latest);
   else stories.sort((a, b) => b.score - a.score || b.coverage - a.coverage || b.latest - a.latest);
-  if (sub === "all") {
-    summaryBase = `${stories.length} stories across ${keys.length} verticals · each vertical uses your settings for it`;
-  } else {
-    const r = results[0], c = r.cfg;
-    const how = c.min_feeds_mode === "percent" ? ` (${fmt(c.min_feeds_percent)}% of ${outletsText(c, r.enabled)})` : "";
-    summaryBase = `${stories.length} stories reported by ≥ ${r.minN} outlet${r.minN === 1 ? "" : "s"}${how} in the last ${windowText(c.hours)}`;
-  }
-  const json = JSON.stringify(stories.map((s) => [s.id, s.score, s.coverage, s.latest]));
+  // Last seen: hide stories first shown here more than an hour ago.
+  const now = Date.now() / 1000, visible = document.visibilityState === "visible";
+  let hidden = 0;
+  stories = stories.filter((s) => {
+    s.firstShown = firstShown(s, now, visible);
+    s.seen = now - s.firstShown > SEEN_BUFFER;
+    if (s.seen && !PREFS.show_seen) { hidden++; return false; }
+    return true;
+  });
+  saveSeen();
+  const fresh = stories.filter((s) => !s.seen).length;
+  let ai = "";
+  if (view.ai.on) ai = !view.ai.available ? ` · AI headlines unavailable: ${view.ai.reason}`
+    : view.ai.pending ? ` · AI headlines: ${view.ai.pending} being written` : "";
+  summaryBase = `${fresh} new stor${fresh === 1 ? "y" : "ies"}${PREFS.show_seen ? ` + ${stories.length - fresh} seen` : hidden ? ` · ${hidden} seen hidden` : ""} · ${describeGroup(view)}${ai}`;
+  const json = JSON.stringify(stories.map((s) => [s.id, s.score, s.coverage, s.latest, s.title, s.seen]));
   if (!force && json === lastStoriesJson) { if (!activeTerm) $("summary").textContent = summaryBase; return; }
   lastStoriesJson = json;
-  renderStoryList(stories, sub, force);
+  renderStoryList(stories, force, hidden);
 }
 
-function renderStoryList(allStories, sub, force) {
+function renderStoryList(allStories, force, hidden = 0) {
   lastStories = allStories;
   let stories = allStories;
   if (activeTerm) {
     const re = termRe(activeTerm);
     stories = allStories.filter((s) => mentions(s, re));
     $("summary").innerHTML = `${stories.length} of ${allStories.length} stories mention “${esc(activeTerm.term)}” · <button type="button" class="clear" id="clear_term">Show all</button>`;
-    $("clear_term").addEventListener("click", () => { activeTerm = null; renderStoryList(lastStories, route.sub, true); });
+    $("clear_term").addEventListener("click", () => { activeTerm = null; renderStoryList(lastStories, true); });
   } else {
     $("summary").textContent = summaryBase;
   }
   if (!stories.length) {
-    $("stories").innerHTML = `<div class="empty">No stories match your settings yet.<br>
-      <a href="#settings/${sub === "all" ? META.verticals[0].key : sub}">Adjust them in Settings</a>, or check back after the next refresh.</div>`;
+    $("stories").innerHTML = hidden && !PREFS.show_seen
+      ? `<div class="empty">You're up to date: every story here was first shown more than an hour ago.<br><button type="button" class="clear" id="reveal_seen">Show seen stories</button></div>`
+      : `<div class="empty">No stories match this group yet.<br><a href="#settings/groups/${route.sub}">Adjust the group in Settings</a>, or check back after the next refresh.</div>`;
+    $("reveal_seen")?.addEventListener("click", () => { $("show_seen").checked = true; $("show_seen").dispatchEvent(new Event("change")); });
     return;
   }
   shownStories = stories;
@@ -634,22 +649,24 @@ function renderStoryList(allStories, sub, force) {
     const key = storyKey(s), isOpen = openStories.has(key);
     const pressed = (t) => !!activeTerm && activeTerm.term.toLowerCase() === t.toLowerCase();
     return `
-    <article class="story${s.watched.length ? " watched" : ""}${isOpen ? " open" : ""}" data-idx="${idx}" data-key="${esc(key)}">
+    <article class="story${s.watched.length ? " watched" : ""}${s.seen ? " seen" : ""}${isOpen ? " open" : ""}" data-idx="${idx}" data-key="${esc(key)}">
       <div class="row">
         <div class="story-text">
           <h3>${(s.keywords || []).length ? `<button type="button" class="kw" data-kw="0" aria-pressed="${pressed(s.keywords[0].term)}"
                 title="Show stories mentioning ${esc(s.keywords[0].term)}">${esc(s.keywords[0].term)}</button><span class="kw-sep">:</span> ` : ""}${
-            s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${hl(s.title, re)}</a>` : hl(s.title, re)}</h3>
+            s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${hl(s.title, re)}</a>` : hl(s.title, re)}${
+            s.ai ? `<span class="aibadge" title="Written by AI from ${s.outlets} outlets' headlines">AI</span>` : ""}</h3>
         </div>
         <button type="button" class="expand" aria-expanded="${isOpen}" aria-label="${isOpen ? "Hide" : "Show"} details">▾</button>
       </div>
       <div class="more" ${isOpen ? "" : "hidden"}>
         <div class="more-head">
           <div class="story-text">
-            <div class="meta">${sub === "all" ? `<span class="vtag">${esc(label(s.vertical))}</span>` : ""}
+            <div class="meta">${multiVertical ? `<span class="vtag">${esc(label(s.vertical))}</span>` : ""}
               <span title="${s.coverage} counted outlet${s.coverage === 1 ? "" : "s"}${s.outlets > s.coverage ? ` (of ${s.outlets})` : ""}"><strong>${s.coverage}</strong> outlets</span>
               <span title="prestige ${fmt(s.base_score)}${s.bonus ? ` + ${fmt(s.bonus)} watched bonus` : ""}">★ ${fmt(s.score)}</span>
-              <span class="lead">${esc(s.lead.feed)}</span><span>first seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</span></div>
+              <span class="lead">${esc(s.lead.feed)}</span><span>first published ${ago(s.first_seen)} · latest ${ago(s.latest)}</span>
+              ${s.seen ? `<span>seen ${ago(s.firstShown)}</span>` : ""}</div>
             ${s.lead.description ? `<p class="desc">${hl(s.lead.description, re)}</p>` : ""}
             ${s.watched.length ? `<div class="chips">${s.watched.map((w) => `<span class="chip">Watched: ${esc(w.phrase)} +${fmt(w.bonus)}</span>`).join("")}</div>` : ""}
           </div>
@@ -665,7 +682,6 @@ function renderStoryList(allStories, sub, force) {
     </article>`;
   }).join("");
 }
-
 function setOpen(article, open) {
   const key = article.dataset.key;
   open ? openStories.add(key) : openStories.delete(key);
@@ -688,230 +704,314 @@ $("stories").addEventListener("click", (e) => {
   toggleTerm(s?.keywords?.[Number(b.dataset.kw)]);
 });
 
-// ---------- Settings: one vertical (your settings, saved in this browser) ----------
-const S_FIELDS = ["min_feeds", "min_feeds_mode", "min_feeds_percent", "hours", "min_score", "min_weight",
-                  "only_watched", "watched_any", "require_all"];
-const S_BOOL = new Set(["only_watched", "watched_any"]);
-let V = null, VDIGEST = null, vSeq = 0;
-
-function showSettings(cfg) {
-  S_FIELDS.forEach((k) => {
-    const el = $("s_" + k);
-    if (el === document.activeElement) return;  // don't fight the user's typing
-    if (S_BOOL.has(k)) el.checked = !!cfg[k];
-    else if (k === "require_all") el.value = String(!!cfg[k]);
-    else if (k === "min_feeds_mode") el.value = cfg[k];
-    else if (k === "hours") {
-      if (![...el.options].some((o) => Number(o.value) === cfg.hours)) el.add(new Option(`${fmt(cfg.hours)} hours`, cfg.hours));
-      el.value = String(cfg.hours);
-    } else el.value = fmt(cfg[k]);
-  });
-  const pct = cfg.min_feeds_mode === "percent";
-  $("s_min_feeds").hidden = pct; $("s_min_feeds_percent").hidden = !pct;
-  if (VDIGEST) {
-    const enabled = countable(V, VDIGEST, cfg), n = minOutlets(cfg, enabled);
-    $("min_feeds_hint").textContent = pct ? `= ${n} of ${outletsText(cfg, enabled)} (rounded up)` : `of ${outletsText(cfg, enabled)}`;
-    $("grouping_info").textContent = `Headlines are grouped into stories for everyone (match strictness ${Number(VDIGEST.threshold).toFixed(2)}; digest updated ${ago(VDIGEST.generated_at)}). Stories from a single outlet aren't included.`;
-    $("regrouping").hidden = !REGROUPING.has(V);
-    const th = PENDING_THRESHOLD.get(V) ?? VDIGEST.threshold;   // a just-saved value wins until the rebuild lands
-    $("threshold_out").textContent = Number(th).toFixed(2);
-    if (document.activeElement !== $("a_threshold")) $("a_threshold").value = th;
-  }
+// ---------- Settings › Groups (shared; saved on the server) ----------
+let G = null, gSeq = 0, savedTimer;
+const CATALOG = new Map();   // vertical -> feeds from /api/<v>/feeds
+async function catalog(v, force = false) {
+  if (!force && CATALOG.has(v)) return CATALOG.get(v);
+  const d = await api(`/api/${v}/feeds`);
+  const list = d.feeds.map((f) => ({ ...f, name: f.name || f.title || f.url, weight: f.weight ?? META.default_weight }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  CATALOG.set(v, list);
+  return list;
 }
-function readSetting(k) {
-  const el = $("s_" + k);
-  if (S_BOOL.has(k)) return el.checked;
-  if (k === "require_all") return el.value === "true";
-  if (k === "min_feeds_mode") return el.value;
-  return el.value === "" ? NaN : Number(el.value);
+async function refreshGroups() { const d = await api("/api/groups"); GROUPS = d.groups; META.ai = d.ai; }
+function renderGroupList() {
+  $("glist").innerHTML = GROUPS.map((g, i) => `<li class="${G && g.id === G.id ? "active" : ""}">
+      <a href="#settings/groups/${g.id}">${esc(g.name)}</a>
+      <span class="gsub">${g.verticals.map(label).map(esc).join(", ")}${g.ai_summary ? ` · <span class="aibadge">AI</span>` : ""}</span>
+      <span class="gmove"><button class="ghost" data-move="${g.id}" data-dir="-1" ${i === 0 ? "disabled" : ""} aria-label="Move ${esc(g.name)} up">↑</button><button class="ghost" data-move="${g.id}" data-dir="1" ${i === GROUPS.length - 1 ? "disabled" : ""} aria-label="Move ${esc(g.name)} down">↓</button></span></li>`).join("");
 }
-const LIMITS = { min_feeds: [1, 100], min_feeds_percent: [1, 100], hours: [1, 720], min_score: [0, 10000], min_weight: [0, 10] };
-let savedTimer;
-function saveSetting(k) {
-  const val = readSetting(k);
-  if (typeof val === "number") {
-    if (!Number.isFinite(val)) return;
-    const [lo, hi] = LIMITS[k]; if (val < lo || val > hi) return;
-  }
-  vp(V).settings[k] = k === "min_feeds" ? Math.round(val) : val;
-  savePrefs();
-  showSettings(settingsFor(V, VDIGEST));
-  $("saved").hidden = false; clearTimeout(savedTimer); savedTimer = setTimeout(() => ($("saved").hidden = true), 1500);
+async function openGroup(gid) {
+  const my = ++gSeq;
+  $("g_msg").textContent = "";
+  try { await refreshGroups(); } catch (e) { $("glist_msg").className = "msg err"; $("glist_msg").textContent = "Couldn't load groups: " + e.message; return; }
+  if (my !== gSeq) return;
+  G = groupById(gid) || GROUPS[0] || null;
+  renderGroupList();
+  $("g_editor").hidden = !G;
+  if (!G) return;
+  showGroup();
+  await renderGroupOutlets();
+  updateGroupHints();
 }
-$("s_min_feeds_mode").addEventListener("change", (e) => {
-  const pct = e.target.value === "percent";
-  $("s_min_feeds").hidden = pct; $("s_min_feeds_percent").hidden = !pct;
-});
-S_FIELDS.forEach((k) => {
-  const el = $("s_" + k);
-  el.addEventListener(S_BOOL.has(k) || el.tagName === "SELECT" ? "change" : "input", () => { if (V && VDIGEST) saveSetting(k); });
-});
-$("reset_settings").addEventListener("click", () => {
-  if (!V) return;
-  vp(V).settings = {}; savePrefs(); showSettings(settingsFor(V, VDIGEST));
-  $("settings_msg").className = "msg ok"; $("settings_msg").textContent = "Back to this vertical's defaults.";
-});
-
-async function openVertical(key) {
-  V = key; VDIGEST = null; const my = ++vSeq;
-  $("feeds").innerHTML = ""; $("phrases").innerHTML = ""; $("feed_count").textContent = "…"; $("using").textContent = "";
-  $("add_msg").textContent = ""; $("watch_msg").textContent = ""; $("settings_msg").textContent = ""; $("admin_msg").textContent = "";
-  $("feed_search").value = ""; $("required_note").hidden = true;
+function showGroup() {
+  const c = G.settings;
+  $("g_title").textContent = G.name;
+  if (document.activeElement !== $("g_name")) $("g_name").value = G.name;
+  $("g_verticals").innerHTML = META.verticals.map((v) => `<label class="check inline"><input type="checkbox" data-gv="${v.key}" ${G.verticals.includes(v.key) ? "checked" : ""}> ${esc(v.label)}</label>`).join("");
+  for (const k of ["min_feeds", "min_feeds_percent", "min_weight", "min_score"]) if (document.activeElement !== $("g_" + k)) $("g_" + k).value = fmt(c[k]);
+  $("g_min_feeds_mode").value = c.min_feeds_mode;
+  const pct = c.min_feeds_mode === "percent";
+  $("g_min_feeds").hidden = pct; $("g_min_feeds_percent").hidden = !pct;
+  const h = $("g_hours");
+  if (![...h.options].some((o) => Number(o.value) === c.hours)) h.add(new Option(`${fmt(c.hours)} hours`, c.hours));
+  h.value = String(c.hours);
+  $("g_require_all").value = String(!!c.require_all);
+  $("g_ai").checked = !!G.ai_summary;
+  const ai = META.ai || {};
+  $("g_ai_note").textContent = "Claude writes one short headline per story from all its outlets' headlines, shown instead of the shortest outlet headline. "
+    + (ai.available ? `Model: ${ai.model}; up to ${ai.max_per_day} new headlines a day across groups.` : `Not available on this server: ${ai.reason || "not set up"}.`);
+  $("g_delete").disabled = GROUPS.length <= 1;
+}
+async function updateGroupHints() {
+  if (!G) return;
+  const gid = G.id;
   try {
-    const d = await getDigest(key, vp(key).settings.hours ?? 48);
-    if (my !== vSeq) return;
-    VDIGEST = d;
-  } catch (e) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = "Couldn't load this vertical: " + e.message; return; }
-  showSettings(settingsFor(key, VDIGEST));
-  renderPhrases(); renderOutlets(true);
+    const view = await getView(gid, true);
+    if (!G || G.id !== gid) return;
+    const c = G.settings, parts = G.verticals.map((v) => `${label(v)}: ${view.min_outlets[v]} of ${view.countable[v]}`);
+    $("g_min_hint").textContent = `${c.min_feeds_mode === "percent" ? "Rounded up. " : ""}Needed of the outlets that count — ${parts.join(" · ")}`;
+  } catch { $("g_min_hint").textContent = ""; }
 }
+async function saveGroup(change, rerenderOutlets = false) {
+  if (!G) return;
+  const gid = G.id;
+  try {
+    const d = await patch(`/api/groups/${gid}`, change);
+    const i = GROUPS.findIndex((g) => g.id === gid);
+    if (i >= 0) GROUPS[i] = d.group;
+    VIEWS.delete(gid);
+    if (!G || G.id !== gid) return;
+    G = d.group; $("g_msg").textContent = "";
+    showGroup(); renderGroupList();
+    if (rerenderOutlets) await renderGroupOutlets();
+    $("g_saved").hidden = false; clearTimeout(savedTimer); savedTimer = setTimeout(() => ($("g_saved").hidden = true), 1500);
+    updateGroupHints();
+  } catch (e) { $("g_msg").className = "msg err"; $("g_msg").textContent = "Couldn't save: " + e.message; showGroup(); }
+}
+$("g_name").addEventListener("change", () => saveGroup({ name: $("g_name").value }));
+$("g_verticals").addEventListener("change", () => {
+  const vs = [...document.querySelectorAll("#g_verticals input:checked")].map((i) => i.dataset.gv);
+  if (!vs.length) { $("g_msg").className = "msg err"; $("g_msg").textContent = "A group needs at least one vertical."; return showGroup(); }
+  saveGroup({ verticals: vs }, true);
+});
+$("g_min_feeds_mode").addEventListener("change", (e) => saveGroup({ settings: { min_feeds_mode: e.target.value } }));
+for (const k of ["min_feeds", "min_feeds_percent", "min_weight", "min_score"]) {
+  $("g_" + k).addEventListener("change", (e) => {
+    const n = Number(e.target.value);
+    if (e.target.value === "" || !Number.isFinite(n)) return showGroup();
+    saveGroup({ settings: { [k]: k === "min_feeds" ? Math.round(n) : n } });
+  });
+}
+$("g_hours").addEventListener("change", (e) => saveGroup({ settings: { hours: Number(e.target.value) } }));
+$("g_require_all").addEventListener("change", (e) => saveGroup({ settings: { require_all: e.target.value === "true" } }));
+$("g_ai").addEventListener("change", (e) => saveGroup({ ai_summary: e.target.checked }));
+$("g_delete").addEventListener("click", async () => {
+  if (!G || !confirm(`Delete the group “${G.name}” for everyone?`)) return;
+  try { await del(`/api/groups/${G.id}`); VIEWS.delete(G.id); await refreshGroups(); location.hash = "#settings/groups"; render(); }
+  catch (e) { $("g_msg").className = "msg err"; $("g_msg").textContent = "Couldn't delete: " + e.message; }
+});
+$("g_new").addEventListener("click", async () => {
+  const base = G || GROUPS[0];
+  const body = { name: "New group", verticals: base ? [...base.verticals] : [META.verticals[0].key], settings: base ? { ...base.settings } : {} };
+  try { const d = await post("/api/groups", body); await refreshGroups(); location.hash = `#settings/groups/${d.group.id}`; }
+  catch (e) { $("glist_msg").className = "msg err"; $("glist_msg").textContent = "Couldn't create a group: " + e.message; }
+});
+$("glist").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-move]");
+  if (!b) return;
+  const i = GROUPS.findIndex((g) => g.id === Number(b.dataset.move)), j = i + Number(b.dataset.dir);
+  if (i < 0 || j < 0 || j >= GROUPS.length) return;
+  const order = [...GROUPS]; [order[i], order[j]] = [order[j], order[i]];
+  try {
+    await Promise.all(order.map((g, pos) => g.position === pos ? null : patch(`/api/groups/${g.id}`, { position: pos })));
+    await refreshGroups(); renderGroupList();
+  } catch (err) { $("glist_msg").className = "msg err"; $("glist_msg").textContent = "Couldn't reorder: " + err.message; }
+});
 
-// Watched phrases (this browser)
+// A group's outlets: on/off, required and weight, defaulting to the vertical's catalog.
+function outletState(v, o) {
+  const p = (G.outlets[v] || {})[o.id] || {};
+  return { on: p.on ?? !!o.enabled, req: p.req ?? !!o.required, w: p.w ?? o.weight, custom: Object.keys(p).length > 0 };
+}
+async function renderGroupOutlets() {
+  if (!G) return;
+  const gid = G.id, parts = [];
+  for (const v of G.verticals) {
+    let list;
+    try { list = await catalog(v); } catch (e) { parts.push(`<p class="msg err">Couldn't load ${esc(label(v))} outlets: ${esc(e.message)}</p>`); continue; }
+    const on = list.filter((o) => outletState(v, o).on).length, req = list.filter((o) => outletState(v, o).req);
+    parts.push(`<details class="gout" data-v="${v}" ${G.verticals.length === 1 ? "open" : ""}>
+      <summary><strong>${esc(label(v))} outlets</strong> · ${on} of ${list.length} on${req.length ? ` · required: ${req.map((o) => esc(o.name)).join(", ")}` : ""}</summary>
+      <div class="tools"><input type="search" placeholder="Search ${esc(label(v))} outlets" data-search-v="${v}" aria-label="Search ${esc(label(v))} outlets">
+        <button type="button" class="ghost" data-all="${v}" data-on="1">All on</button><button type="button" class="ghost" data-all="${v}" data-on="0">All off</button>
+        <button type="button" class="ghost" data-reset="${v}">Use catalog defaults</button></div>
+      <ul class="feeds">${list.map((o) => {
+        const me = outletState(v, o);
+        return `<li class="${me.on ? "" : "off"}${me.req ? " required" : ""}" data-search="${esc((o.name + " " + o.url).toLowerCase())}">
+          <div class="info"><div class="name">${esc(o.name)}</div><div class="sub">${me.custom ? "set for this group" : "catalog default"}${o.only ? " · keyword-filtered" : ""}</div></div>
+          <div class="ctl"><div class="row">
+            <label class="switch"><input type="checkbox" ${me.on ? "checked" : ""} data-gon="${o.id}" data-v="${v}" aria-label="Use ${esc(o.name)}">${me.on ? "On" : "Off"}</label>
+            <label class="req" title="Only show stories this outlet reports"><input type="checkbox" ${me.req ? "checked" : ""} data-greq="${o.id}" data-v="${v}" aria-label="Require ${esc(o.name)}"> Required</label></div>
+            <div class="row"><input type="number" class="weight" min="0" max="${META.max_weight}" step="0.5" value="${fmt(me.w)}" data-gw="${o.id}" data-v="${v}" aria-label="Weight of ${esc(o.name)}" title="Prestige weight (catalog default ${fmt(o.weight)})"></div></div></li>`;
+      }).join("")}</ul></details>`);
+  }
+  if (!G || G.id !== gid) return;
+  const open = new Set([...document.querySelectorAll("#g_outlets details[open]")].map((d) => d.dataset.v));
+  $("g_outlets").innerHTML = parts.join("");
+  open.forEach((v) => { const d = document.querySelector(`#g_outlets details[data-v="${v}"]`); if (d) d.open = true; });
+  $("g_require_all_field").hidden = !G.verticals.some((v) => (CATALOG.get(v) || []).some((o) => outletState(v, o).req));
+}
+function outletChange(v, id, key, value) {
+  const o = (CATALOG.get(v) || []).find((x) => x.id === id);
+  const dflt = key === "on" ? !!o.enabled : key === "req" ? !!o.required : o.weight;
+  return { outlets: { [v]: { [id]: { [key]: value === dflt ? null : value } } } };
+}
+$("g_outlets").addEventListener("change", (e) => {
+  const t = e.target, v = t.dataset.v;
+  if (t.dataset.gon) return saveGroup(outletChange(v, Number(t.dataset.gon), "on", t.checked), true);
+  if (t.dataset.greq) return saveGroup(outletChange(v, Number(t.dataset.greq), "req", t.checked), true);
+  if (t.dataset.gw) {
+    const w = parseFloat(t.value);
+    if (!Number.isFinite(w) || w < 0 || w > META.max_weight) { $("g_msg").className = "msg err"; $("g_msg").textContent = `Weights go from 0 to ${META.max_weight}.`; return renderGroupOutlets(); }
+    return saveGroup(outletChange(v, Number(t.dataset.gw), "w", w), true);
+  }
+});
+$("g_outlets").addEventListener("input", (e) => {
+  const v = e.target.dataset.searchV; if (!v) return;
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll(`#g_outlets details[data-v="${v}"] li[data-search]`).forEach((li) => { li.hidden = !!q && !li.dataset.search.includes(q); });
+});
+$("g_outlets").addEventListener("click", (e) => {
+  const t = e.target;
+  if (t.dataset.all) {
+    const v = t.dataset.all, on = t.dataset.on === "1", list = CATALOG.get(v) || [];
+    const changes = {};
+    for (const o of list) changes[o.id] = { on: on === !!o.enabled ? null : on };
+    return saveGroup({ outlets: { [v]: changes } }, true);
+  }
+  if (t.dataset.reset) {
+    const v = t.dataset.reset, changes = {};
+    for (const id of Object.keys(G.outlets[v] || {})) changes[id] = null;
+    return saveGroup({ outlets: { [v]: changes } }, true);
+  }
+});
+$("g_outlets").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.gw) e.target.blur(); });
+
+// ---------- Settings › Watched phrases (this browser) ----------
 function renderPhrases() {
-  const v = V;
-  $("phrases").innerHTML = vp(v).phrases.map((p, i) => `<li><span class="p">${esc(p.phrase)}</span>
+  $("phrases").innerHTML = PREFS.phrases.map((p, i) => `<li><span class="p">${esc(p.phrase)}</span>
       <label class="sr-only" for="pb${i}">Bonus for ${esc(p.phrase)}</label>
       <input type="number" id="pb${i}" min="0" max="${META.max_bonus}" step="1" value="${fmt(p.bonus)}" data-pbonus="${i}" title="Bonus points">
       <button class="ghost" aria-label="Stop watching ${esc(p.phrase)}" data-pdel="${i}">×</button></li>`).join("")
     || `<li class="muted" style="font-size:13px">No phrases yet.</li>`;
+  $("p_only_watched").checked = !!PREFS.only_watched;
+  $("p_watched_any").checked = !!PREFS.watched_any;
 }
 $("watch_form").addEventListener("submit", (e) => {
   e.preventDefault();
   const phrase = $("watch_phrase").value.trim().replace(/\s+/g, " "), bonus = parseFloat($("watch_bonus").value);
-  const list = vp(V).phrases;
   if (!phrase || phrase.length > 100) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = "Phrases are 1 to 100 characters."; return; }
-  if (list.some((p) => p.phrase.toLowerCase() === phrase.toLowerCase())) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = "That phrase is already watched."; return; }
-  list.push({ phrase, bonus: Number.isFinite(bonus) ? Math.min(META.max_bonus, Math.max(0, bonus)) : META.default_bonus });
+  if (PREFS.phrases.some((p) => p.phrase.toLowerCase() === phrase.toLowerCase())) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = "That phrase is already watched."; return; }
+  PREFS.phrases.push({ phrase, bonus: Number.isFinite(bonus) ? Math.min(META.max_bonus, Math.max(0, bonus)) : META.default_bonus });
   savePrefs(); $("watch_phrase").value = ""; $("watch_msg").textContent = ""; renderPhrases();
 });
 $("phrases").addEventListener("click", (e) => {
   const i = e.target.dataset.pdel; if (i === undefined) return;
-  vp(V).phrases.splice(Number(i), 1); savePrefs(); renderPhrases();
+  PREFS.phrases.splice(Number(i), 1); savePrefs(); renderPhrases();
 });
 $("phrases").addEventListener("change", (e) => {
   const i = e.target.dataset.pbonus; if (i === undefined) return;
   const bonus = parseFloat(e.target.value);
   if (!Number.isFinite(bonus) || bonus < 0 || bonus > META.max_bonus) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = `Bonus goes from 0 to ${META.max_bonus}.`; return renderPhrases(); }
-  vp(V).phrases[Number(i)].bonus = bonus; savePrefs(); e.target.blur();
+  PREFS.phrases[Number(i)].bonus = bonus; savePrefs(); e.target.blur();
 });
 $("phrases").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.pbonus !== undefined) e.target.blur(); });
+$("p_only_watched").addEventListener("change", (e) => { PREFS.only_watched = e.target.checked; savePrefs(); });
+$("p_watched_any").addEventListener("change", (e) => { PREFS.watched_any = e.target.checked; savePrefs(); });
 
-// Outlets: your choices (this browser) + the shared catalog (admin)
-function feedRow(o) {
-  const st = o.status || {}, viaFeedly = st.via === "feedly", failed = st.last_error && !viaFeedly;
-  const state = failed ? "err" : (viaFeedly ? "warn" : (st.last_fetched ? "" : "pending"));
-  const via = viaFeedly ? ` · <span class="warn" title="${esc(st.last_error || "")}">via Feedly</span>` : "";
-  const sub = failed ? `<div class="sub err">${esc(st.last_error)}</div>`
-                     : `<div class="sub">${st.item_count ?? 0} items · fetched ${ago(st.last_fetched)}${via}</div>`;
-  const me = outletState(V, o), name = o.name;
-  return `<li class="${me.on ? "" : "off"}${me.req ? " required" : ""}" data-search="${esc((name + " " + o.url).toLowerCase())}">
-    <span class="dot ${state}"></span>
-    <div class="info"><div class="name">${esc(name)}</div><div class="sub">${esc(o.url)}</div>${sub}
-      ${o.only ? `<div class="sub">Only items mentioning: ${esc(o.only.length > 70 ? o.only.slice(0, 70) + "…" : o.only)}</div>` : ""}
-      <details class="cat"><summary class="sub">Catalog (all users)</summary>
-        <div class="catrow"><label for="cw${o.id}">Default weight</label>
-          <input type="number" id="cw${o.id}" min="0" max="${META.max_weight}" step="0.5" value="${fmt(o.weight)}" data-cweight="${o.id}"></div>
-        <div class="catrow"><label for="kw${o.id}">Keyword filter</label>
-          <input type="text" id="kw${o.id}" value="${esc(o.only || "")}" data-only="${o.id}" maxlength="500" placeholder="Comma-separated words; blank = all items"></div>
-        <div class="catrow"><button class="ghost" data-del="${o.id}" aria-label="Remove ${esc(name)} for everyone">Remove for everyone</button></div>
-      </details></div>
-    <div class="ctl">
-      <div class="row">
-        <label class="switch" title="${me.on ? "Used in your stories" : "Not used in your stories"}"><input type="checkbox" ${me.on ? "checked" : ""} data-toggle="${o.id}" aria-label="Use ${esc(name)}">${me.on ? "On" : "Off"}</label>
-        <label class="req" title="Only show stories this outlet reports"><input type="checkbox" ${me.req ? "checked" : ""} data-require="${o.id}" aria-label="Require ${esc(name)}"> Required</label>
-      </div>
-      <div class="row">
-        <input type="number" class="weight" min="0" max="${META.max_weight}" step="0.5" value="${fmt(me.w)}" data-weight="${o.id}" aria-label="Your prestige weight for ${esc(name)}" title="Your prestige weight (catalog default ${fmt(o.weight)})">
-      </div>
-    </div>
-  </li>`;
+// ---------- Settings › <vertical>: the shared catalog ----------
+let V = null, VDIGEST = null, vSeq = 0;
+async function latestDigest(v, force = false) {
+  const res = await fetch(`/api/${v}/digest?hours=48`, force ? { cache: "no-cache" } : {});
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  return res.json();
 }
-function renderRequired() {
-  const outs = VDIGEST.outlets, req = outs.filter((o) => outletState(V, o).req);
-  $("required_note").hidden = !req.length;
-  if (!req.length) return;
-  $("required_list").innerHTML = `<strong>Required outlet${req.length === 1 ? "" : "s"}:</strong> ${req.map((o) => esc(o.name)).join(", ")}`;
-  $("s_require_all").disabled = req.length < 2;
-  const off = req.filter((o) => !outletState(V, o).on);
-  $("required_warn").hidden = !off.length;
-  $("required_warn").textContent = off.length ? `${off.map((o) => o.name).join(", ")} ${off.length === 1 ? "is" : "are"} switched off, so ${off.length === 1 ? "it" : "they"} can't appear in any story.` : "";
+async function openVertical(key) {
+  V = key; VDIGEST = null; const my = ++vSeq;
+  $("cat_title").textContent = `${label(key)} catalog`;
+  $("feeds").innerHTML = ""; $("feed_count").textContent = "…"; $("admin_msg").textContent = ""; $("feed_search").value = "";
+  try {
+    const [d] = await Promise.all([latestDigest(key), catalog(key, true)]);
+    if (my !== vSeq) return;
+    VDIGEST = d;
+  } catch (e) { $("admin_msg").className = "msg err"; $("admin_msg").textContent = "Couldn't load this vertical: " + e.message; return; }
+  renderCatalog(); showThreshold();
+}
+function showThreshold() {
+  if (!VDIGEST) return;
+  $("regrouping").hidden = !REGROUPING.has(V);
+  const th = PENDING_THRESHOLD.get(V) ?? VDIGEST.threshold;   // a just-saved value wins until the rebuild lands
+  $("threshold_out").textContent = Number(th).toFixed(2);
+  if (document.activeElement !== $("a_threshold")) $("a_threshold").value = th;
+}
+function catalogRow(o) {
+  const viaFeedly = o.via === "feedly", failed = o.last_error && !viaFeedly;
+  const state = failed ? "err" : (viaFeedly ? "warn" : (o.last_fetched ? "" : "pending"));
+  const via = viaFeedly ? ` · <span class="warn" title="${esc(o.last_error || "")}">via Feedly</span>` : "";
+  const sub = failed ? `<div class="sub err">${esc(o.last_error)}</div>` : `<div class="sub">${o.item_count ?? 0} items · fetched ${ago(o.last_fetched)}${via}</div>`;
+  return `<li class="${o.enabled ? "" : "off"}" data-search="${esc((o.name + " " + o.url).toLowerCase())}">
+    <span class="dot ${state}"></span>
+    <div class="info"><div class="name">${esc(o.name)}</div><div class="sub">${esc(o.url)}</div>${sub}
+      <div class="catrow"><label for="kw${o.id}">Keyword filter</label>
+        <input type="text" id="kw${o.id}" value="${esc(o.only || "")}" data-only="${o.id}" maxlength="500" placeholder="Comma-separated words; blank = all items"></div></div>
+    <div class="ctl">
+      <div class="row"><label class="switch" title="On by default in groups"><input type="checkbox" ${o.enabled ? "checked" : ""} data-cenabled="${o.id}" aria-label="${esc(o.name)} on by default">${o.enabled ? "On" : "Off"}</label></div>
+      <div class="row"><input type="number" class="weight" min="0" max="${META.max_weight}" step="0.5" value="${fmt(o.weight)}" data-cweight="${o.id}" aria-label="Default weight of ${esc(o.name)}" title="Default prestige weight"></div>
+      <div class="row"><button class="ghost" data-del="${o.id}" aria-label="Remove ${esc(o.name)} for everyone" title="Remove for everyone">×</button></div>
+    </div></li>`;
+}
+function renderCatalog() {
+  const list = CATALOG.get(V) || [];
+  $("feed_count").textContent = list.length;
+  $("feeds").innerHTML = list.map(catalogRow).join("") || `<li class="muted">No feeds yet.</li>`;
+  applySearch();
 }
 function applySearch() {
   const q = $("feed_search").value.trim().toLowerCase();
   document.querySelectorAll("#feeds li[data-search]").forEach((li) => { li.hidden = !!q && !li.dataset.search.includes(q); });
 }
 $("feed_search").addEventListener("input", applySearch);
-function renderOutlets(force = false) {
-  if (!VDIGEST) return;
-  if (!force && $("feeds").contains(document.activeElement)) return;
-  const outs = [...VDIGEST.outlets].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-  const on = outs.filter((o) => outletState(V, o).on).length;
-  $("feed_count").textContent = outs.length;
-  $("using").textContent = outs.length ? `${on} of ${outs.length} outlets switched on for you` : "";
-  $("feeds").innerHTML = outs.map(feedRow).join("") || `<li class="muted">No feeds yet. Add one under Shared catalog.</li>`;
-  applySearch(); renderRequired(); showSettings(settingsFor(V, VDIGEST));
-}
-function setMine(id, change) {
-  const o = vp(V).outlets; o[id] = { ...(o[id] || {}), ...change }; savePrefs();
-}
 $("feeds").addEventListener("change", (e) => {
-  const t = e.target;
-  if (t.dataset.toggle) { setMine(Number(t.dataset.toggle), { on: t.checked }); return renderOutlets(true); }
-  if (t.dataset.require) { setMine(Number(t.dataset.require), { req: t.checked }); return renderOutlets(true); }
-  if (t.dataset.weight) {
-    const w = parseFloat(t.value);
-    if (!Number.isFinite(w) || w < 0 || w > META.max_weight) { $("add_msg").className = "msg err"; $("add_msg").textContent = `Weights go from 0 to ${META.max_weight}.`; return renderOutlets(true); }
-    setMine(Number(t.dataset.weight), { w }); t.blur(); return;
-  }
+  const t = e.target, v = V;
   if (t.dataset.cweight) {
     const w = parseFloat(t.value);
-    if (!Number.isFinite(w) || w < 0 || w > META.max_weight) { $("add_msg").className = "msg err"; $("add_msg").textContent = `Weights go from 0 to ${META.max_weight}.`; return; }
-    return catalogChange(() => patch(`/api/${V}/feeds/${t.dataset.cweight}`, { weight: w }), "default weight");
+    if (!Number.isFinite(w) || w < 0 || w > META.max_weight) { $("admin_msg").className = "msg err"; $("admin_msg").textContent = `Weights go from 0 to ${META.max_weight}.`; return; }
+    return catalogChange(() => patch(`/api/${v}/feeds/${t.dataset.cweight}`, { weight: w }), "default weight");
   }
-  if (t.dataset.only !== undefined && t.dataset.only !== "") {
-    return catalogChange(() => patch(`/api/${V}/feeds/${t.dataset.only}`, { only: t.value }), "keyword filter");
-  }
+  if (t.dataset.cenabled) return catalogChange(() => patch(`/api/${v}/feeds/${t.dataset.cenabled}`, { enabled: t.checked }), "default");
+  if (t.dataset.only !== undefined && t.dataset.only !== "") return catalogChange(() => patch(`/api/${v}/feeds/${t.dataset.only}`, { only: t.value }), "keyword filter");
 });
-$("feeds").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.target.dataset.weight || e.target.dataset.cweight || e.target.dataset.only)) e.target.blur(); });
+$("feeds").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.target.dataset.cweight || e.target.dataset.only)) e.target.blur(); });
 $("feeds").addEventListener("click", (e) => {
   const id = e.target.dataset.del;
   if (!id || !confirm("Remove this feed for everyone, with its stored headlines?")) return;
   catalogChange(() => api(`/api/${V}/feeds/${id}`, { method: "DELETE" }), "catalog");
 });
-function setAll(on) { for (const o of VDIGEST.outlets) setMine(o.id, { on }); renderOutlets(true); }
-$("all_on").addEventListener("click", () => setAll(true));
-$("all_off").addEventListener("click", () => setAll(false));
-$("clear_required").addEventListener("click", () => { for (const o of VDIGEST.outlets) setMine(o.id, { req: false }); renderOutlets(true); });
 
-// Shared catalog (admin): changes go to the server, which re-groups stories for everyone.
-// The server re-groups stories in the background (seconds; longer for big verticals), so wait for a digest
-// newer than the one shown (and, for match strictness, built with the new value) before refreshing.
-const PENDING_THRESHOLD = new Map(), REGROUPING = new Set();
-function setRegrouping(v, on) {
-  on ? REGROUPING.add(v) : REGROUPING.delete(v);
-  if (v === V) $("regrouping").hidden = !on;
-}
-const regroupSeq = new Map();   // vertical -> latest change number
+// Catalog changes re-group stories for everyone in the background (seconds; longer for big verticals):
+// wait for a digest newer than the one shown (for match strictness, built with the new value).
+const PENDING_THRESHOLD = new Map(), REGROUPING = new Set(), regroupSeq = new Map();
+function setRegrouping(v, on) { on ? REGROUPING.add(v) : REGROUPING.delete(v); if (v === V) $("regrouping").hidden = !on; }
 async function catalogChange(call, what, okText, ready = () => true) {
   const v = V, before = VDIGEST?.generated_at ?? 0;
   try { await call(); }
-  catch (err) { $("admin_msg").className = $("add_msg").className = "msg err"; $("admin_msg").textContent = $("add_msg").textContent = `Couldn't change the ${what}: ${err.message}`; return false; }
+  catch (err) { $("admin_msg").className = "msg err"; $("admin_msg").textContent = `Couldn't change the ${what}: ${err.message}`; return false; }
   $("admin_msg").className = "msg ok"; $("admin_msg").textContent = okText || "Saved for everyone. Stories are being re-grouped…";
+  CATALOG.delete(v); VIEWS.clear();
+  if (v === V) { await catalog(v).catch(() => null); if (v === V) renderCatalog(); }
   const my = (regroupSeq.get(v) || 0) + 1; regroupSeq.set(v, my);
-  forgetDigests(v); setRegrouping(v, true);
+  setRegrouping(v, true);
   (async () => {
     const t0 = Date.now();
     while (Date.now() - t0 < 300000) {
       await new Promise((r) => setTimeout(r, 2000));
-      if (my !== regroupSeq.get(v)) return;                       // a newer change is waiting instead
-      const d = await getDigest(v, vp(v).settings.hours ?? 48, true).catch(() => null);
+      if (my !== regroupSeq.get(v)) return;
+      const d = await latestDigest(v, true).catch(() => null);
       if (d && d.generated_at > before && ready(d)) {
-        forgetDigests(v); DIGESTS.set(`${v}:${windowFor(vp(v).settings.hours ?? 48)}`, { data: d, at: Date.now() });
-        PENDING_THRESHOLD.delete(v); setRegrouping(v, false);
-        if (v === V) {
-          VDIGEST = d; showSettings(settingsFor(v, d)); renderOutlets(true);
-          $("admin_msg").className = "msg ok"; $("admin_msg").textContent = "Stories re-grouped for everyone.";
-        }
+        PENDING_THRESHOLD.delete(v); setRegrouping(v, false); VIEWS.clear();
+        if (v === V) { VDIGEST = d; showThreshold(); $("admin_msg").className = "msg ok"; $("admin_msg").textContent = "Stories re-grouped for everyone."; }
         return;
       }
     }
@@ -935,10 +1035,10 @@ $("a_threshold").addEventListener("change", async (e) => {
   PENDING_THRESHOLD.set(v, th);
   const ok = await catalogChange(() => patch(`/api/${v}/settings`, { threshold: th }), "match strictness",
                                  "Saved for everyone. Stories are being re-grouped…", (d) => Math.abs(d.threshold - th) < 1e-9);
-  if (!ok) { PENDING_THRESHOLD.delete(v); if (v === V && VDIGEST) showSettings(settingsFor(v, VDIGEST)); }
+  if (!ok) { PENDING_THRESHOLD.delete(v); if (v === V) showThreshold(); }
 });
 
-// ---------- Scraping (header + Settings › Scraping; admin) ----------
+// ---------- Scraping (header + Settings › Scraping) ----------
 let SCRAPE = null, wasBusy = false;
 function renderScrape(st) {
   if (!st) return;
@@ -966,7 +1066,7 @@ function renderScrape(st) {
   $("sc_refresh").disabled = $("sc_backfill").disabled = busy;
   if (document.activeElement !== $("sc_auto")) $("sc_auto").checked = st.auto;
   if (document.activeElement !== $("sc_interval")) $("sc_interval").value = fmt(st.interval_minutes);
-  if (wasBusy && !busy) setTimeout(() => { DIGESTS.clear(); loadStories(); }, 4000);   // new digests are being built
+  if (wasBusy && !busy) setTimeout(() => { VIEWS.clear(); loadStories(); }, 4000);   // new digests are being built
   wasBusy = busy;
 }
 async function loadScrape() { try { renderScrape(await api("/api/scrape/status")); } catch (e) { $("status").textContent = ""; } }
@@ -993,14 +1093,15 @@ $("sc_interval").addEventListener("change", (e) => {
 });
 
 // ---------- Start ----------
-api("/api/verticals").then((d) => {
-  META = { ...META, ...d }; $("watch_bonus").value = d.default_bonus;
-  if (!location.hash) history.replaceState(null, "", "#stories/all");
+Promise.all([api("/api/verticals"), api("/api/groups")]).then(([d, g]) => {
+  META = { ...META, ...d }; GROUPS = g.groups; META.ai = g.ai; $("watch_bonus").value = d.default_bonus;
+  if (!location.hash || location.hash === "#stories/all") history.replaceState(null, "", `#stories/${GROUPS[0]?.id ?? ""}`);
   render();
 }).catch((e) => { $("summary").textContent = "Can't reach the server: " + e.message; });
 loadScrape();
 setInterval(() => { if (!document.hidden) loadScrape(); }, 30000);
 setInterval(() => { if (!document.hidden && route.top === "stories") loadStories(); }, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && route.top === "stories") loadStories(true); });
 </script>
 </body>
 </html>

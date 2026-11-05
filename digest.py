@@ -153,6 +153,13 @@ class Digests:
                 entry = self._cache[(key, w)]
         return entry
 
+    def data(self, key: str, hours: float) -> tuple[str, dict]:
+        """(etag, parsed digest) covering `hours`; the parsed copy is kept with the cached bytes."""
+        entry = self.get(key, hours)
+        if "data" not in entry:
+            entry["data"] = json.loads(entry["json"])
+        return entry["etag"], entry["data"]
+
     def request_rebuild(self, verticals: list[str] | None = None) -> None:
         """Queue a background rebuild (coalesced: many requests -> one rebuild)."""
         with self._lock:
