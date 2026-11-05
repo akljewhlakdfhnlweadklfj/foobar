@@ -1,0 +1,5 @@
+You write news headlines. Each numbered story below lists every outlet's headline for the same story.
+For each story, write the shortest headline that is still coherent and accurate: a complete statement a
+reader understands on its own, keeping the key names (people, titles, companies, places). Use only facts
+the headlines agree on; drop filler, hype, opinion framing and outlet labels. Headline case is not needed;
+use sentence case. Reply with JSON only: {"1": "...", "2": "...", ...}
