@@ -117,6 +117,7 @@ def _is_cap(w: str) -> bool:
     return w[:1].isupper() or any(c.isdigit() for c in w)
 
 
+@functools.lru_cache(maxsize=100_000)       # headlines repeat every cycle and across windows; callers only read it
 def _name_candidates(title: str) -> dict[tuple, str]:
     """Proper-noun phrases in a headline: runs of capitalised words/numbers, possibly with connectors
     inside ("God of War Laufey", "South of Midnight", "Grand Theft Auto 6", "Xbox Series X").
@@ -213,7 +214,8 @@ def _position_weight(rel: float) -> float:
     return 1 + (START_WEIGHT - 1) * (1 - min(1.0, max(0.0, rel)))
 
 
-def _body_terms(text: str) -> set:
+@functools.lru_cache(maxsize=100_000)
+def _body_terms(text: str) -> frozenset:
     """Keys of the single words, word runs and names in a description (for the body bonus)."""
     keys = set()
     for seg in _SEGMENT_RE.split(text):
@@ -226,7 +228,7 @@ def _body_terms(text: str) -> set:
                     break
                 keys.add(("pair",) + tuple(run))
     keys.update(("name",) + k for k in _name_candidates(text))
-    return keys
+    return frozenset(keys)
 
 
 def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | None = None) -> list[dict]:
@@ -252,7 +254,7 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
     per_story = []                                # (story, {key: share}, {multi key: share}, position, body)
 
     for si, s in enumerate(stories):
-        titles = {x["title"] for x in s["sources"]} | {s["title"]}
+        titles = sorted({x["title"] for x in s["sources"]} | {s["title"]})     # sorted: ties break the same way every run
         cnt_u, cnt_m = Counter(), Counter()
         pos_sum: dict = defaultdict(float)        # key -> summed position weight over the headlines with it
         for title in titles:
@@ -360,9 +362,14 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
                                 for w, key in zip(words, k[1:]))
         return " ".join(display(w) for w in k[1:])
 
-    def word_keys(k: tuple) -> set:
+    wk_cache: dict = {}
+
+    def word_keys(k: tuple) -> frozenset:
         """Single-word keys inside a multi-word term."""
-        return {wk for w in k[1:] for wk in [_term_key(w) if k[0] == "name" else w] if wk}
+        got = wk_cache.get(k)
+        if got is None:
+            got = wk_cache[k] = frozenset(wk for w in k[1:] for wk in [_term_key(w) if k[0] == "name" else w] if wk)
+        return got
 
     def multi_forms_list(k: tuple) -> list:
         if k[0] == "name":
@@ -376,15 +383,24 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
     multi = [k for k, n in multi_n.items()
              if (k[0] == "name" and (n >= 2 or name_best_share[k] >= 0.5))
              or (k[0] == "pair" and n >= 2 and n >= 0.6 * min(uni_n[w] for w in k[1:]))]
-    multi.sort(key=lambda k: (-(len(k) - 1), -multi_w[k]))          # longest first
+    multi.sort(key=lambda k: (-(len(k) - 1), -multi_w[k], k))          # longest first
     kept = []
+    kept_by_word: dict = defaultdict(list)     # word -> kept terms with it (a containing term must have k[1])
+    kept_by_key: dict = defaultdict(list)      # word key -> kept terms with it
     for k in multi:
-        if any(_contains(o[1:], k[1:]) and multi_n[o] >= 0.8 * multi_n[k] for o in kept if o[0] == "name" or k[0] == "pair"):
+        if any(_contains(o[1:], k[1:]) and multi_n[o] >= 0.8 * multi_n[k]
+               for o in kept_by_word[k[1]] if o[0] == "name" or k[0] == "pair"):
             continue
         # A pair inside a kept name ("war laufey" in "god of war laufey") is redundant.
-        if k[0] == "pair" and any(word_keys(k) <= word_keys(o) and multi_n[o] >= 0.8 * multi_n[k] for o in kept):
+        wks = word_keys(k)
+        if k[0] == "pair" and wks and any(wks <= word_keys(o) and multi_n[o] >= 0.8 * multi_n[k]
+                                          for o in kept_by_key[min(wks)]):
             continue
         kept.append(k)
+        for w in set(k[1:]):
+            kept_by_word[w].append(k)
+        for wk in word_keys(k):
+            kept_by_key[wk].append(k)
         terms[k] = {"term": multi_display(k), "weight": multi_w[k], "stories": multi_n[k], "forms": multi_forms_list(k)}
     absorbed = Counter()
     for k in kept:
@@ -415,7 +431,7 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
 
         cands, used = [], set()
         chosen: list[tuple] = []                  # (wks, share, cand index, is_name)
-        for k, share in sorted(own_m.items(), key=lambda kv: (-kv[1], -(len(kv[0]) - 1))):
+        for k, share in sorted(own_m.items(), key=lambda kv: (-kv[1], -(len(kv[0]) - 1), kv[0])):
             wks = word_keys(k)
             if not wks or any(wks <= c[0] for c in chosen):
                 continue                          # "Elder Scrolls VI" after "Elder Scrolls 6"; "GTA" after "GTA 6"
@@ -453,7 +469,7 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
                 is_name = single_proper and k not in NOT_NOUNS and k not in NAME_PARTS
                 cands.append((prominence(k, share, uni_n[k], SINGLE_NAME_BOOST if is_name else 1.0, is_name),
                               shown, sorted(forms[k])[:6], (k,)))
-        cands.sort(key=lambda c: -c[0])
+        cands.sort(key=lambda c: (-c[0], c[1]))     # ties by text: the same order every run
         # The lead keyword is the most prominent proper noun (a name, title, acronym, "Suda51") when one
         # scores at least PROPER_LEAD_MIN of the top term; otherwise the most prominent noun-like term.
         # The rest keep their order.
@@ -480,7 +496,7 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
         best = max((c[0] for c in top), default=1) or 1
         s["keywords"] = [{"term": t, "weight": round(w / best, 3), "forms": f} for w, t, f, _ in top] if top else []
 
-    out = sorted(terms.values(), key=lambda t: -t["weight"])[:limit]
+    out = sorted(terms.values(), key=lambda t: (-t["weight"], t["term"]))[:limit]
     for t in out:
         t["weight"] = round(t["weight"], 2)
     return out

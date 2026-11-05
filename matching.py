@@ -220,11 +220,17 @@ def item_text(it: Item, mode: str | None = None) -> str:
     return it.title + " " + it.description
 
 
-def lexical_similarities(items: list[Item], min_shared: int = 2,
-                         max_span_hours: float | None = MAX_SPAN_HOURS) -> dict[tuple[int, int], float]:
+# cluster() doesn't keep pairs less similar than this (or a quarter of the threshold, if lower): they
+# barely move a group's average (realistic-eval F1 unchanged; 99.5% of 30-day stories identical) and
+# are most of the pairs on a busy vertical.
+MIN_PAIR_SIM = 0.03
+
+
+def lexical_similarities(items: list[Item], min_shared: int = 2, max_span_hours: float | None = MAX_SPAN_HOURS,
+                         min_sim: float = 0.0) -> dict[tuple[int, int], float]:
     """Sparse pairwise similarity {(i, j): sim} (i < j): IDF-weighted cosine of token sets, for items
     from different feeds sharing >= min_shared tokens and published within max_span_hours of each
-    other (None: any time apart).
+    other (None: any time apart), and at least min_sim similar.
 
     Items are swept in time order through an inverted index whose postings are trimmed to the span,
     so pairs further apart are never generated (a 30-day window costs about as much per day as a
@@ -267,7 +273,9 @@ def lexical_similarities(items: list[Item], min_shared: int = 2,
         for q, c in cnt.items():
             j = order[q]
             if c >= min_shared and items[j].feed_id != a.feed_id and norm[j]:
-                sims[(i, j) if i < j else (j, i)] = acc[q] / (norm[i] * norm[j])
+                sim = acc[q] / (norm[i] * norm[j])
+                if sim >= min_sim:
+                    sims[(i, j) if i < j else (j, i)] = sim
     return sims
 
 
@@ -286,12 +294,14 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
     """
     n = len(items)
     span = None if max_span_hours is None else max_span_hours * 3600
-    if span is not None and any(abs(items[i].published - items[j].published) > span for i, j in sims):
-        sims = {(i, j): s for (i, j), s in sims.items() if abs(items[i].published - items[j].published) <= span}
+
+    def near(i: int, j: int) -> bool:
+        return span is None or abs(items[i].published - items[j].published) <= span
+
     if linkage == "single":
         uf = _UnionFind(n)
         for (i, j), s in sims.items():
-            if s >= threshold:
+            if s >= threshold and near(i, j):
                 uf.union(i, j)
         groups: dict[int, list[Item]] = defaultdict(list)
         for i, it in enumerate(items):
@@ -302,9 +312,10 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
     feeds_in: list[dict[int, int]] = [{it.feed_id: 1} for it in items]   # feed histogram per group
     sums: list[dict[int, float]] = [dict() for _ in range(n)]            # sums[a][b] = total sim a<->b
     for (i, j), s in sims.items():
-        if s > 0:
+        if s > 0 and near(i, j):
             sums[i][j] = sums[i].get(j, 0.0) + s
             sums[j][i] = sums[j].get(i, 0.0) + s
+    del sims                                # the caller's copy is usually the only other reference
     alive = [True] * n
     version = [0] * n
     members: list[list[int]] = [[i] for i in range(n)]
@@ -370,7 +381,9 @@ def cluster(items: list[Item], threshold: float = DEFAULT_THRESHOLD, min_shared:
     and a story's headlines are published within max_span_hours of each other."""
     if not items:
         return []
-    return agglomerate(items, lexical_similarities(items, min_shared, max_span_hours), threshold, linkage, max_span_hours)
+    floor = min(MIN_PAIR_SIM, threshold / 4)
+    return agglomerate(items, lexical_similarities(items, min_shared, max_span_hours, floor),
+                       threshold, linkage, max_span_hours)
 
 
 # Headlines labelled as a format rather than the news itself ("Opinion |", "WATCH:", "Review:").

@@ -20,6 +20,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
@@ -107,10 +108,12 @@ class Summarizer:
             c.execute("DELETE FROM summaries WHERE created_at < ?", (old,))
             for sid, text in c.execute("SELECT id, headline FROM summaries"):
                 self._rows[sid] = (text, 0)
+            counts: dict[int, int] = defaultdict(int)
             for key, sid in c.execute("SELECT key, summary_id FROM summary_items"):
                 self._by_key.setdefault(key, set()).add(sid)
+                counts[sid] += 1                # (key, summary_id) is the primary key: each pair once
             for sid in self._rows:
-                self._rows[sid] = (self._rows[sid][0], sum(1 for s in self._by_key.values() if sid in s))
+                self._rows[sid] = (self._rows[sid][0], counts[sid])
             row = c.execute("SELECT stories FROM usage WHERE day = ?", (self._day(),)).fetchone()
         self._today = (self._day(), row[0] if row else 0)
 
