@@ -143,6 +143,10 @@
   input[type=range] { width: 100%; accent-color: var(--accent); }
   .check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--muted); }
   .check input { margin-top: 3px; }
+  .wip { font-size: 12px; font-weight: 500; color: var(--warn); margin-left: 8px; padding: 1px 8px;
+         border: 1px solid currentColor; border-radius: 999px; animation: wip 1.6s ease-in-out infinite; }
+  @keyframes wip { 50% { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) { .wip { animation: none; } }
   .saved { font-size: 12px; color: var(--ok); margin-left: 8px; font-weight: 500; }
   .panel-foot { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
   .panel-foot button { padding: 4px 10px; font-size: 13px; }
@@ -241,7 +245,7 @@
             <label for="s_min_feeds">Reported by at least</label>
             <div style="display:flex;gap:6px">
               <input type="number" id="s_min_feeds" min="1" max="100" step="1" aria-label="Number of outlets">
-              <input type="number" id="s_min_feeds_percent" min="1" max="100" step="1" aria-label="Percent of enabled outlets" hidden>
+              <input type="number" id="s_min_feeds_percent" min="1" max="100" step="1" aria-label="Percent of enabled outlets that count" hidden>
               <select id="s_min_feeds_mode" aria-label="Unit" style="width:auto">
                 <option value="count">outlets</option><option value="percent">% of enabled outlets</option>
               </select>
@@ -320,6 +324,7 @@
             <button type="submit" id="add_btn">Add feed</button>
           </form>
           <label class="field full">Match strictness for this vertical: <output id="threshold_out"></output>
+            <span class="wip" id="regrouping" hidden role="status">Re-grouping in progress…</span>
             <input type="range" id="a_threshold" min="0.05" max="0.5" step="0.01">
             <span class="hint">How similar headlines must be to count as one story. Lower groups loosely related headlines; higher only near-identical ones. Stories are re-grouped for everyone after a change.</span>
           </label>
@@ -414,7 +419,8 @@ const windowFor = (h) => META.windows.find((w) => h <= w) ?? META.windows[META.w
 async function getDigest(v, hours, force = false) {
   const w = windowFor(hours), key = `${v}:${w}`, hit = DIGESTS.get(key);
   if (hit && !force && Date.now() - hit.at < 55000) return hit.data;
-  const res = await fetch(`/api/${v}/digest?hours=${w}`);     // the browser revalidates with its ETag
+  // The browser may reuse its copy for up to a minute; forced reloads revalidate (a 304 when unchanged).
+  const res = await fetch(`/api/${v}/digest?hours=${w}`, force ? { cache: "no-cache" } : {});
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   const data = await res.json();
   DIGESTS.set(key, { data, at: Date.now() });
@@ -443,11 +449,19 @@ function snippetAround(text, m) {
   return (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
 }
 
+// Outlets that can count toward "reported by at least": switched on and weighted at least min_weight.
+// In percent mode the percentage is of these.
+function countable(v, digest, cfg) {
+  return digest.outlets.filter((o) => { const me = outletState(v, o); return me.on && me.w >= (cfg.min_weight || 0); }).length;
+}
+const minOutlets = (cfg, n) => cfg.min_feeds_mode === "percent" ? Math.max(1, Math.ceil(cfg.min_feeds_percent / 100 * n)) : cfg.min_feeds;
+const outletsText = (cfg, n) => `${n} enabled outlet${n === 1 ? "" : "s"}${cfg.min_weight > 0 ? ` weighted ≥ ${fmt(cfg.min_weight)}` : ""}`;
+
 function computeStories(v, digest, cfg) {
   const now = Date.now() / 1000, cut = now - cfg.hours * 3600;
   const outlets = new Map(digest.outlets.map((o) => [o.id, { ...o, ...outletState(v, o) }]));
-  const enabled = [...outlets.values()].filter((o) => o.on).length;
-  const minN = cfg.min_feeds_mode === "percent" ? Math.max(1, Math.ceil(cfg.min_feeds_percent / 100 * enabled)) : cfg.min_feeds;
+  const enabled = countable(v, digest, cfg);
+  const minN = minOutlets(cfg, enabled);
   const required = new Set([...outlets.values()].filter((o) => o.req).map((o) => o.id));
   const phrases = vp(v).phrases.map((p) => ({ ...p, re: wordRe(phraseSource(p.phrase)) }));
   const out = [];
@@ -589,7 +603,7 @@ async function loadStories(force = false) {
     summaryBase = `${stories.length} stories across ${keys.length} verticals · each vertical uses your settings for it`;
   } else {
     const r = results[0], c = r.cfg;
-    const how = c.min_feeds_mode === "percent" ? ` (${fmt(c.min_feeds_percent)}% of ${r.enabled})` : "";
+    const how = c.min_feeds_mode === "percent" ? ` (${fmt(c.min_feeds_percent)}% of ${outletsText(c, r.enabled)})` : "";
     summaryBase = `${stories.length} stories reported by ≥ ${r.minN} outlet${r.minN === 1 ? "" : "s"}${how} in the last ${windowText(c.hours)}`;
   }
   const json = JSON.stringify(stories.map((s) => [s.id, s.score, s.coverage, s.latest]));
@@ -695,12 +709,13 @@ function showSettings(cfg) {
   const pct = cfg.min_feeds_mode === "percent";
   $("s_min_feeds").hidden = pct; $("s_min_feeds_percent").hidden = !pct;
   if (VDIGEST) {
-    const enabled = VDIGEST.outlets.filter((o) => outletState(V, o).on).length;
-    const n = pct ? Math.max(1, Math.ceil(cfg.min_feeds_percent / 100 * enabled)) : cfg.min_feeds;
-    $("min_feeds_hint").textContent = pct ? `= ${n} of ${enabled} enabled outlets (rounded up)` : `of ${enabled} enabled outlets`;
+    const enabled = countable(V, VDIGEST, cfg), n = minOutlets(cfg, enabled);
+    $("min_feeds_hint").textContent = pct ? `= ${n} of ${outletsText(cfg, enabled)} (rounded up)` : `of ${outletsText(cfg, enabled)}`;
     $("grouping_info").textContent = `Headlines are grouped into stories for everyone (match strictness ${Number(VDIGEST.threshold).toFixed(2)}; digest updated ${ago(VDIGEST.generated_at)}). Stories from a single outlet aren't included.`;
-    $("threshold_out").textContent = Number(VDIGEST.threshold).toFixed(2);
-    if (document.activeElement !== $("a_threshold")) $("a_threshold").value = VDIGEST.threshold;
+    $("regrouping").hidden = !REGROUPING.has(V);
+    const th = PENDING_THRESHOLD.get(V) ?? VDIGEST.threshold;   // a just-saved value wins until the rebuild lands
+    $("threshold_out").textContent = Number(th).toFixed(2);
+    if (document.activeElement !== $("a_threshold")) $("a_threshold").value = th;
   }
 }
 function readSetting(k) {
@@ -869,13 +884,40 @@ $("all_off").addEventListener("click", () => setAll(false));
 $("clear_required").addEventListener("click", () => { for (const o of VDIGEST.outlets) setMine(o.id, { req: false }); renderOutlets(true); });
 
 // Shared catalog (admin): changes go to the server, which re-groups stories for everyone.
-async function catalogChange(call, what, okText) {
-  const v = V;
+// The server re-groups stories in the background (seconds; longer for big verticals), so wait for a digest
+// newer than the one shown (and, for match strictness, built with the new value) before refreshing.
+const PENDING_THRESHOLD = new Map(), REGROUPING = new Set();
+function setRegrouping(v, on) {
+  on ? REGROUPING.add(v) : REGROUPING.delete(v);
+  if (v === V) $("regrouping").hidden = !on;
+}
+const regroupSeq = new Map();   // vertical -> latest change number
+async function catalogChange(call, what, okText, ready = () => true) {
+  const v = V, before = VDIGEST?.generated_at ?? 0;
   try { await call(); }
   catch (err) { $("admin_msg").className = $("add_msg").className = "msg err"; $("admin_msg").textContent = $("add_msg").textContent = `Couldn't change the ${what}: ${err.message}`; return false; }
   $("admin_msg").className = "msg ok"; $("admin_msg").textContent = okText || "Saved for everyone. Stories are being re-grouped…";
-  forgetDigests(v);
-  setTimeout(async () => { if (v === V) { VDIGEST = await getDigest(v, vp(v).settings.hours ?? 48, true).catch(() => VDIGEST); renderOutlets(true); } }, 3000);
+  const my = (regroupSeq.get(v) || 0) + 1; regroupSeq.set(v, my);
+  forgetDigests(v); setRegrouping(v, true);
+  (async () => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 300000) {
+      await new Promise((r) => setTimeout(r, 2000));
+      if (my !== regroupSeq.get(v)) return;                       // a newer change is waiting instead
+      const d = await getDigest(v, vp(v).settings.hours ?? 48, true).catch(() => null);
+      if (d && d.generated_at > before && ready(d)) {
+        forgetDigests(v); DIGESTS.set(`${v}:${windowFor(vp(v).settings.hours ?? 48)}`, { data: d, at: Date.now() });
+        PENDING_THRESHOLD.delete(v); setRegrouping(v, false);
+        if (v === V) {
+          VDIGEST = d; showSettings(settingsFor(v, d)); renderOutlets(true);
+          $("admin_msg").className = "msg ok"; $("admin_msg").textContent = "Stories re-grouped for everyone.";
+        }
+        return;
+      }
+    }
+    PENDING_THRESHOLD.delete(v); setRegrouping(v, false);
+    if (v === V) { $("admin_msg").className = "msg"; $("admin_msg").textContent = "Saved. Re-grouping is taking a while; reload later to see it."; }
+  })();
   return true;
 }
 $("add_form").addEventListener("submit", async (e) => {
@@ -888,9 +930,12 @@ $("add_form").addEventListener("submit", async (e) => {
   $("add_btn").disabled = false;
 });
 $("a_threshold").addEventListener("input", (e) => { $("threshold_out").textContent = Number(e.target.value).toFixed(2); });
-$("a_threshold").addEventListener("change", (e) => {
-  catalogChange(() => patch(`/api/${V}/settings`, { threshold: Number(e.target.value) }), "match strictness",
-                "Saved for everyone. Stories are being re-grouped…");
+$("a_threshold").addEventListener("change", async (e) => {
+  const v = V, th = Number(e.target.value);
+  PENDING_THRESHOLD.set(v, th);
+  const ok = await catalogChange(() => patch(`/api/${v}/settings`, { threshold: th }), "match strictness",
+                                 "Saved for everyone. Stories are being re-grouped…", (d) => Math.abs(d.threshold - th) < 1e-9);
+  if (!ok) { PENDING_THRESHOLD.delete(v); if (v === V && VDIGEST) showSettings(settingsFor(v, VDIGEST)); }
 });
 
 // ---------- Scraping (header + Settings › Scraping; admin) ----------

@@ -113,9 +113,12 @@ def coerce_setting(name: str, value, strict: bool = True):
 
 
 def min_outlets(cfg: dict, store: Store) -> tuple[int, int]:
-    """(the "reported by at least" number in effect, number of enabled outlets). In percent mode it's
-    that share of the vertical's enabled outlets, rounded up, and at least 1."""
-    enabled = sum(1 for f in store.list_feeds() if f["enabled"])
+    """(the "reported by at least" number in effect, number of outlets that can count). Outlets that
+    count are switched on and weighted at least min_weight; in percent mode the number is that share
+    of them, rounded up, and at least 1."""
+    floor = cfg.get("min_weight") or 0
+    enabled = sum(1 for f in store.list_feeds() if f["enabled"]
+                  and (f["weight"] if f["weight"] is not None else matching.DEFAULT_WEIGHT) >= floor)
     if cfg.get("min_feeds_mode") == "percent":
         return max(1, math.ceil(cfg["min_feeds_percent"] / 100 * enabled)), enabled
     return cfg["min_feeds"], enabled

@@ -396,6 +396,10 @@ class DigestTests(unittest.TestCase):
                                          headers={"Content-Type": "application/json"})
             with mock.patch.object(self.digests, "request_rebuild") as rebuild:
                 urllib.request.urlopen(req, timeout=10).close()
+                for _ in range(100):           # queued just after the response is sent
+                    if rebuild.called:
+                        break
+                    time.sleep(0.02)
             rebuild.assert_called_once_with(["games"])
         self.digests.build_now("games", (48,))
         self.assertNotEqual(self.digests.get("games", 48)["etag"], etag)
@@ -604,6 +608,11 @@ class SettingsApiTests(HttpTestCase):
         d = self.call("PATCH", "/api/games/settings", {"min_feeds_mode": "percent", "min_feeds_percent": 50})[1]["settings"]
         self.assertEqual((d["min_feeds_effective"], d["enabled_outlets"]), (2, 3))
         self.assertEqual(len(self.call("GET", "/api/games/stories")[1]["stories"]), 1)
+        # The percentage is of outlets that can count: below min_weight they don't.
+        self.store.update_feed(1, weight=1); self.store.update_feed(2, weight=3); self.store.update_feed(3, weight=3)
+        d = self.call("PATCH", "/api/games/settings", {"min_weight": 2, "min_feeds_percent": 100})[1]["settings"]
+        self.assertEqual((d["min_feeds_effective"], d["enabled_outlets"]), (2, 2))
+        d = self.call("PATCH", "/api/games/settings", {"min_weight": 0, "min_feeds_percent": 50})[1]["settings"]
         self.store.update_feed(3, enabled=False)                                # 2 enabled -> 50% = 1
         self.assertEqual(self.call("GET", "/api/games/settings")[1]["settings"]["min_feeds_effective"], 1)
         self.assertEqual(self.call("PATCH", "/api/games/settings", {"min_feeds_mode": "share"})[0], 400)

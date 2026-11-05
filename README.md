@@ -73,8 +73,8 @@ each story) or a single vertical, and sort by **Top** (score) or **Latest**.
 **Settings**: one sub-tab per vertical, plus **Scraping**. Your settings, watched phrases and outlet
 choices are **saved in your browser** (each viewer has their own; see [Architecture](#architecture-many-viewers-little-server-work)).
 - **Which stories show** (per vertical): reported by at least N outlets, or at
-  least a percentage of the vertical's enabled outlets (rounded up, minimum 1; it follows outlets
-  being switched on/off), time window, only count outlets weighted at least X (lower-weighted outlets still help group headlines
+  least a percentage of the outlets that can count: switched on and weighted at least the
+  "only count outlets weighted at least" value (rounded up, minimum 1; it follows both settings), time window, only count outlets weighted at least X (lower-weighted outlets still help group headlines
   but don't count toward N or the score), minimum score, match strictness, and, when outlets are
   marked required, whether stories need any or all of them. Time windows go up to 30 days.
   Changes save automatically; **Reset to defaults** returns to the vertical's defaults.
@@ -85,7 +85,8 @@ choices are **saved in your browser** (each viewer has their own; see [Architect
   (stories must include it); set your own weight (0–10); search; all on / all off.
   **Catalog (all users)** under an outlet changes the shared catalog: its default weight, keyword
   filter, or removing it. **Shared catalog (admin)** adds feeds and sets the match strictness. These
-  go to the server and regroup stories for everyone.
+  go to the server and regroup stories for everyone; until the new grouping is ready (seconds, up to
+  about half a minute for General News) a "Re-grouping in progress…" flag shows and your new value stays put.
 - **Scraping**: progress of the current run, Refresh all, Stop, Resume, Backfill N days, and the
   automatic schedule (on/off and interval).
 
