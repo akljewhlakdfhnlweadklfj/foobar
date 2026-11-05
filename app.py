@@ -11,25 +11,31 @@ Then open http://localhost:8000
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
+import os
 import re
 import sqlite3
+import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-import feedly
 import feeds
 import matching
+from scraper import Scraper, _from_feedly, fetch_with_fallback  # noqa: F401 (re-exported)
+from store import (DEFAULT_BONUS, MAX_BONUS, MAX_WEIGHT, RETENTION_DAYS, SCHEMA_VERSION,  # noqa: F401
+                   SeedFeed, Store, read_feed_list)
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
 FEEDS_DIR = ROOT / "feeds"
-RETENTION_DAYS = 14
+MAX_BODY = 64 * 1024
+CACHE_SECONDS = 60
+MAX_PHRASE_LEN = 100
 
 
 @dataclass(frozen=True)
@@ -48,271 +54,163 @@ VERTICALS = [
 ]
 VERTICALS_BY_KEY = {v.key: v for v in VERTICALS}
 
-SCHEMA_VERSION = 4
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS feeds (
-    id           INTEGER PRIMARY KEY,
-    url          TEXT NOT NULL UNIQUE,
-    title        TEXT NOT NULL DEFAULT '',
-    added_at     REAL NOT NULL,
-    last_fetched REAL,
-    last_error   TEXT,
-    item_count   INTEGER NOT NULL DEFAULT 0,
-    via          TEXT,         -- 'direct' or 'feedly' (how the last successful fetch got its items)
-    name         TEXT,         -- display name from the seed file; falls back to the feed's own title
-    weight       REAL          -- outlet prestige 1..5 (seed file "w=N", editable in the UI); NULL = default
-);
-CREATE TABLE IF NOT EXISTS items (
-    id         INTEGER PRIMARY KEY,
-    feed_id    INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
-    guid       TEXT NOT NULL,
-    title      TEXT NOT NULL,
-    link       TEXT NOT NULL DEFAULT '',
-    published  REAL NOT NULL,
-    fetched_at REAL NOT NULL,
-    UNIQUE (feed_id, guid)
-);
-CREATE INDEX IF NOT EXISTS items_published ON items(published);
-"""
+
+# --- stories ---------------------------------------------------------------------------------
+
+def phrase_regex(phrase: str) -> re.Pattern:
+    """Case-insensitive whole-word match; any run of whitespace between words."""
+    words = phrase.split()
+    return re.compile(r"(?<!\w)" + r"\s+".join(re.escape(w) for w in words) + r"(?!\w)", re.I)
 
 
-@dataclass
-class SeedFeed:
-    name: str | None = None
-    weight: float | None = None
+def _snippet(text: str, m: re.Match, before: int = 70, after: int = 110) -> str:
+    """The part of a description around a phrase match, cut on word boundaries."""
+    start, end = max(0, m.start() - before), min(len(text), m.end() + after)
+    if start > 0:
+        start = text.find(" ", start) + 1 or start
+    if end < len(text):
+        end = text.rfind(" ", m.end(), end) if text.rfind(" ", m.end(), end) > 0 else end
+    return ("…" if start > 0 else "") + text[start:end] + ("…" if end < len(text) else "")
 
 
-def read_feed_list(path: Path) -> dict[str, SeedFeed]:
-    """{url: SeedFeed} from a seed file: one URL per line, then an optional comment
-    "# Display name | w=4 | free-form notes". The first field is the name; "w=N" is the weight."""
-    feeds_ = {}
-    for line in path.read_text().splitlines():
-        url, _, comment = line.partition("#")
-        url = url.strip()
-        if not url.lower().startswith(("http://", "https://")):
-            continue
-        fields = [f.strip() for f in comment.split("|")]
-        weight = next((float(f[2:]) for f in fields[1:] if re.fullmatch(r"w=\d+(\.\d+)?", f)), None)
-        feeds_[url] = SeedFeed(fields[0] or None, weight)
-    return feeds_
+_cache: dict[tuple, tuple] = {}
+_cache_lock = threading.Lock()
 
 
-class Store:
-    def __init__(self, path: Path):
-        self.path = str(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
-        with self._conn() as c:
-            c.executescript(SCHEMA)
-            cols = {r["name"] for r in c.execute("PRAGMA table_info(feeds)")}
-            for col, typ in (("via", "TEXT"), ("name", "TEXT"), ("weight", "REAL")):  # added in v2 / v3 / v4
-                if col not in cols:
-                    c.execute(f"ALTER TABLE feeds ADD COLUMN {col} {typ}")
-            c.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-
-    def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.path, timeout=30)
-        c.row_factory = sqlite3.Row
-        c.execute("PRAGMA foreign_keys = ON")
-        return c
-
-    def list_feeds(self) -> list[dict]:
-        with self._conn() as c:
-            return [dict(r) for r in c.execute(
-                "SELECT * FROM feeds ORDER BY COALESCE(name, NULLIF(title, ''), url) COLLATE NOCASE")]
-
-    def get_feed(self, feed_id: int) -> dict | None:
-        with self._conn() as c:
-            r = c.execute("SELECT * FROM feeds WHERE id = ?", (feed_id,)).fetchone()
-            return dict(r) if r else None
-
-    def add_feed(self, url: str, name: str | None = None, weight: float | None = None) -> int:
-        with self._lock, self._conn() as c:
-            return c.execute("INSERT INTO feeds (url, added_at, name, weight) VALUES (?, ?, ?, ?)",
-                             (url, time.time(), name, weight)).lastrowid
-
-    def add_feeds(self, feeds_: dict[str, SeedFeed]) -> int:
-        added = 0
-        for url, seed in feeds_.items():
-            try:
-                self.add_feed(url, seed.name, seed.weight)
-                added += 1
-            except sqlite3.IntegrityError:
-                pass
-        return added
-
-    def sync_seed(self, feeds_: dict[str, SeedFeed]) -> None:
-        """Apply seed-file names to existing feeds, and seed-file weights where none is set yet
-        (a weight changed in the UI is kept)."""
-        with self._lock, self._conn() as c:
-            c.executemany("UPDATE feeds SET name = ? WHERE url = ?",
-                          [(s.name, u) for u, s in feeds_.items() if s.name])
-            c.executemany("UPDATE feeds SET weight = ? WHERE url = ? AND weight IS NULL",
-                          [(s.weight, u) for u, s in feeds_.items() if s.weight is not None])
-
-    def set_weight(self, feed_id: int, weight: float) -> bool:
-        with self._lock, self._conn() as c:
-            return c.execute("UPDATE feeds SET weight = ? WHERE id = ?", (weight, feed_id)).rowcount > 0
-
-    def delete_feed(self, feed_id: int) -> bool:
-        with self._lock, self._conn() as c:
-            return c.execute("DELETE FROM feeds WHERE id = ?", (feed_id,)).rowcount > 0
-
-    def save_fetch(self, feed_id: int, parsed: feeds.ParsedFeed | None, error: str | None, via: str = "direct") -> None:
-        now = time.time()
-        with self._lock, self._conn() as c:
-            if parsed is not None:
-                c.executemany(
-                    """INSERT INTO items (feed_id, guid, title, link, published, fetched_at)
-                       VALUES (?, ?, ?, ?, ?, ?)
-                       ON CONFLICT (feed_id, guid) DO UPDATE SET title = excluded.title, link = excluded.link""",
-                    [(feed_id, e.guid, e.title, e.link, e.published, now) for e in parsed.entries if e.title],
-                )
-                c.execute(
-                    """UPDATE feeds SET last_fetched = ?, last_error = ?, via = ?,
-                       title = CASE WHEN ? != '' THEN ? ELSE title END,
-                       item_count = (SELECT COUNT(*) FROM items WHERE feed_id = ?)
-                       WHERE id = ?""",
-                    (now, error, via, parsed.title, parsed.title, feed_id, feed_id),
-                )
-            else:
-                c.execute("UPDATE feeds SET last_fetched = ?, last_error = ? WHERE id = ?", (now, error, feed_id))
-            c.execute("DELETE FROM items WHERE published < ?", (now - RETENTION_DAYS * 86400,))
-
-    def items_since(self, since: float) -> list[matching.Item]:
-        with self._conn() as c:
-            rows = c.execute(
-                """SELECT i.id, i.feed_id, i.title, i.link, i.published,
-                          COALESCE(f.name, NULLIF(f.title, ''), f.url) AS feed_title,
-                          COALESCE(f.weight, ?) AS weight
-                   FROM items i JOIN feeds f ON f.id = i.feed_id
-                   WHERE i.published >= ?""",
-                (matching.DEFAULT_WEIGHT, since),
-            ).fetchall()
-        return [matching.Item(**dict(r)) for r in rows]
-
-
-def _from_feedly(entries: list[dict], title: str = "") -> feeds.ParsedFeed:
-    parsed = []
-    for e in entries:
-        guid, t, link, pub = feedly.entry_fields(e)
-        if t:
-            parsed.append(feeds.ParsedEntry(guid, feeds.clean_text(t), link, pub or time.time()))
-    return feeds.ParsedFeed(title=title, entries=parsed)
-
-
-def fetch_with_fallback(url: str) -> tuple[feeds.ParsedFeed, str, str | None]:
-    """(parsed feed, via, note). Tries the feed directly, then Feedly's copy of it."""
-    try:
-        return feeds.fetch_and_parse(url), "direct", None
-    except feeds.FeedError as direct_err:
-        try:
-            title, entries = feedly.recent(url)
-        except Exception:  # noqa: BLE001
-            raise direct_err
-        if not entries:
-            raise direct_err
-        return _from_feedly(entries, title), "feedly", f"Direct fetch failed ({direct_err}); using Feedly's copy"
-
-
-class Fetcher:
-    def __init__(self, stores: dict[str, Store], interval_min: float):
-        self.stores = stores
-        self.interval = interval_min * 60
-        self._wake = threading.Event()
-        self._busy = threading.Lock()
-        self.last_run: float | None = None
-
-    @staticmethod
-    def refresh_feed(store: Store, feed: dict) -> None:
-        try:
-            parsed, via, note = fetch_with_fallback(feed["url"])
-            store.save_fetch(feed["id"], parsed, note, via)
-        except feeds.FeedError as e:
-            store.save_fetch(feed["id"], None, str(e))
-        except Exception as e:  # noqa: BLE001
-            store.save_fetch(feed["id"], None, f"Unexpected error: {e}")
-
-    def refresh_all(self) -> None:
-        if not self._busy.acquire(blocking=False):
-            return  # a refresh is already running
-        try:
-            jobs = [(s, f) for s in self.stores.values() for f in s.list_feeds()]
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                list(pool.map(lambda job: self.refresh_feed(*job), jobs))
-            self.last_run = time.time()
-        finally:
-            self._busy.release()
-
-    @property
-    def running(self) -> bool:
-        return self._busy.locked()
-
-    def trigger(self) -> None:
-        self._wake.set()
-
-    def loop(self) -> None:
-        while True:
-            self.refresh_all()
-            self._wake.wait(self.interval)
-            self._wake.clear()
-
-
-def backfill(stores: dict[str, Store], days: float) -> None:
-    """Load the last `days` of history for every feed from Feedly's archive."""
-    since = time.time() - min(days, RETENTION_DAYS) * 86400
-
-    def one(job):
-        key, store, feed = job
-        try:
-            entries = list(feedly.history(feed["url"], since=since))
-        except Exception as e:  # noqa: BLE001
-            return f"  {key}: {feed['url']}: Feedly error: {e}"
-        if entries:
-            store.save_fetch(feed["id"], _from_feedly(entries), feed.get("last_error"), feed.get("via") or "feedly")
-        return f"  {key}: {len(entries):4d} items  {feed['title'] or feed['url']}"
-
-    jobs = [(k, s, f) for k, s in stores.items() for f in s.list_feeds()]
-    print(f"Backfilling {days:g} days for {len(jobs)} feeds from Feedly...")
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        for line in pool.map(one, jobs):
-            print(line)
-
-
-def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, min_score: float = 0) -> dict:
+def _clusters(store: Store, hours: float, threshold: float) -> tuple[list[matching.Story], int]:
+    """Clustered stories for the window, cached until the data changes or CACHE_SECONDS pass."""
+    key = (store.path, hours, threshold)
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and hit[0] == store.version and time.time() - hit[1] < CACHE_SECONDS:
+            return hit[2], hit[3]
     items = store.items_since(time.time() - hours * 3600)
-    stories = [s for s in matching.cluster(items, threshold=threshold)
-               if s.coverage >= min_feeds and s.score >= min_score]
-    stories.sort(key=lambda s: (-s.score, -s.coverage, -s.latest))
+    stories = matching.cluster(items, threshold=threshold)
+    with _cache_lock:
+        _cache[key] = (store.version, time.time(), stories, len(items))
+    return stories, len(items)
+
+
+def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, min_score: float = 0,
+                  only_watched: bool = False, watched_any_coverage: bool = False,
+                  require_all: bool = False, min_weight: float = 0) -> dict:
+    """Stories for the API.
+
+    score = prestige (sum of distinct outlets' weights) + bonus of every watched phrase found in
+    any of the story's titles or descriptions. only_watched keeps just stories with a watched
+    phrase; watched_any_coverage shows watched stories even below min_feeds / min_score.
+    Required outlets (feeds.required): when any are set, a story must include at least one of
+    them (require_all: every one of them). This applies to every story, watched ones included.
+    min_weight: outlets weighted below it still help group headlines and are listed, but don't count
+    toward coverage (the "reported by N" number) or the prestige score.
+    """
+    stories, considered = _clusters(store, hours, threshold)
+    phrases = [(p, phrase_regex(p["phrase"])) for p in store.list_phrases()]
+    required = store.required_feed_ids()
     out = []
     for s in stories:
+        if required:
+            have = s.feed_ids & required
+            if not have or (require_all and have != required):
+                continue
+        hits, watched_items, snippets = [], set(), {}
+        for p, rx in phrases:
+            found = []
+            for i in s.items:
+                if rx.search(i.title):
+                    found.append(i.id)
+                elif m := rx.search(i.description):
+                    found.append(i.id)
+                    snippets.setdefault(i.id, _snippet(i.description, m))
+            if found:
+                hits.append(p)
+                watched_items.update(found)
+        if only_watched and not hits:
+            continue
+        counted = {i.feed_id: i.weight for i in s.items if i.weight >= min_weight}
+        coverage, prestige = len(counted), sum(counted.values())
+        if not counted:
+            continue
+        bonus = sum(p["bonus"] for p in hits)
+        score = prestige + bonus
+        if not (hits and watched_any_coverage) and (coverage < min_feeds or score < min_score):
+            continue
         # One entry per feed (a feed may have several near-duplicate items; keep the newest).
         per_feed: dict[int, matching.Item] = {}
         for it in sorted(s.items, key=lambda i: i.published):
             per_feed[it.feed_id] = it
-        lead = matching.lead_item(s)
+        lead = matching.lead_item(s)  # highest-weighted outlet, so it counts whenever any outlet does
         per_feed[lead.feed_id] = lead  # show the lead outlet's lead headline, not its newest item
-        out.append(
-            {
-                "title": lead.title,
-                "lead": {"feed": lead.feed_title, "link": lead.link, "weight": lead.weight},
-                "coverage": s.coverage,
-                "score": s.score,
-                "first_seen": s.earliest,
-                "latest": s.latest,
-                "sources": [
-                    {"feed": it.feed_title, "title": it.title, "link": it.link, "published": it.published,
-                     "weight": it.weight}
-                    for it in sorted(per_feed.values(), key=lambda i: (-i.weight, i.published))
-                ],
-            }
-        )
-    return {"stories": out, "items_considered": len(items)}
+        out.append({
+            "title": lead.title,
+            "lead": {"feed": lead.feed_title, "link": lead.link, "weight": lead.weight,
+                     "description": lead.description[:400]},
+            "coverage": coverage,
+            "base_score": prestige,
+            "outlets": s.coverage,  # including outlets below min_weight
+            "bonus": bonus,
+            "score": score,
+            "watched": [{"id": p["id"], "phrase": p["phrase"], "bonus": p["bonus"]} for p in hits],
+            "first_seen": s.earliest,
+            "latest": s.latest,
+            "sources": [
+                {"feed": it.feed_title, "title": it.title, "link": it.link, "published": it.published,
+                 "weight": it.weight, "watched": it.id in watched_items, "snippet": snippets.get(it.id, ""),
+                 "counted": it.weight >= min_weight}
+                for it in sorted(per_feed.values(), key=lambda i: (-i.weight, i.published))
+            ],
+        })
+    out.sort(key=lambda s: (-s["score"], -s["coverage"], -s["latest"]))
+    return {"stories": out, "items_considered": considered}
 
 
-def make_handler(stores: dict[str, Store], fetcher: Fetcher):
+# --- HTTP ------------------------------------------------------------------------------------
+
+class HTTPError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "::1", "[::1]")
+DEFAULT_ALLOWED_SUFFIXES = (".app.github.dev", ".githubpreview.dev")
+
+
+@dataclass
+class Security:
+    """Protection for requests that change things (POST/PATCH/DELETE).
+
+    - Without a valid API token: the body must be JSON (blocks cross-site "simple" form/text posts),
+      a browser Origin header must match the Host, and the Host must be allowed (blocks DNS
+      rebinding). Allowed hosts: localhost, Codespaces forwarding domains, and --allow-host values
+      ("*" allows any host).
+    - With "Authorization: Bearer <token>" matching --api-token: allowed from anywhere, for
+      external orchestrators.
+    """
+    api_token: str | None = None
+    allowed_hosts: tuple[str, ...] = ()
+
+    def host_allowed(self, host: str) -> bool:
+        name = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
+        name = name.lower()
+        if "*" in self.allowed_hosts:
+            return True
+        return (name in DEFAULT_ALLOWED_HOSTS or name in self.allowed_hosts
+                or any(name.endswith(s) for s in DEFAULT_ALLOWED_SUFFIXES))
+
+    def token_ok(self, header: str | None) -> bool:
+        if not self.api_token or not header or not header.startswith("Bearer "):
+            return False
+        return hmac.compare_digest(header[7:].strip(), self.api_token)
+
+
+def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security | None = None):
+    security = security or Security()
+    seen_hosts: set[str] = set()
+
     class Handler(BaseHTTPRequestHandler):
-        server_version = "NewsAggregator/2.0"
+        server_version = "NewsAggregator/3.0"
+        timeout = 30  # seconds a client may take to send its request
 
         def log_message(self, fmt, *args):  # quieter logs
             pass
@@ -322,17 +220,53 @@ def make_handler(stores: dict[str, Store], fetcher: Fetcher):
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
         def _body(self) -> dict:
-            n = int(self.headers.get("Content-Length") or 0)
-            if not n:
+            raw_len = self.headers.get("Content-Length")
+            if not raw_len:
                 return {}
             try:
-                return json.loads(self.rfile.read(min(n, 65536)))
-            except json.JSONDecodeError:
-                return {}
+                n = int(raw_len)
+            except ValueError:
+                raise HTTPError(400, "Invalid Content-Length")
+            if n < 0:
+                raise HTTPError(400, "Invalid Content-Length")
+            if n > MAX_BODY:
+                raise HTTPError(413, f"Request body larger than {MAX_BODY // 1024} KB")
+            try:
+                data = json.loads(self.rfile.read(n) or b"{}")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise HTTPError(400, "Body must be JSON")
+            if not isinstance(data, dict):
+                raise HTTPError(400, "Body must be a JSON object")
+            return data
+
+        def _note_host(self):
+            host = self.headers.get("Host", "")
+            if host not in seen_hosts and len(seen_hosts) < 50:
+                seen_hosts.add(host)
+                print(f"[http] first request for Host: {host!r}", file=sys.stderr, flush=True)
+
+        def _guard_write(self):
+            """Raise HTTPError unless this state-changing request is allowed."""
+            if security.token_ok(self.headers.get("Authorization")):
+                return
+            host = self.headers.get("Host", "")
+            if not security.host_allowed(host):
+                raise HTTPError(403, f"Changes aren't allowed through host {host!r}. Start the app with "
+                                     f"--allow-host {host.rsplit(':', 1)[0]} (or use an API token).")
+            origin = self.headers.get("Origin")
+            if origin and urlparse(origin).netloc.lower() != host.lower():
+                raise HTTPError(403, "Cross-site request refused")
+            # Browsers can send a cross-site POST without asking first (a "simple" request), but only
+            # with a form or text content type; requiring JSON blocks that. PATCH/DELETE always need a
+            # CORS preflight, which this server never grants, so they don't need the check.
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if self.command == "POST" and ctype != "application/json":
+                raise HTTPError(415, "Send changes as Content-Type: application/json")
 
         def _route(self) -> tuple[list[str], dict, Store | None]:
             """/api/<vertical>/<rest...> -> (rest parts, query, store)."""
@@ -343,7 +277,35 @@ def make_handler(stores: dict[str, Store], fetcher: Fetcher):
                 return parts[2:], q, stores[parts[1]]
             return parts, q, None
 
+        def _handle(self, method: str):
+            self._note_host()
+            try:
+                if method != "GET":
+                    self._guard_write()
+                getattr(self, "_" + method)()
+            except HTTPError as e:
+                self._json({"error": str(e)}, e.status)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception as e:  # noqa: BLE001 - answer instead of dropping the connection
+                print(f"[http] {method} {self.path}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+                self._json({"error": "Internal error"}, 500)
+
         def do_GET(self):
+            self._handle("GET")
+
+        def do_POST(self):
+            self._handle("POST")
+
+        def do_PATCH(self):
+            self._handle("PATCH")
+
+        def do_DELETE(self):
+            self._handle("DELETE")
+
+        # --- GET ---
+
+        def _GET(self):
             rest, q, store = self._route()
             path = urlparse(self.path).path
             if path in ("/", "/index.html"):
@@ -359,81 +321,182 @@ def make_handler(stores: dict[str, Store], fetcher: Fetcher):
                                   for v in VERTICALS if v.key in stores],
                     "default_threshold": matching.DEFAULT_THRESHOLD,
                     "default_weight": matching.DEFAULT_WEIGHT,
+                    "max_weight": MAX_WEIGHT,
+                    "default_bonus": DEFAULT_BONUS,
+                    "max_bonus": MAX_BONUS,
                 })
+            elif path == "/api/scrape/status":
+                self._json(scraper.status())
             elif store and rest == ["feeds"]:
-                self._json({"feeds": store.list_feeds(), "refreshing": fetcher.running, "last_run": fetcher.last_run})
+                st = scraper.status()
+                last = st["last_run"] or {}
+                self._json({"feeds": store.list_feeds(), "refreshing": st["state"] != "idle",
+                            "last_run": last.get("finished_at"), "scrape": st})
+            elif store and rest == ["phrases"]:
+                self._json({"phrases": store.list_phrases()})
             elif store and rest == ["stories"]:
                 try:
                     min_feeds = max(1, int(q.get("min_feeds", 2)))
                     hours = min(24 * RETENTION_DAYS, max(1.0, float(q.get("hours", 48))))
                     threshold = min(1.0, max(0.02, float(q.get("threshold", matching.DEFAULT_THRESHOLD))))
                     min_score = max(0.0, float(q.get("min_score", 0) or 0))
+                    min_weight = max(0.0, float(q.get("min_weight", 0) or 0))
                 except ValueError:
-                    return self._json({"error": "Invalid parameters"}, 400)
-                self._json(build_stories(store, min_feeds, hours, threshold, min_score))
+                    raise HTTPError(400, "Invalid parameters")
+                if any(x != x for x in (hours, threshold, min_score, min_weight)):
+                    raise HTTPError(400, "Invalid parameters")
+                self._json(build_stories(store, min_feeds, hours, threshold, min_score,
+                                         only_watched=q.get("only_watched") in ("1", "true"),
+                                         watched_any_coverage=q.get("watched_any") in ("1", "true"),
+                                         require_all=q.get("require_all") in ("1", "true"),
+                                         min_weight=min_weight))
             else:
-                self._json({"error": "Not found"}, 404)
+                raise HTTPError(404, "Not found")
 
-        def do_POST(self):
+        # --- POST ---
+
+        def _POST(self):
             rest, _, store = self._route()
+            path = urlparse(self.path).path
+            body = self._body()
+            if path in ("/api/scrape/start", "/api/refresh"):
+                kind = body.get("kind", "refresh")
+                days = body.get("days")
+                verticals = body.get("verticals")
+                if verticals is not None and (not isinstance(verticals, list)
+                                              or not all(isinstance(v, str) for v in verticals)):
+                    raise HTTPError(400, "verticals must be a list of vertical keys")
+                if days is not None and (isinstance(days, bool) or not isinstance(days, (int, float))):
+                    raise HTTPError(400, "days must be a number")
+                ok, res = scraper.start(kind, verticals, days, resume=body.get("resume", True) is not False)
+                if not ok:
+                    raise HTTPError(409 if "already running" in res else 400, res)
+                return self._json(res, 202)
+            if path == "/api/scrape/stop":
+                ok, res = scraper.stop()
+                return self._json(res if ok else {**scraper.status(), "message": res}, 202 if ok else 200)
+            if path == "/api/scrape/schedule":
+                auto, interval = body.get("auto"), body.get("interval_minutes")
+                if auto is not None and not isinstance(auto, bool):
+                    raise HTTPError(400, "auto must be true or false")
+                if interval is not None and (isinstance(interval, bool) or not isinstance(interval, (int, float))
+                                             or not 1 <= interval <= 24 * 60):
+                    raise HTTPError(400, "interval_minutes must be between 1 and 1440")
+                return self._json(scraper.set_schedule(auto, interval))
             if store and rest == ["feeds"]:
-                url = str(self._body().get("url", "")).strip()
+                url = str(body.get("url", "")).strip()
                 if not url.lower().startswith(("http://", "https://")):
-                    return self._json({"error": "URL must start with http:// or https://"}, 400)
-                # Validate before saving so typos are reported immediately.
+                    raise HTTPError(400, "URL must start with http:// or https://")
                 try:
-                    parsed, via, note = fetch_with_fallback(url)
+                    parsed, via, note = fetch_with_fallback(url)  # validate before saving
                 except feeds.FeedError as e:
-                    return self._json({"error": str(e)}, 400)
+                    raise HTTPError(400, str(e))
                 try:
                     feed_id = store.add_feed(url)
                 except sqlite3.IntegrityError:
-                    return self._json({"error": "That feed is already added"}, 409)
+                    raise HTTPError(409, "That feed is already added")
                 store.save_fetch(feed_id, parsed, note, via)
-                self._json({"feed": store.get_feed(feed_id)}, 201)
-            elif urlparse(self.path).path == "/api/refresh":
-                fetcher.trigger()
-                self._json({"ok": True}, 202)
-            else:
-                self._json({"error": "Not found"}, 404)
-
-        def do_PATCH(self):
-            rest, _, store = self._route()
-            if store and len(rest) == 2 and rest[0] == "feeds" and rest[1].isdigit():
+                return self._json({"feed": store.get_feed(feed_id)}, 201)
+            if store and rest == ["phrases"]:
+                phrase = " ".join(str(body.get("phrase", "")).split())
+                if not phrase or len(phrase) > MAX_PHRASE_LEN:
+                    raise HTTPError(400, f"phrase must be 1 to {MAX_PHRASE_LEN} characters")
+                bonus = self._number(body.get("bonus", DEFAULT_BONUS), "bonus", 0, MAX_BONUS)
                 try:
-                    weight = float(self._body().get("weight"))
-                except (TypeError, ValueError):
-                    return self._json({"error": "weight must be a number"}, 400)
-                if not 0 < weight <= 10:
-                    return self._json({"error": "weight must be between 0 and 10"}, 400)
-                if store.set_weight(int(rest[1]), weight):
-                    return self._json({"feed": store.get_feed(int(rest[1]))})
-            self._json({"error": "Not found"}, 404)
+                    pid = store.add_phrase(phrase, bonus)
+                except sqlite3.IntegrityError:
+                    raise HTTPError(409, "That phrase is already watched")
+                return self._json({"phrase": store.get_phrase(pid)}, 201)
+            raise HTTPError(404, "Not found")
 
-        def do_DELETE(self):
+        @staticmethod
+        def _number(value, name: str, lo: float, hi: float) -> float:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
+                raise HTTPError(400, f"{name} must be a number")
+            if not lo <= value <= hi:
+                raise HTTPError(400, f"{name} must be between {lo:g} and {hi:g}")
+            return float(value)
+
+        # --- PATCH ---
+
+        def _PATCH(self):
+            """/api/<v>/feeds/<id> {"weight": 0..10, "enabled": bool}  - change one feed.
+            /api/<v>/feeds/<id> {"required": bool}                     - stories must include this outlet.
+            /api/<v>/feeds {"enabled": bool} / {"required": false}     - all feeds on/off; clear required.
+            /api/<v>/phrases/<id> {"bonus": 0..100}                    - change a phrase's bonus."""
             rest, _, store = self._route()
+            body = self._body()
+            if store and len(rest) == 2 and rest[0] == "phrases" and rest[1].isdigit():
+                bonus = self._number(body.get("bonus"), "bonus", 0, MAX_BONUS)
+                if store.update_phrase(int(rest[1]), bonus):
+                    return self._json({"phrase": store.get_phrase(int(rest[1]))})
+                raise HTTPError(404, "Not found")
+            enabled, required = body.get("enabled"), body.get("required")
+            for name, val in (("enabled", enabled), ("required", required)):
+                if val is not None and not isinstance(val, bool):
+                    raise HTTPError(400, f"{name} must be true or false")
+            if store and rest == ["feeds"]:
+                if enabled is None and required is not False:
+                    raise HTTPError(400, 'send {"enabled": true|false} or {"required": false}')
+                updated = store.set_all_enabled(enabled) if enabled is not None else 0
+                if required is False:
+                    updated = max(updated, store.clear_required())
+                return self._json({"updated": updated})
             if store and len(rest) == 2 and rest[0] == "feeds" and rest[1].isdigit():
-                if store.delete_feed(int(rest[1])):
+                weight = self._number(body["weight"], "weight", 0, MAX_WEIGHT) if "weight" in body else None
+                if weight is None and enabled is None and required is None:
+                    raise HTTPError(400, "send weight, enabled and/or required")
+                if store.update_feed(int(rest[1]), weight=weight, enabled=enabled, required=required):
+                    return self._json({"feed": store.get_feed(int(rest[1]))})
+            raise HTTPError(404, "Not found")
+
+        # --- DELETE ---
+
+        def _DELETE(self):
+            rest, _, store = self._route()
+            if store and len(rest) == 2 and rest[1].isdigit():
+                if rest[0] == "feeds" and store.delete_feed(int(rest[1])):
                     return self._json({"ok": True})
-            self._json({"error": "Not found"}, 404)
+                if rest[0] == "phrases" and store.delete_phrase(int(rest[1])):
+                    return self._json({"ok": True})
+            raise HTTPError(404, "Not found")
 
     return Handler
 
 
+# --- setup -----------------------------------------------------------------------------------
+
 def open_stores(data_dir: Path, seed: bool = True) -> dict[str, Store]:
-    """One Store per vertical. A brand-new (empty) vertical is seeded from feeds/<key>.txt."""
+    """One Store per vertical. A brand-new database is seeded from feeds/<key>.txt; after that,
+    seed files only update display names (and weights of feeds that have none)."""
     stores = {}
     for v in VERTICALS:
         store = Store(data_dir / f"{v.key}.db")
         seed_file = FEEDS_DIR / f"{v.key}.txt"
         if seed and seed_file.exists():
             seed_feeds = read_feed_list(seed_file)
-            if not store.list_feeds():
+            if store.is_new:
                 n = store.add_feeds(seed_feeds)
                 print(f"Seeded {v.label}: {n} feeds from {seed_file.relative_to(ROOT)}")
             store.sync_seed(seed_feeds)
         stores[v.key] = store
     return stores
+
+
+def backfill(stores: dict[str, Store], days: float, scraper: Scraper | None = None) -> dict:
+    """Run a backfill to completion (or until stopped/rate-limited), printing progress."""
+    scraper = scraper or Scraper(stores, auto=False, log=print)
+    print(f"Backfilling {days:g} days for {sum(len(s.list_feeds()) for s in stores.values())} feeds from Feedly...")
+    ok, res = scraper.start("backfill", list(stores), days, trigger="cli", wait=True)
+    if not ok:
+        print(f"Backfill not started: {res}")
+        return {}
+    run = scraper.status()["run"]
+    print(f"Backfill {run['status']}: {run['done']}/{run['total']} feeds, {run['failed']} failed.")
+    if run["status"] != "completed":
+        print(f"{run.get('error') or 'Stopped early.'} Run --backfill {days:g} again to resume; "
+              "finished feeds are skipped and nothing is lost.")
+    return run
 
 
 def main():
@@ -442,26 +505,51 @@ def main():
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--data", default=str(ROOT / "data"), help="directory holding one <vertical>.db per vertical")
     ap.add_argument("--interval", type=float, default=15, help="minutes between automatic refreshes")
+    ap.add_argument("--no-auto", action="store_true",
+                    help="don't refresh on a schedule (an external orchestrator calls /api/scrape/start)")
+    ap.add_argument("--no-resume", action="store_true", help="don't resume an interrupted scrape on startup")
     ap.add_argument("--backfill", type=float, metavar="DAYS",
                     help=f"load the last DAYS (max {RETENTION_DAYS}) of history for every feed from Feedly first")
     ap.add_argument("--import", dest="import_file", metavar="FILE", help="add feed URLs from FILE to --vertical")
     ap.add_argument("--vertical", choices=list(VERTICALS_BY_KEY), default="games", help="vertical for --import")
     ap.add_argument("--no-serve", action="store_true", help="exit after seeding/--import/--backfill")
+    ap.add_argument("--api-token", default=os.environ.get("NEWS_API_TOKEN"),
+                    help="token that lets other machines call the API (Authorization: Bearer <token>); "
+                         "default: $NEWS_API_TOKEN")
+    ap.add_argument("--allow-host", action="append", default=[], metavar="HOST",
+                    help="extra hostname allowed to make changes through the UI/API ('*' = any)")
+    ap.add_argument("--allow-private-feeds", action="store_true",
+                    help="allow feed URLs on localhost/private networks (off by default to prevent SSRF)")
     args = ap.parse_args()
 
-    stores = open_stores(Path(args.data))
+    feeds.ALLOW_PRIVATE = args.allow_private_feeds
+    data_dir = Path(args.data)
+    for old in {Path.cwd() / "news.db", ROOT / "news.db"}:
+        if old.exists():
+            print(f"Note: {old} is a database from the first version and is no longer used. To keep feeds you "
+                  f"added there, re-add them in the UI or with --import.", file=sys.stderr)
+    stores = open_stores(data_dir)
     if args.import_file:
         n = stores[args.vertical].add_feeds(read_feed_list(Path(args.import_file)))
         print(f"Imported {n} new feed(s) into {args.vertical}")
+
+    scraper = Scraper(stores, data_dir / "scrape_state.json", interval_minutes=args.interval,
+                      auto=not args.no_auto and args.interval > 0, log=print)
     if args.backfill:
-        backfill(stores, args.backfill)
+        backfill(stores, args.backfill, scraper)
     if args.no_serve:
         return
 
-    fetcher = Fetcher(stores, args.interval)
-    threading.Thread(target=fetcher.loop, daemon=True).start()
-    srv = ThreadingHTTPServer((args.host, args.port), make_handler(stores, fetcher))
+    if not args.no_resume:
+        scraper.resume_interrupted()
+    threading.Thread(target=scraper.loop, daemon=True, name="scheduler").start()
+    security = Security(api_token=args.api_token, allowed_hosts=tuple(h.lower() for h in args.allow_host)
+                        + ((args.host.lower(),) if args.host not in ("0.0.0.0", "::") else ()))
+    srv = ThreadingHTTPServer((args.host, args.port), make_handler(stores, scraper, security))
     print(f"News aggregator running at http://{args.host}:{args.port}  (data: {args.data})")
+    st = scraper.status()
+    print(f"Scraping: {'every %g min' % st['interval_minutes'] if st['auto'] else 'manual (POST /api/scrape/start)'}"
+          f"{'; API token enabled' if args.api_token else ''}")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

@@ -1,0 +1,269 @@
+"""SQLite storage: one self-contained database file per vertical.
+
+Schema history (PRAGMA user_version): v1 feeds+items; v2 feeds.via; v3 feeds.name; v4 feeds.weight;
+v5 feeds.enabled; v6 feeds.backfilled_since + items.description; v7 feeds.last_run + feeds.required +
+phrases table.
+Older files are upgraded in place when opened.
+"""
+
+from __future__ import annotations
+
+import re
+import sqlite3
+import threading
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator
+
+import feeds
+import matching
+
+RETENTION_DAYS = 14
+SCHEMA_VERSION = 7
+MAX_WEIGHT = 10.0
+MAX_BONUS = 100.0
+DEFAULT_BONUS = 5.0
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS feeds (
+    id           INTEGER PRIMARY KEY,
+    url          TEXT NOT NULL UNIQUE,
+    title        TEXT NOT NULL DEFAULT '',
+    added_at     REAL NOT NULL,
+    last_fetched REAL,
+    last_error   TEXT,
+    item_count   INTEGER NOT NULL DEFAULT 0,
+    via          TEXT,              -- 'direct' or 'feedly' (how the last successful fetch got its items)
+    name         TEXT,              -- display name from the seed file; falls back to the feed's own title
+    weight       REAL,              -- outlet prestige 0..10, seeds use 1..5; NULL = default
+    enabled      INTEGER NOT NULL DEFAULT 1,  -- 0 = switched off in the UI: still fetched, left out of stories
+    backfilled_since REAL,          -- oldest point Feedly history has been loaded back to
+    last_run     TEXT,              -- id of the last scrape run that finished this feed (for resuming)
+    required     INTEGER NOT NULL DEFAULT 0  -- 1 = stories must include this outlet (see build_stories)
+);
+CREATE TABLE IF NOT EXISTS items (
+    id          INTEGER PRIMARY KEY,
+    feed_id     INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+    guid        TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    link        TEXT NOT NULL DEFAULT '',
+    published   REAL NOT NULL,
+    fetched_at  REAL NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    UNIQUE (feed_id, guid)
+);
+CREATE INDEX IF NOT EXISTS items_published ON items(published);
+CREATE TABLE IF NOT EXISTS phrases (
+    id       INTEGER PRIMARY KEY,
+    phrase   TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    bonus    REAL NOT NULL DEFAULT 5,
+    added_at REAL NOT NULL
+);
+"""
+
+# Columns added after v1, for upgrading older files in place.
+_ADDED_COLUMNS = {
+    "feeds": [("via", "TEXT"), ("name", "TEXT"), ("weight", "REAL"), ("enabled", "INTEGER NOT NULL DEFAULT 1"),
+              ("backfilled_since", "REAL"), ("last_run", "TEXT"), ("required", "INTEGER NOT NULL DEFAULT 0")],
+    "items": [("description", "TEXT NOT NULL DEFAULT ''")],
+}
+
+
+@dataclass
+class SeedFeed:
+    name: str | None = None
+    weight: float | None = None
+
+
+def read_feed_list(path: Path) -> dict[str, SeedFeed]:
+    """{url: SeedFeed} from a seed file: one URL per line, then an optional comment
+    "# Display name | w=4 | free-form notes". The first field is the name; "w=N" is the weight."""
+    feeds_ = {}
+    for line in path.read_text().splitlines():
+        url, _, comment = line.partition("#")
+        url = url.strip()
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        fields = [f.strip() for f in comment.split("|")]
+        weight = next((float(f[2:]) for f in fields[1:] if re.fullmatch(r"w=\d+(\.\d+)?", f)), None)
+        feeds_[url] = SeedFeed(fields[0] or None, weight)
+    return feeds_
+
+
+class Store:
+    def __init__(self, path: Path):
+        self.path = str(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self.version = 0  # bumped on every write; lets callers cache derived results
+        with self._conn() as c:
+            self.is_new = c.execute("PRAGMA user_version").fetchone()[0] == 0 and not c.execute(
+                "SELECT 1 FROM sqlite_master WHERE name = 'feeds'").fetchone()
+            c.executescript(SCHEMA)
+            for table, cols in _ADDED_COLUMNS.items():
+                have = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+                for col, typ in cols:
+                    if col not in have:
+                        c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+            c.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
+        """A connection that commits (or rolls back) and is always closed."""
+        c = sqlite3.connect(self.path, timeout=30)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA foreign_keys = ON")
+        try:
+            with c:
+                yield c
+        finally:
+            c.close()
+
+    @contextmanager
+    def _write(self) -> Iterator[sqlite3.Connection]:
+        with self._lock, self._conn() as c:
+            yield c
+        self.version += 1
+
+    # --- feeds ---------------------------------------------------------------------------------
+
+    def list_feeds(self) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM feeds ORDER BY COALESCE(name, NULLIF(title, ''), url) COLLATE NOCASE")]
+
+    def get_feed(self, feed_id: int) -> dict | None:
+        with self._conn() as c:
+            r = c.execute("SELECT * FROM feeds WHERE id = ?", (feed_id,)).fetchone()
+            return dict(r) if r else None
+
+    def add_feed(self, url: str, name: str | None = None, weight: float | None = None) -> int:
+        with self._write() as c:
+            return c.execute("INSERT INTO feeds (url, added_at, name, weight) VALUES (?, ?, ?, ?)",
+                             (url, time.time(), name, weight)).lastrowid
+
+    def add_feeds(self, feeds_: dict[str, SeedFeed]) -> int:
+        added = 0
+        for url, seed in feeds_.items():
+            try:
+                self.add_feed(url, seed.name, seed.weight)
+                added += 1
+            except sqlite3.IntegrityError:
+                pass
+        return added
+
+    def sync_seed(self, feeds_: dict[str, SeedFeed]) -> None:
+        """Apply seed-file names to existing feeds, and seed-file weights where none is set yet
+        (a weight changed in the UI is kept)."""
+        with self._write() as c:
+            c.executemany("UPDATE feeds SET name = ? WHERE url = ?",
+                          [(s.name, u) for u, s in feeds_.items() if s.name])
+            c.executemany("UPDATE feeds SET weight = ? WHERE url = ? AND weight IS NULL",
+                          [(s.weight, u) for u, s in feeds_.items() if s.weight is not None])
+
+    def update_feed(self, feed_id: int, weight: float | None = None, enabled: bool | None = None,
+                    required: bool | None = None) -> bool:
+        sets, args = [], []
+        if required is not None:
+            sets.append("required = ?"); args.append(int(required))
+        if weight is not None:
+            sets.append("weight = ?"); args.append(weight)
+        if enabled is not None:
+            sets.append("enabled = ?"); args.append(int(enabled))
+        if not sets:
+            return self.get_feed(feed_id) is not None
+        with self._write() as c:
+            return c.execute(f"UPDATE feeds SET {', '.join(sets)} WHERE id = ?", (*args, feed_id)).rowcount > 0
+
+    def set_weight(self, feed_id: int, weight: float) -> bool:
+        return self.update_feed(feed_id, weight=weight)
+
+    def required_feed_ids(self) -> set[int]:
+        with self._conn() as c:
+            return {r[0] for r in c.execute("SELECT id FROM feeds WHERE required = 1")}
+
+    def clear_required(self) -> int:
+        with self._write() as c:
+            return c.execute("UPDATE feeds SET required = 0 WHERE required = 1").rowcount
+
+    def set_all_enabled(self, enabled: bool) -> int:
+        with self._write() as c:
+            return c.execute("UPDATE feeds SET enabled = ?", (int(enabled),)).rowcount
+
+    def delete_feed(self, feed_id: int) -> bool:
+        with self._write() as c:
+            return c.execute("DELETE FROM feeds WHERE id = ?", (feed_id,)).rowcount > 0
+
+    def mark_backfilled(self, feed_id: int, since: float) -> None:
+        with self._write() as c:
+            c.execute("UPDATE feeds SET backfilled_since = MIN(COALESCE(backfilled_since, ?), ?) WHERE id = ?",
+                      (since, since, feed_id))
+
+    def mark_run(self, feed_id: int, run_id: str) -> None:
+        with self._write() as c:
+            c.execute("UPDATE feeds SET last_run = ? WHERE id = ?", (run_id, feed_id))
+
+    # --- items ---------------------------------------------------------------------------------
+
+    def save_fetch(self, feed_id: int, parsed: feeds.ParsedFeed | None, error: str | None, via: str = "direct") -> None:
+        now = time.time()
+        with self._write() as c:
+            c.execute("DELETE FROM items WHERE published < ?", (now - RETENTION_DAYS * 86400,))
+            if parsed is None:
+                c.execute("UPDATE feeds SET last_fetched = ?, last_error = ? WHERE id = ?", (now, error, feed_id))
+                return
+            c.executemany(
+                """INSERT INTO items (feed_id, guid, title, link, published, fetched_at, description)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT (feed_id, guid) DO UPDATE SET title = excluded.title, link = excluded.link,
+                       description = CASE WHEN excluded.description != '' THEN excluded.description
+                                          ELSE items.description END""",
+                [(feed_id, e.guid, e.title, e.link, min(e.published, now), now, e.description)
+                 for e in parsed.entries if e.title and e.published >= now - RETENTION_DAYS * 86400],
+            )
+            c.execute(
+                """UPDATE feeds SET last_fetched = ?, last_error = ?, via = ?,
+                   title = CASE WHEN ? != '' THEN ? ELSE title END,
+                   item_count = (SELECT COUNT(*) FROM items WHERE feed_id = ?)
+                   WHERE id = ?""",
+                (now, error, via, parsed.title, parsed.title, feed_id, feed_id),
+            )
+
+    def items_since(self, since: float) -> list[matching.Item]:
+        """Items from switched-on feeds published at or after `since`."""
+        with self._conn() as c:
+            rows = c.execute(
+                """SELECT i.id, i.feed_id, i.title, i.link, i.published, i.description,
+                          COALESCE(f.name, NULLIF(f.title, ''), f.url) AS feed_title,
+                          COALESCE(f.weight, ?) AS weight
+                   FROM items i JOIN feeds f ON f.id = i.feed_id
+                   WHERE i.published >= ? AND f.enabled = 1""",
+                (matching.DEFAULT_WEIGHT, since),
+            ).fetchall()
+        return [matching.Item(**dict(r)) for r in rows]
+
+    # --- watched phrases -----------------------------------------------------------------------
+
+    def list_phrases(self) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM phrases ORDER BY phrase COLLATE NOCASE")]
+
+    def add_phrase(self, phrase: str, bonus: float = DEFAULT_BONUS) -> int:
+        with self._write() as c:
+            return c.execute("INSERT INTO phrases (phrase, bonus, added_at) VALUES (?, ?, ?)",
+                             (phrase, bonus, time.time())).lastrowid
+
+    def get_phrase(self, phrase_id: int) -> dict | None:
+        with self._conn() as c:
+            r = c.execute("SELECT * FROM phrases WHERE id = ?", (phrase_id,)).fetchone()
+            return dict(r) if r else None
+
+    def update_phrase(self, phrase_id: int, bonus: float) -> bool:
+        with self._write() as c:
+            return c.execute("UPDATE phrases SET bonus = ? WHERE id = ?", (bonus, phrase_id)).rowcount > 0
+
+    def delete_phrase(self, phrase_id: int) -> bool:
+        with self._write() as c:
+            return c.execute("DELETE FROM phrases WHERE id = ?", (phrase_id,)).rowcount > 0

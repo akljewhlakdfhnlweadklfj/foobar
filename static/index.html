@@ -8,17 +8,18 @@
   :root {
     --bg: #f6f5f2; --panel: #ffffff; --text: #1c1c1e; --muted: #6b6b70; --border: #e3e1dc;
     --accent: #b4441f; --accent-soft: #f6e6df; --ok: #2f7d4f; --err: #b3261e; --warn: #a56a00;
-    --btn: #b4441f; --btn-text: #ffffff;
+    --btn: #b4441f; --btn-text: #ffffff; --mark: #fde58a;
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #141416; --panel: #1d1d20; --text: #ececee; --muted: #9a9aa2; --border: #2e2e33;
       --accent: #ee7a50; --accent-soft: #3a241c; --ok: #6cc290; --err: #f2867d; --warn: #e0b04a;
-      --btn: #ee7a50; --btn-text: #1a0d07;
+      --btn: #ee7a50; --btn-text: #1a0d07; --mark: #6b5310;
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -38,7 +39,7 @@
   @media (max-width: 860px) {
     .layout { display: flex; flex-direction: column; }
     aside { display: contents; }
-    #filter_panel { order: 1; } main { order: 2; } #feeds_panel { order: 3; }
+    #filter_panel { order: 1; } main { order: 2; } #watch_panel { order: 3; } #feeds_panel { order: 4; }
   }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
@@ -81,7 +82,32 @@
   .lead { font-size: 13px; color: var(--accent); font-weight: 600; margin-top: 2px; }
   .w { display: inline-block; min-width: 18px; padding: 0 4px; border-radius: 4px; font-size: 11px; text-align: center;
        background: var(--accent-soft); color: var(--accent); font-weight: 700; }
-  select.weight { width: auto; padding: 2px 4px; font-size: 12px; }
+  .feed-tools { display: flex; gap: 6px; align-items: center; margin-top: 12px; }
+  .feed-tools input { flex: 1; min-width: 0; padding: 6px 10px; font-size: 13px; }
+  .feed-tools button { padding: 6px 10px; font-size: 13px; }
+  .using { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .req { font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+  ul.feeds li.required .name::after { content: " · required"; color: var(--accent); font-size: 12px; font-weight: 600; }
+  .required-note { margin-top: 12px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 6px;
+                   font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+  .required-note .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .required-note select { width: auto; padding: 3px 6px; font-size: 13px; }
+  .required-note button { padding: 3px 10px; font-size: 13px; }
+  .required-note .warn { color: var(--warn); }
+  ul.feeds li.off .info, ul.feeds li.off .dot { opacity: .45; }
+  ul.feeds .controls-col { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+  ul.feeds .row-actions { display: flex; gap: 6px; align-items: center; }
+  input.weight { width: 4.2em; padding: 3px 6px; font-size: 13px; text-align: right; }
+  input.weight:invalid { border-color: var(--err); }
+  /* On/off switch built on a real checkbox, so it stays keyboard- and screen-reader-friendly. */
+  .switch { position: relative; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .switch input { appearance: none; -webkit-appearance: none; width: 30px; height: 18px; margin: 0; border-radius: 9px;
+                  background: var(--border); position: relative; cursor: pointer; transition: background .15s; }
+  .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+                         background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+  .switch input:checked { background: var(--ok); }
+  .switch input:checked::after { transform: translateX(12px); }
+  @media (prefers-reduced-motion: reduce) { .switch input, .switch input::after { transition: none; } }
   .badge small { display: block; font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
   .story h3 { margin: 0; font-size: 17px; line-height: 1.35; }
   .story .when { font-size: 12px; color: var(--muted); margin-top: 2px; }
@@ -93,14 +119,37 @@
   .sources a { color: var(--text); text-decoration: none; }
   .sources a:hover { text-decoration: underline; }
   .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+  mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
+  .story.watched { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--mark); color: var(--text); }
+  .desc { font-size: 14px; color: var(--muted); margin: 6px 0 0; display: -webkit-box; -webkit-line-clamp: 3;
+          -webkit-box-orient: vertical; overflow: hidden; }
+  .sources li.hit .src::after { content: " · matched"; color: var(--muted); font-weight: 500; }
+  .sources .snippet { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .sources li.nc { opacity: .55; }
+  .sources li.nc .src::after { content: " · doesn't count"; color: var(--muted); font-weight: 500; }
+  form.watch { display: flex; gap: 8px; }
+  form.watch input[type=text] { flex: 1; min-width: 0; }
+  form.watch input[type=number], ul.phrases input { width: 4.6em; padding: 6px 8px; text-align: right; }
+  ul.phrases { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  ul.phrases li { display: flex; align-items: center; gap: 8px; }
+  ul.phrases .p { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  ul.phrases button { padding: 2px 8px; font-size: 16px; line-height: 1; }
+  .check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .check input { margin-top: 3px; }
+  .scrape { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+  .scrape .auto { font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; white-space: nowrap; }
 </style>
 </head>
 <body>
 <header>
   <h1>Consensus <span>News</span></h1>
-  <div style="display:flex;gap:8px;align-items:center">
-    <span id="status" class="summary" style="margin:0"></span>
-    <button id="refresh" class="ghost">Refresh feeds</button>
+  <div class="scrape">
+    <span id="status" class="summary" style="margin:0" aria-live="polite"></span>
+    <button id="refresh" class="ghost" title="Fetch every feed now">Refresh feeds</button>
+    <button id="stop" class="ghost" hidden title="Stop after the feeds in progress; progress is kept">Stop</button>
+    <label class="auto" title="Refresh all feeds on a schedule"><input type="checkbox" id="auto"> Auto <span id="auto_every"></span></label>
   </div>
 </header>
 <div class="tabbar"><nav class="tabs" id="tabs"></nav></div>
@@ -123,15 +172,43 @@
             <option value="168">7 days</option>
           </select>
         </label>
+        <label class="full">Only count outlets weighted at least
+          <input type="number" id="min_weight" min="0" max="10" step="0.5" value="0">
+          <span style="font-size:11px">Lower-weighted outlets still help group headlines and are listed, but don't count toward “reported by” or the score. 0 = count every outlet.</span>
+        </label>
         <label class="full">Minimum prestige score
           <input type="number" id="min_score" min="0" step="1" value="0">
           <span style="font-size:11px">Sum of the outlets' weights (1–5 each). 0 = no minimum. Stories are ranked by this score.</span>
         </label>
         <label class="full">Title match strictness: <output id="threshold_out"></output>
-          <input type="range" id="threshold" min="0.05" max="0.5" step="0.01" value="0.15">
+          <input type="range" id="threshold" min="0.05" max="0.5" step="0.01" value="0.12">
           <span style="font-size:11px">Lower = groups loosely-related headlines; higher = near-identical only.</span>
         </label>
       </div>
+      <div class="required-note" id="required_note" hidden>
+        <div id="required_list"></div>
+        <div class="row">
+          <label for="require_all">Show stories that include</label>
+          <select id="require_all"><option value="false">any of them</option><option value="true">all of them</option></select>
+          <button type="button" class="ghost" id="clear_required">Clear</button>
+        </div>
+        <div class="warn" id="required_warn" hidden></div>
+      </div>
+    </section>
+
+    <section class="panel" id="watch_panel">
+      <h2>Watched phrases</h2>
+      <form class="watch" id="watch_form">
+        <label for="watch_phrase" class="sr-only">Phrase to watch</label>
+        <input type="text" id="watch_phrase" placeholder="e.g. Switch 2, layoffs, Nolan" maxlength="100" required>
+        <label for="watch_bonus" class="sr-only">Bonus points</label>
+        <input type="number" id="watch_bonus" min="0" max="100" step="1" value="5" title="Bonus added to the prestige score">
+        <button type="submit">Watch</button>
+      </form>
+      <div class="msg" id="watch_msg"></div>
+      <ul class="phrases" id="phrases"></ul>
+      <label class="check"><input type="checkbox" id="only_watched"> Only show stories with a watched phrase</label>
+      <label class="check"><input type="checkbox" id="watched_any"> Show watched stories even if fewer outlets report them</label>
     </section>
 
     <section class="panel" id="feeds_panel">
@@ -142,6 +219,13 @@
         <button type="submit" id="add_btn">Add</button>
       </form>
       <div class="msg" id="add_msg"></div>
+      <div class="feed-tools">
+        <label for="feed_search" class="sr-only">Search outlets</label>
+        <input type="search" id="feed_search" placeholder="Search outlets">
+        <button type="button" class="ghost" id="all_on" title="Use every outlet in this tab">All</button>
+        <button type="button" class="ghost" id="all_off" title="Turn every outlet in this tab off">None</button>
+      </div>
+      <div class="using" id="using"></div>
       <ul class="feeds" id="feeds"></ul>
     </section>
   </aside>
@@ -167,23 +251,30 @@ function ago(ts) {
 }
 
 // Verticals (tabs) and per-vertical filter settings.
-const SETTINGS = ["min_feeds", "hours", "threshold", "min_score"];
-let VERTICALS = [], V = null, DEFAULT_THRESHOLD = 0.15, DEFAULT_WEIGHT = 2;
+const SETTINGS = ["min_feeds", "hours", "threshold", "min_score", "min_weight", "only_watched", "watched_any", "require_all"];
+const CHECKS = new Set(["only_watched", "watched_any"]);
+const getVal = (k) => CHECKS.has(k) ? $(k).checked : $(k).value;
+const setVal = (k, v) => { if (CHECKS.has(k)) $(k).checked = v === true || v === "true"; else $(k).value = v; };
+let VERTICALS = [], V = null, DEFAULT_THRESHOLD = 0.12, DEFAULT_WEIGHT = 2, MAX_WEIGHT = 10, DEFAULT_BONUS = 5, MAX_BONUS = 100;
 const fmt = (n) => Number(n).toFixed(1).replace(/\.0$/, "");
 const settingsKey = (v) => "news-settings-v3-" + v;
 const vertical = (v = V) => VERTICALS.find((x) => x.key === v);
-const defaultsFor = (v) => ({ min_feeds: vertical(v).default_min_feeds, hours: 48, threshold: DEFAULT_THRESHOLD, min_score: 0 });
+const defaultsFor = (v) => ({ min_feeds: vertical(v).default_min_feeds, hours: 48, threshold: DEFAULT_THRESHOLD,
+                              min_score: 0, min_weight: 0, only_watched: false, watched_any: false, require_all: "false" });
 
 function loadSettings() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(settingsKey(V)) || "{}"); } catch {}
   const d = defaultsFor(V);
-  SETTINGS.forEach((k) => { $(k).value = saved[k] ?? d[k]; });
+  SETTINGS.forEach((k) => setVal(k, saved[k] ?? d[k]));
 }
 // Only user-changed values are stored, so retuned defaults still reach returning users.
 function saveSettings() {
   const d = defaultsFor(V), cur = currentSettings(), diff = {};
-  SETTINGS.forEach((k) => { if (String(cur[k]) !== String(d[k])) diff[k] = cur[k]; });
+  SETTINGS.forEach((k) => {
+    const c = CHECKS.has(k) ? !!cur[k] : k === "require_all" ? String(!!cur[k]) : cur[k];
+    if (String(c) !== String(d[k])) diff[k] = c;
+  });
   try { localStorage.setItem(settingsKey(V), JSON.stringify(diff)); } catch {}
 }
 // Validated filter values (blank/invalid inputs fall back to the tab's defaults).
@@ -197,6 +288,10 @@ function currentSettings() {
     hours: $("hours").value || d.hours,
     threshold: Number.isFinite(t) ? t : d.threshold,
     min_score: Number.isFinite(score) && score >= 0 ? score : 0,
+    min_weight: (() => { const w = parseFloat($("min_weight").value); return Number.isFinite(w) && w >= 0 ? w : 0; })(),
+    only_watched: $("only_watched").checked ? 1 : 0,
+    watched_any: $("watched_any").checked ? 1 : 0,
+    require_all: $("require_all").value === "true" ? 1 : 0,
   };
 }
 
@@ -211,11 +306,13 @@ function selectVertical(key) {
   $("vertical_label").textContent = vertical().label;
   document.title = vertical().label + " · Consensus News";
   // Clear the previous tab's content so nothing stale can be clicked.
-  $("stories").innerHTML = ""; $("feeds").innerHTML = ""; $("feed_count").textContent = "…";
+  $("stories").innerHTML = ""; $("feeds").innerHTML = ""; $("feed_count").textContent = "…"; $("using").textContent = "";
+  $("feed_search").value = "";
   $("summary").textContent = "Loading…"; $("add_msg").textContent = "";
   lastFeedsJson = lastStoriesJson = "";
   loadSettings();
-  loadFeeds(true).then(() => loadStories(true));
+  PHRASES = []; phraseRe = null; $("phrases").innerHTML = ""; $("watch_msg").textContent = "";
+  Promise.all([loadFeeds(true), loadPhrases()]).then(() => loadStories(true));
 }
 window.addEventListener("hashchange", () => selectVertical(location.hash.slice(1)));
 
@@ -229,6 +326,61 @@ async function api(path, opts = {}) {
 let feedCount = 0;
 let wasRefreshing = false;
 
+let requiredCount = 0;
+function renderRequired(feeds) {
+  const req = feeds.filter((f) => f.required === 1);
+  requiredCount = req.length;
+  $("required_note").hidden = !req.length;
+  if (!req.length) return;
+  const name = (f) => f.name || f.title || f.url;
+  $("required_list").innerHTML = `<strong>Required outlet${req.length === 1 ? "" : "s"}:</strong> ${req.map((f) => esc(name(f))).join(", ")}`;
+  $("require_all").disabled = req.length < 2;
+  const off = req.filter((f) => f.enabled === 0);
+  $("required_warn").hidden = !off.length;
+  $("required_warn").textContent = off.length ? `${off.map(name).join(", ")} ${off.length === 1 ? "is" : "are"} switched off, so ${off.length === 1 ? "it" : "they"} can't appear in any story.` : "";
+}
+
+// Watched phrases for the open tab, and highlighting that mirrors the server's matching:
+// case-insensitive, whole words, any whitespace between words.
+let PHRASES = [];
+const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+let phraseRe = null;
+function buildPhraseRe() {
+  const parts = PHRASES.map((p) => p.phrase.split(/\s+/).map(reEsc).join("\\s+"));
+  phraseRe = parts.length ? new RegExp(`(?<![\\p{L}\\p{N}_])(?:${parts.join("|")})(?![\\p{L}\\p{N}_])`, "giu") : null;
+}
+const phraseIn = (text, phrase) => new RegExp(`(?<![\\p{L}\\p{N}_])${phrase.split(/\s+/).map(reEsc).join("\\s+")}(?![\\p{L}\\p{N}_])`, "iu").test(text || "");
+function hl(text) {
+  text = String(text ?? "");
+  if (!phraseRe) return esc(text);
+  let out = "", last = 0;
+  for (const m of text.matchAll(phraseRe)) {
+    out += esc(text.slice(last, m.index)) + "<mark>" + esc(m[0]) + "</mark>";
+    last = m.index + m[0].length;
+  }
+  return out + esc(text.slice(last));
+}
+
+function phraseRow(p, v) {
+  return `<li><span class="p">${esc(p.phrase)}</span>
+    <label class="sr-only" for="pb${p.id}">Bonus for ${esc(p.phrase)}</label>
+    <input type="number" id="pb${p.id}" min="0" max="${MAX_BONUS}" step="1" value="${fmt(p.bonus)}" data-pbonus="${p.id}" data-v="${v}"
+           title="Bonus added to the score of stories that mention this phrase">
+    <button class="ghost" aria-label="Stop watching ${esc(p.phrase)}" data-pdel="${p.id}" data-v="${v}">×</button></li>`;
+}
+
+async function loadPhrases(force = false) {
+  const v = V;
+  let data;
+  try { data = await api(`/api/${v}/phrases`); } catch (e) { return; }
+  if (v !== V) return;
+  PHRASES = data.phrases; buildPhraseRe();
+  if (force || !$("phrases").contains(document.activeElement)) {
+    $("phrases").innerHTML = PHRASES.map((p) => phraseRow(p, v)).join("") ||
+      `<li class="sub" style="font-size:13px;color:var(--muted)">No phrases yet. Watched phrases are highlighted and add bonus points to a story's score.</li>`;
+  }
+}
+
 function feedRow(f, v) {
   const viaFeedly = f.via === "feedly";
   const failed = f.last_error && !viaFeedly;
@@ -239,16 +391,25 @@ function feedRow(f, v) {
     : `<div class="sub">${f.item_count} items · fetched ${ago(f.last_fetched)}${via}</div>`;
   const name = f.name || f.title || f.url;
   const w = Number(f.weight ?? DEFAULT_WEIGHT);
-  const options = [1, 2, 3, 4, 5].includes(w) ? [1, 2, 3, 4, 5] : [1, 2, 3, 4, 5, w].sort((a, b) => a - b);
-  return `<li>
+  const on = f.enabled !== 0, req = f.required === 1;
+  return `<li class="${on ? "" : "off"}${req ? " required" : ""}" data-search="${esc((name + " " + f.url).toLowerCase())}">
     <span class="dot ${state}"></span>
     <div class="info"><div class="name">${esc(name)}</div>
       <div class="sub">${esc(f.url)}</div>${sub}</div>
-    <select class="weight" aria-label="Prestige weight for ${esc(name)}" title="Prestige weight (1 = small blog, 5 = paper of record)"
-            data-weight="${f.id}" data-v="${v}">
-      ${options.map((o) => `<option value="${o}" ${o === w ? "selected" : ""}>★${fmt(o)}</option>`).join("")}
-    </select>
-    <button class="ghost" aria-label="Remove ${esc(name)}" title="Remove feed" data-del="${f.id}" data-v="${v}">×</button>
+    <div class="controls-col">
+      <label class="switch" title="${on ? "Used in stories" : "Not used in stories"}">
+        <input type="checkbox" ${on ? "checked" : ""} data-toggle="${f.id}" data-v="${v}" aria-label="Use ${esc(name)}">
+        ${on ? "On" : "Off"}
+      </label>
+      <label class="req" title="Only show stories that this outlet reports">
+        <input type="checkbox" ${req ? "checked" : ""} data-require="${f.id}" data-v="${v}" aria-label="Require ${esc(name)}"> Required
+      </label>
+      <div class="row-actions">
+        <input type="number" class="weight" min="0" max="${MAX_WEIGHT}" step="0.5" value="${fmt(w)}" data-weight="${f.id}" data-v="${v}"
+               aria-label="Prestige weight for ${esc(name)}" title="Prestige weight: 0 to ${MAX_WEIGHT} (seed lists use 1 = small blog to 5 = paper of record)">
+        <button class="ghost" aria-label="Remove ${esc(name)}" title="Remove feed" data-del="${f.id}" data-v="${v}">×</button>
+      </div>
+    </div>
   </li>`;
 }
 
@@ -261,17 +422,20 @@ async function loadFeeds(force = false) {
     return;
   }
   if (v !== V || seq !== feedsSeq) return; // a newer request or another tab took over
-  const { feeds, refreshing, last_run } = data;
-  feedCount = feeds.length;
+  const { feeds, refreshing, last_run, scrape } = data;
+  renderScrape(scrape);
+  feedCount = feeds.filter((f) => f.enabled !== 0).length;
   $("feed_count").textContent = feeds.length;
-  $("status").textContent = refreshing ? "Refreshing…" : (last_run ? "Updated " + ago(last_run) : "");
-  $("refresh").disabled = refreshing;
+  $("using").textContent = feeds.length ? `Using ${feedCount} of ${feeds.length} outlets in stories` : "";
+  renderRequired(feeds);
+
   // Don't rebuild the list under the user's hands (open ★ menu, focused button), or when nothing changed.
   const json = JSON.stringify(feeds);
   const busy = $("feeds").contains(document.activeElement);
   if (force || (!busy && json !== lastFeedsJson)) {
     $("feeds").innerHTML = feeds.map((f) => feedRow(f, v)).join("") || `<li class="sub">No feeds yet. Add an RSS or Atom URL above.</li>`;
     lastFeedsJson = json;
+    applyFeedSearch();
   }
   if (wasRefreshing && !refreshing) loadStories();
   wasRefreshing = refreshing;
@@ -299,27 +463,34 @@ async function loadStories(force = false) {
   if (!data.stories.length) {
     $("stories").innerHTML = `<div class="empty">${
       feedCount < n
-        ? `This tab has ${feedCount} feed${feedCount === 1 ? "" : "s"}. Add at least ${n} to see stories reported by ${n} sources.`
-        : "No stories meet the filters yet. Try lowering “reported by”, widening the time window, or loosening match strictness."
+        ? `${feedCount} outlet${feedCount === 1 ? " is" : "s are"} switched on in this tab. Turn on or add at least ${n} to see stories reported by ${n} sources.`
+        : requiredCount && !data.stories.length
+          ? `No stories in this window include the required outlet${requiredCount === 1 ? "" : "s"}. Clear or change them in the Filter panel.`
+        : cfg.only_watched
+          ? (PHRASES.length ? "No stories mention a watched phrase in this window." : "Add a watched phrase, or turn off “Only show stories with a watched phrase”.")
+          : "No stories meet the filters yet. Try lowering “reported by”, widening the time window, or loosening match strictness."
     }</div>`;
     return;
   }
   const open = new Set([...document.querySelectorAll("#stories details[open]")].map((d) => d.dataset.key));
   $("stories").innerHTML = data.stories.map((s) => `
-    <article class="story">
+    <article class="story${s.watched.length ? " watched" : ""}">
       <div class="story-head">
-        <div class="badge" title="${s.coverage} outlets, prestige score ${fmt(s.score)}">${s.coverage}<small>feeds</small><span class="score">★ ${fmt(s.score)}</span></div>
-        <div>
-          <h3>${s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title)}</h3>
+        <div class="badge" title="${s.coverage} counted outlet${s.coverage === 1 ? "" : "s"}${s.outlets > s.coverage ? ` (of ${s.outlets})` : ""} · prestige ${fmt(s.base_score)}${s.bonus ? ` + ${fmt(s.bonus)} watched bonus` : ""}">${s.coverage}<small>feeds</small><span class="score">★ ${fmt(s.score)}</span></div>
+        <div style="min-width:0">
+          <h3>${s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${hl(s.title)}</a>` : hl(s.title)}</h3>
           <div class="lead">${esc(s.lead.feed)}</div>
+          ${s.lead.description ? `<p class="desc">${hl(s.lead.description)}</p>` : ""}
+          ${s.watched.length ? `<div class="chips">${s.watched.map((w) => `<span class="chip">Watched: ${esc(w.phrase)} +${fmt(w.bonus)}</span>`).join("")}</div>` : ""}
           <div class="when">First seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</div>
         </div>
       </div>
-      <details data-key="${esc(storyKey(s))}" ${open.has(storyKey(s)) ? "open" : ""}>
+      <details data-key="${esc(storyKey(s))}" ${open.has(storyKey(s)) || (s.watched.length && !s.watched.some((w) => phraseIn(s.title, w.phrase))) ? "open" : ""}>
         <summary>${s.sources.slice(0, 6).map((x) => esc(x.feed)).join(" · ")}${s.sources.length > 6 ? ` · +${s.sources.length - 6} more` : ""}</summary>
         <ul class="sources">${s.sources.map((x) => `
-          <li><div class="src"><span class="w" title="prestige weight">${fmt(x.weight)}</span> ${esc(x.feed)} · ${ago(x.published)}</div>
-            <a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener noreferrer">${esc(x.title)}</a></li>`).join("")}
+          <li class="${x.watched ? "hit" : ""}${x.counted === false ? " nc" : ""}"><div class="src"><span class="w" title="prestige weight">${fmt(x.weight)}</span> ${esc(x.feed)} · ${ago(x.published)}</div>
+            <a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener noreferrer">${hl(x.title)}</a>
+            ${x.snippet ? `<div class="snippet">${hl(x.snippet)}</div>` : ""}</li>`).join("")}
         </ul>
       </details>
     </article>`).join("");
@@ -354,30 +525,137 @@ $("feeds").addEventListener("click", async (e) => {
   if (v === V) { await loadFeeds(true); await loadStories(true); }
 });
 
-$("feeds").addEventListener("change", async (e) => {
-  const { weight: id, v } = e.target.dataset;
-  if (!id || !v) return;
+async function patchFeed(v, id, body, what) {
   try {
-    await api(`/api/${v}/feeds/` + id, { method: "PATCH", body: JSON.stringify({ weight: Number(e.target.value) }) });
-  } catch (err) { $("status").textContent = "Couldn't change the weight: " + err.message; return; }
-  e.target.blur();
+    await api(`/api/${v}/feeds/` + id, { method: "PATCH", body: JSON.stringify(body) });
+  } catch (err) { $("status").textContent = `Couldn't change the ${what}: ` + err.message; }
+  if (v === V) { await loadFeeds(true); await loadStories(true); }
+}
+
+$("feeds").addEventListener("change", async (e) => {
+  const t = e.target, { v } = t.dataset;
+  if (!v) return;
+  if (t.dataset.require) {
+    t.closest("li").classList.toggle("required", t.checked);
+    return patchFeed(v, t.dataset.require, { required: t.checked }, "required setting");
+  }
+  if (t.dataset.toggle) {
+    t.closest("li").classList.toggle("off", !t.checked);
+    return patchFeed(v, t.dataset.toggle, { enabled: t.checked }, "outlet setting");
+  }
+  if (t.dataset.weight) {
+    const w = parseFloat(t.value);
+    if (!Number.isFinite(w) || w < 0 || w > MAX_WEIGHT) {
+      $("status").textContent = `Weights go from 0 to ${MAX_WEIGHT}.`;
+      return loadFeeds(true); // put the saved value back
+    }
+    t.blur();
+    return patchFeed(v, t.dataset.weight, { weight: w }, "weight");
+  }
+});
+// Enter in a weight box saves it (the change event fires on blur).
+$("feeds").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.weight) e.target.blur(); });
+
+function applyFeedSearch() {
+  const q = $("feed_search").value.trim().toLowerCase();
+  document.querySelectorAll("#feeds li[data-search]").forEach((li) => { li.hidden = !!q && !li.dataset.search.includes(q); });
+}
+$("feed_search").addEventListener("input", applyFeedSearch);
+
+async function setAll(enabled) {
+  const v = V;
+  try { await api(`/api/${v}/feeds`, { method: "PATCH", body: JSON.stringify({ enabled }) }); }
+  catch (err) { $("status").textContent = "Couldn't change the outlets: " + err.message; return; }
+  if (v === V) { await loadFeeds(true); await loadStories(true); }
+}
+$("all_on").addEventListener("click", () => setAll(true));
+$("clear_required").addEventListener("click", async () => {
+  const v = V;
+  try { await api(`/api/${v}/feeds`, { method: "PATCH", body: JSON.stringify({ required: false }) }); }
+  catch (err) { $("status").textContent = "Couldn't clear required outlets: " + err.message; return; }
   if (v === V) { await loadFeeds(true); await loadStories(true); }
 });
+$("all_off").addEventListener("click", () => setAll(false));
+
+let resumable = false;
+function renderScrape(st) {
+  if (!st) return;
+  const run = st.run, busy = st.state !== "idle";
+  resumable = st.resumable;
+  $("stop").hidden = !busy;
+  $("refresh").hidden = busy;
+  $("refresh").textContent = resumable ? "Resume" : "Refresh feeds";
+  $("refresh").title = resumable ? `Continue the ${run.kind} that stopped at ${run.done}/${run.total} feeds` : "Fetch every feed now";
+  if (!$("auto").matches(":focus")) $("auto").checked = st.auto;
+  $("auto_every").textContent = st.auto ? `(${fmt(st.interval_minutes)} min)` : "";
+  if (busy) {
+    $("status").textContent = `${st.state === "stopping" ? "Stopping" : run.kind === "backfill" ? "Backfilling" : "Refreshing"} ${run.done}/${run.total} feeds…`;
+  } else if (resumable) {
+    $("status").textContent = `Stopped at ${run.done}/${run.total} feeds${run.error ? ": " + run.error : ""}`;
+  } else {
+    const done = st.last_run?.finished_at;
+    $("status").textContent = done ? "Updated " + ago(done) : "";
+  }
+}
 
 $("refresh").addEventListener("click", async () => {
-  try { await api("/api/refresh", { method: "POST" }); }
-  catch (err) { $("status").textContent = "Couldn't start a refresh: " + err.message; return; }
-  wasRefreshing = true; $("refresh").disabled = true; $("status").textContent = "Refreshing…";
+  try {
+    const body = resumable ? { resume: true } : { kind: "refresh", resume: false };
+    renderScrape(await api("/api/scrape/start", { method: "POST", body: JSON.stringify(body) }));
+  } catch (err) { $("status").textContent = "Couldn't start: " + err.message; return; }
+  wasRefreshing = true;
+});
+$("stop").addEventListener("click", async () => {
+  try { renderScrape(await api("/api/scrape/stop", { method: "POST", body: "{}" })); }
+  catch (err) { $("status").textContent = "Couldn't stop: " + err.message; }
+});
+$("auto").addEventListener("change", async (e) => {
+  try { renderScrape(await api("/api/scrape/schedule", { method: "POST", body: JSON.stringify({ auto: e.target.checked }) })); }
+  catch (err) { $("status").textContent = "Couldn't change the schedule: " + err.message; }
 });
 
+// Watched phrases
+$("watch_form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const v = V, phrase = $("watch_phrase").value.trim(), bonus = parseFloat($("watch_bonus").value);
+  try {
+    await api(`/api/${v}/phrases`, { method: "POST", body: JSON.stringify({ phrase, bonus: Number.isFinite(bonus) ? bonus : DEFAULT_BONUS }) });
+    if (v !== V) return;
+    $("watch_phrase").value = ""; $("watch_msg").className = "msg"; $("watch_msg").textContent = "";
+    await loadPhrases(true); await loadStories(true);
+  } catch (err) { if (v === V) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; } }
+});
+$("phrases").addEventListener("click", async (e) => {
+  const { pdel: id, v } = e.target.dataset;
+  if (!id || !v) return;
+  try { await api(`/api/${v}/phrases/${id}`, { method: "DELETE" }); }
+  catch (err) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; return; }
+  if (v === V) { await loadPhrases(true); await loadStories(true); }
+});
+$("phrases").addEventListener("change", async (e) => {
+  const { pbonus: id, v } = e.target.dataset;
+  if (!id || !v) return;
+  const bonus = parseFloat(e.target.value);
+  try {
+    if (!Number.isFinite(bonus) || bonus < 0 || bonus > MAX_BONUS) throw new Error(`Bonus goes from 0 to ${MAX_BONUS}.`);
+    await api(`/api/${v}/phrases/${id}`, { method: "PATCH", body: JSON.stringify({ bonus }) });
+  } catch (err) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; }
+  e.target.blur();
+  if (v === V) { await loadPhrases(true); await loadStories(true); }
+});
+$("phrases").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.pbonus) e.target.blur(); });
+
 let debounce;
-SETTINGS.forEach((k) => $(k).addEventListener("input", () => {
+SETTINGS.forEach((k) => $(k).addEventListener(CHECKS.has(k) || k === "require_all" ? "change" : "input", () => {
   clearTimeout(debounce);
   debounce = setTimeout(() => { saveSettings(); loadStories(true); }, 200);
 }));
 
 api("/api/verticals").then((d) => {
   VERTICALS = d.verticals; DEFAULT_THRESHOLD = d.default_threshold; DEFAULT_WEIGHT = d.default_weight;
+  MAX_WEIGHT = d.max_weight ?? MAX_WEIGHT;
+  DEFAULT_BONUS = d.default_bonus ?? DEFAULT_BONUS; MAX_BONUS = d.max_bonus ?? MAX_BONUS;
+  $("watch_bonus").value = DEFAULT_BONUS;
   $("tabs").innerHTML = VERTICALS.map((v) => `<a href="#${v.key}" data-v="${v.key}">${esc(v.label)}</a>`).join("");
   selectVertical(location.hash.slice(1));
 }).catch((e) => { $("summary").textContent = "Can't reach the server: " + e.message; });

@@ -1,5 +1,6 @@
 """Tests: python3 -m unittest -v"""
 
+import json
 import sqlite3
 import tempfile
 import time
@@ -144,19 +145,417 @@ class WeightTests(unittest.TestCase):
             self.assertEqual(missing, [], v.key)
 
 
+class OutletToggleTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.store = app.Store(self.tmp / "t.db")
+        now = time.time()
+        for n in (1, 2, 3):
+            fid = self.store.add_feed(f"https://{n}.example/rss", f"Outlet {n}", 3)
+            self.store.save_fetch(fid, feeds.ParsedFeed(f"Outlet {n}", [
+                feeds.ParsedEntry(f"g{n}", f"Valve announces Steam Machine hardware {n}", "", now)]), None)
+
+    def test_disabled_outlets_are_left_out_of_stories(self):
+        res = app.build_stories(self.store, 3, 48, 0.15)
+        self.assertEqual(res["stories"][0]["coverage"], 3)
+        self.store.update_feed(2, enabled=False)
+        self.assertEqual(app.build_stories(self.store, 3, 48, 0.15)["stories"], [])
+        self.assertEqual(app.build_stories(self.store, 2, 48, 0.15)["stories"][0]["coverage"], 2)
+        self.assertEqual(self.store.set_all_enabled(True), 3)
+        self.assertEqual(app.build_stories(self.store, 3, 48, 0.15)["stories"][0]["coverage"], 3)
+
+    def test_required_outlets_filter_stories(self):
+        now = time.time()
+        fid4 = self.store.add_feed("https://4.example/rss", "Outlet 4", 3)
+        for n in (1, 2, 4):  # a second story, which Outlet 3 doesn't report
+            fid = fid4 if n == 4 else n
+            self.store.save_fetch(fid, feeds.ParsedFeed("x", [feeds.ParsedEntry(
+                f"d{n}", f"Nintendo Direct dated for Thursday {n}", "", now)]), None)
+        titles = lambda **kw: sorted(s["title"][:8] for s in app.build_stories(self.store, 3, 48, 0.12, **kw)["stories"])
+        self.assertEqual(titles(), ["Nintendo", "Valve an"])
+        self.store.update_feed(3, required=True)                 # Outlet 3 only reported the Valve story
+        self.assertEqual(titles(), ["Valve an"])
+        self.store.update_feed(fid4, required=True)              # any of {3, 4}: both stories
+        self.assertEqual(titles(), ["Nintendo", "Valve an"])
+        self.assertEqual(titles(require_all=True), [])           # no story has both 3 and 4
+        self.store.add_phrase("Direct", 5)                       # watched stories still need a required outlet
+        self.store.update_feed(fid4, required=False)
+        self.assertEqual(titles(watched_any_coverage=True), ["Valve an"])
+        self.assertEqual(self.store.clear_required(), 1)
+        self.assertEqual(self.store.required_feed_ids(), set())
+
+    def test_min_weight_controls_what_counts(self):
+        self.store.update_feed(1, weight=5); self.store.update_feed(2, weight=1)
+        story = lambda **kw: app.build_stories(self.store, 1, 48, 0.12, **kw)["stories"][0]
+        s = story()
+        self.assertEqual((s["coverage"], s["base_score"]), (3, 9))
+        s = story(min_weight=3)                                   # outlet 2 (weight 1) no longer counts
+        self.assertEqual((s["coverage"], s["base_score"], s["outlets"]), (2, 8, 3))
+        self.assertEqual(sorted(x["counted"] for x in s["sources"]), [False, True, True])
+        self.assertEqual(app.build_stories(self.store, 3, 48, 0.12, min_weight=3)["stories"], [])
+        self.assertEqual(app.build_stories(self.store, 1, 48, 0.12, min_weight=6)["stories"], [])
+
+    def test_patch_api_validates_weight_and_enabled(self):
+        import json, threading, urllib.request
+        from http.server import ThreadingHTTPServer
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), app.make_handler({"games": self.store}, app.Scraper({}, auto=False)))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
+        base = f"http://127.0.0.1:{srv.server_address[1]}/api/games/feeds"
+
+        def patch(path, body):
+            req = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="PATCH",
+                                         headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req) as r:
+                    return r.status, json.load(r)
+            except urllib.error.HTTPError as e:
+                return e.code, json.load(e)
+
+        with mock.patch.dict("os.environ", {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}):
+            self.assertEqual(patch("/1", {"weight": 7.5})[1]["feed"]["weight"], 7.5)
+            self.assertEqual(patch("/1", {"weight": 0})[1]["feed"]["weight"], 0)
+            self.assertEqual(patch("/1", {"enabled": False})[1]["feed"]["enabled"], 0)
+            for bad in ({"weight": 11}, {"weight": -1}, {"weight": "5"}, {"weight": True}, {"enabled": "no"}, {}):
+                self.assertEqual(patch("/1", bad)[0], 400, bad)
+            self.assertEqual(patch("/99", {"enabled": True})[0], 404)
+            self.assertEqual(patch("", {"enabled": False}), (200, {"updated": 3}))
+            self.assertEqual(patch("", {"weight": 3})[0], 400)
+            self.assertEqual(patch("/1", {"required": True})[1]["feed"]["required"], 1)
+            self.assertEqual(patch("/1", {"required": "yes"})[0], 400)
+            self.assertEqual(patch("", {"required": False}), (200, {"updated": 1}))
+
+
+class FeedlyThrottlingTests(unittest.TestCase):
+    """Simulated 429s: no network, timings shrunk so the suite stays fast."""
+
+    def setUp(self):
+        import feedly
+        self.feedly = feedly
+        patches = [mock.patch.object(feedly, "MIN_INTERVAL", 0.0), mock.patch.object(feedly, "COOLDOWN_START", 0.2),
+                   mock.patch.object(feedly, "COOLDOWN_MAX", 0.4), mock.patch.object(feedly, "MAX_WAIT", 1.0)]
+        for p in patches:
+            p.start(); self.addCleanup(p.stop)
+        feedly._blocked_until = feedly._next_slot = feedly._cooldown = 0.0
+
+    def _responses(self, *codes, retry_after=None):
+        """Fake urlopen: each call pops the next status (429 or 200)."""
+        import io, urllib.error
+        from email.message import Message
+        queue = list(codes)
+        calls = []
+
+        def fake(req, timeout=None):
+            calls.append(time.monotonic())
+            code = queue.pop(0) if queue else 200
+            if code == 429:
+                h = Message()
+                if retry_after is not None:
+                    h["Retry-After"] = str(retry_after)
+                raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", h, io.BytesIO(b""))
+            r = mock.MagicMock()
+            r.__enter__.return_value = io.BytesIO(b'{"items": [], "title": "T"}')
+            return r
+        return fake, calls
+
+    def test_429_pauses_then_retries(self):
+        fake, calls = self._responses(429, 429, 200)
+        with mock.patch("urllib.request.urlopen", fake):
+            self.assertEqual(self.feedly._get("streams/contents", {}), {"items": [], "title": "T"})
+        self.assertEqual(len(calls), 3)
+        self.assertGreaterEqual(calls[1] - calls[0], 0.19)   # first cooldown
+        self.assertGreaterEqual(calls[2] - calls[1], 0.38)   # doubled
+        self.assertEqual(self.feedly._cooldown, 0.0)          # reset after success
+
+    def test_retry_after_header_is_honoured(self):
+        fake, calls = self._responses(429, 200, retry_after=0.6)
+        with mock.patch("urllib.request.urlopen", fake):
+            self.feedly._get("x", {})
+        self.assertGreaterEqual(calls[1] - calls[0], 0.58)
+
+    def test_gives_up_after_max_wait_and_no_wait_mode_fails_fast(self):
+        fake, _ = self._responses(*[429] * 50)
+        with mock.patch("urllib.request.urlopen", fake):
+            with self.assertRaises(self.feedly.RateLimited):
+                self.feedly._get("x", {})
+            t = time.monotonic()
+            with self.assertRaises(self.feedly.RateLimited):   # fallback path: don't sit out the cooldown
+                self.feedly.recent("https://a.example/rss")
+            self.assertLess(time.monotonic() - t, 0.1)
+
+    def test_fallback_reports_rate_limit_and_keeps_headlines(self):
+        with mock.patch.object(feeds, "fetch", side_effect=feeds.FeedError("blocked")), \
+             mock.patch("feedly.recent", side_effect=self.feedly.RateLimited(30)):
+            with self.assertRaises(feeds.FeedError) as cm:
+                app.fetch_with_fallback("https://a.example/rss")
+        self.assertIn("rate-limited", str(cm.exception))
+
+    def test_backfill_keeps_partial_results_and_resumes(self):
+        store = app.Store(Path(tempfile.mkdtemp()) / "b.db")
+        a = store.add_feed("https://a.example/rss", "A")
+        b = store.add_feed("https://b.example/rss", "B")
+        old = (time.time() - 2 * 86400) * 1000
+        entry = lambda u, i: {"id": f"{u}{i}", "originId": f"{u}{i}", "title": f"Story {i} {u}", "published": old,
+                              "crawled": old, "alternate": [{"href": f"https://x.example/{i}"}]}
+
+        def throttled(url, since=0):
+            yield entry(url, 1); yield entry(url, 2)
+            if "b.example" in url:
+                raise self.feedly.RateLimited(60)
+
+        with mock.patch("feedly.history", throttled), mock.patch("builtins.print"):
+            first = app.backfill({"games": store}, 3)
+        self.assertEqual(first["status"], "stopped")          # rate-limited: stopped, resumable
+        self.assertIn("resume", first["error"])
+        self.assertEqual({store.get_feed(a)["item_count"], store.get_feed(b)["item_count"]}, {2})  # partial kept
+
+        calls = []
+        def recording(url, since=0):
+            calls.append(url); yield from ()
+        sc = app.Scraper({"games": store}, auto=False)
+        sc.state["run"] = first                                # same run: resume it
+        with mock.patch("feedly.history", recording):
+            ok, _ = sc.start("backfill", ["games"], 3, wait=True)
+        self.assertTrue(ok)
+        self.assertEqual(calls, ["https://b.example/rss"])     # A was finished, only B is redone
+        self.assertEqual(sc.status()["run"]["status"], "completed")
+        calls.clear()
+        with mock.patch("feedly.history", recording), mock.patch("builtins.print"):
+            app.backfill({"games": store}, 2.5)                # new run: both already cover 2.5 days
+        self.assertEqual(calls, [])
+
+
+class HttpTestCase(unittest.TestCase):
+    """Starts the real handler on a free port."""
+
+    def start_server(self, stores, scraper=None, security=None):
+        import threading
+        from http.server import ThreadingHTTPServer
+        self.scraper = scraper or app.Scraper(stores, auto=False)
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), app.make_handler(stores, self.scraper, security))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
+        self.base = f"http://127.0.0.1:{srv.server_address[1]}"
+        env = mock.patch.dict("os.environ", {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"})
+        env.start(); self.addCleanup(env.stop)
+
+    def call(self, method, path, body=None, headers=None, raw=None):
+        import json, urllib.request
+        data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+        h = {"Content-Type": "application/json"} if body is not None else {}
+        h.update(headers or {})
+        req = urllib.request.Request(self.base + path, data=data, method=method, headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+
+
+class SecurityTests(HttpTestCase):
+    def setUp(self):
+        self.store = app.Store(Path(tempfile.mkdtemp()) / "s.db")
+        self.fid = self.store.add_feed("https://a.example/rss", "A")
+        self.start_server({"games": self.store}, security=app.Security(api_token="s3cret"))
+
+    def test_cross_site_and_non_json_writes_are_refused(self):
+        self.assertEqual(self.call("POST", "/api/games/phrases", raw=b'{"phrase": "x"}',
+                                   headers={"Content-Type": "text/plain"})[0], 415)
+        self.assertEqual(self.call("PATCH", f"/api/games/feeds/{self.fid}", {"weight": 3},
+                                   headers={"Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(self.call("PATCH", f"/api/games/feeds/{self.fid}", {"weight": 3},
+                                   headers={"Host": "rebound.evil.example"})[0], 403)
+        self.assertEqual(self.call("PATCH", f"/api/games/feeds/{self.fid}", {"weight": 3},
+                                   headers={"Origin": self.base})[0], 200)       # same-origin page: fine
+        self.assertEqual(self.call("GET", "/api/games/feeds", headers={"Host": "rebound.evil.example"})[0], 200)
+
+    def test_api_token_allows_remote_orchestrator(self):
+        h = {"Host": "orchestrator.internal", "Authorization": "Bearer s3cret"}
+        self.assertEqual(self.call("POST", "/api/scrape/schedule", {"auto": False}, headers=h)[0], 200)
+        h["Authorization"] = "Bearer wrong"
+        self.assertEqual(self.call("POST", "/api/scrape/schedule", {"auto": False}, headers=h)[0], 403)
+
+    def test_bad_bodies_get_clean_errors(self):
+        self.assertEqual(self.call("PATCH", f"/api/games/feeds/{self.fid}", raw=b"[1]",
+                                   headers={"Content-Type": "application/json"})[0], 400)
+        self.assertEqual(self.call("PATCH", f"/api/games/feeds/{self.fid}", raw=b"{nope",
+                                   headers={"Content-Type": "application/json"})[0], 400)
+        self.assertEqual(self.call("POST", "/api/games/phrases", raw=b"x" * (70 * 1024),
+                                   headers={"Content-Type": "application/json"})[0], 413)
+
+    def test_private_feed_urls_are_refused(self):
+        code, body = self.call("POST", "/api/games/feeds", {"url": "http://127.0.0.1:9/rss"})
+        self.assertEqual(code, 400)
+        self.assertIn("private or local", body["error"])
+
+
+class ScrapeControlTests(HttpTestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.store = app.Store(self.tmp / "g.db")
+        for n in range(20):
+            self.store.add_feed(f"https://{n}.example/rss", f"F{n}")
+        self.fetched = []
+        def slow_fetch(url):
+            self.fetched.append(url); time.sleep(0.4)
+            return feeds.ParsedFeed("T", [feeds.ParsedEntry("g", "Headline " + url, url, time.time())]), "direct", None
+        p = mock.patch("scraper.fetch_with_fallback", slow_fetch)
+        p.start(); self.addCleanup(p.stop)
+
+    def make(self):
+        return app.Scraper({"games": self.store}, self.tmp / "state.json", auto=False)
+
+    def wait_idle(self, sc):
+        for _ in range(200):
+            if not sc.running:
+                return
+            time.sleep(0.05)
+
+    def test_start_stop_status_and_resume_over_http(self):
+        self.start_server({"games": self.store}, scraper=self.make())
+        code, st = self.call("POST", "/api/scrape/start", {"verticals": ["games"]})
+        self.assertEqual((code, st["state"]), (202, "running"))
+        self.assertEqual(self.call("POST", "/api/scrape/start", {})[0], 409)   # already running
+        time.sleep(0.2)
+        self.assertEqual(self.call("POST", "/api/scrape/stop", {})[0], 202)
+        self.wait_idle(self.scraper)
+        st = self.call("GET", "/api/scrape/status")[1]
+        self.assertEqual((st["state"], st["run"]["status"], st["resumable"]), ("idle", "stopped", True))
+        done_before = st["run"]["done"]
+        self.assertLess(done_before, 20)
+        first_run = st["run"]["id"]
+        self.call("POST", "/api/scrape/start", {})                             # resumes by default
+        self.wait_idle(self.scraper)
+        st = self.call("GET", "/api/scrape/status")[1]
+        self.assertEqual((st["run"]["id"], st["run"]["status"], st["run"]["done"]), (first_run, "completed", 20))
+        self.assertEqual(sorted(self.fetched), sorted(set(self.fetched)))       # no feed fetched twice
+
+    def test_run_killed_midway_resumes_on_startup(self):
+        sc = self.make()
+        sc.start("refresh", ["games"])
+        time.sleep(0.2)
+        # Simulate the process dying: the state file still says "running".
+        state = json.loads((self.tmp / "state.json").read_text())
+        sc.stop(wait=True)
+        state["run"]["status"] = "running"
+        (self.tmp / "state.json").write_text(json.dumps(state))
+        already = [f for f in self.store.list_feeds() if f["last_run"] == state["run"]["id"]]
+        self.fetched.clear()
+        sc2 = self.make()
+        self.assertEqual(sc2.status()["run"]["status"], "interrupted")
+        self.assertTrue(sc2.resume_interrupted())
+        self.wait_idle(sc2)
+        self.assertEqual(sc2.status()["run"]["status"], "completed")
+        self.assertEqual(len(self.fetched), 20 - len(already))                 # only the unfinished feeds
+        self.assertGreater(len(already), 0)
+
+    def test_schedule_toggle_persists(self):
+        sc = self.make()
+        sc.set_schedule(auto=False, interval_minutes=30)
+        sc2 = app.Scraper({"games": self.store}, self.tmp / "state.json", auto=True, interval_minutes=15)
+        self.assertEqual((sc2.status()["auto"], sc2.status()["interval_minutes"]), (False, 30))
+
+
+class PhraseTests(HttpTestCase):
+    def setUp(self):
+        self.store = app.Store(Path(tempfile.mkdtemp()) / "p.db")
+        now = time.time()
+        for n in (1, 2, 3):
+            fid = self.store.add_feed(f"https://{n}.example/rss", f"Outlet {n}", 3)
+            self.store.save_fetch(fid, feeds.ParsedFeed("x", [
+                feeds.ParsedEntry(f"a{n}", f"Valve announces Steam Machine hardware {n}", "", now,
+                                  "The console-like PC ships in early 2027." if n == 2 else ""),
+                feeds.ParsedEntry(f"b{n}", f"Nintendo Direct dated for Thursday {n}", "", now)]), None)
+        self.start_server({"games": self.store})
+
+    def stories(self, **q):
+        from urllib.parse import urlencode
+        return self.call("GET", "/api/games/stories?" + urlencode({"min_feeds": 3, **q}))[1]["stories"]
+
+    def test_phrase_in_description_adds_bonus_and_is_reported(self):
+        base = {s["title"][:13]: s["score"] for s in self.stories()}
+        code, ph = self.call("POST", "/api/games/phrases", {"phrase": "early   2027", "bonus": 7})
+        self.assertEqual((code, ph["phrase"]["phrase"]), (201, "early 2027"))
+        steam = next(s for s in self.stories() if s["title"].startswith("Valve"))
+        self.assertEqual((steam["bonus"], steam["score"]), (7, base["Valve announc"] + 7))
+        self.assertEqual([w["phrase"] for w in steam["watched"]], ["early 2027"])
+        self.assertTrue(any(src["watched"] for src in steam["sources"]))
+        self.assertEqual(self.stories()[0]["title"][:5], "Valve")              # bonus lifts it to the top
+        self.assertEqual([s["title"][:5] for s in self.stories(only_watched=1)], ["Valve"])
+        self.assertEqual(self.call("POST", "/api/games/phrases", {"phrase": "EARLY 2027"})[0], 409)
+
+    def test_whole_words_only_and_watched_any_coverage(self):
+        self.call("POST", "/api/games/phrases", {"phrase": "Direct", "bonus": 1})
+        self.call("POST", "/api/games/phrases", {"phrase": "machin"})          # partial word: no match
+        nin = next(s for s in self.stories() if s["title"].startswith("Nintendo"))
+        self.assertEqual([w["phrase"] for w in nin["watched"]], ["Direct"])
+        steam = next(s for s in self.stories() if s["title"].startswith("Valve"))
+        self.assertEqual(steam["watched"], [])
+        self.assertEqual(len(self.stories(min_feeds=9)), 0)
+        self.assertEqual([s["title"][:8] for s in self.stories(min_feeds=9, watched_any=1)], ["Nintendo"])
+
+    def test_phrase_api_validation_and_delete(self):
+        self.assertEqual(self.call("POST", "/api/games/phrases", {"phrase": "  "})[0], 400)
+        self.assertEqual(self.call("POST", "/api/games/phrases", {"phrase": "x", "bonus": 1000})[0], 400)
+        pid = self.call("POST", "/api/games/phrases", {"phrase": "Switch 2"})[1]["phrase"]["id"]
+        self.assertEqual(self.call("PATCH", f"/api/games/phrases/{pid}", {"bonus": 12})[1]["phrase"]["bonus"], 12)
+        self.assertEqual(self.call("DELETE", f"/api/games/phrases/{pid}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/games/phrases")[1]["phrases"], [])
+
+
+class ParserAndPagingTests(unittest.TestCase):
+    def test_parser_details(self):
+        future = time.time() + 30 * 86400
+        from email.utils import formatdate
+        rss = f"""  \n<?xml version="1.0"?><rss version="2.0"><channel><title>T</title>
+        <item><title>Why 3 &lt; 5 and 7 &gt; 2 matters</title><link>/article/1?a=1&amp;region=us</link>
+        <guid>g&amp;sect=9</guid><pubDate>{formatdate(future, usegmt=True)}</pubDate>
+        <description>&lt;p&gt;Short summary.&lt;/p&gt; The post Why appeared first on Site.</description></item>
+        </channel></rss>""".encode()
+        e = feeds.parse(rss, base_url="https://site.example/feed/").entries[0]
+        self.assertEqual(e.title, "Why 3 < 5 and 7 > 2 matters")
+        self.assertEqual(e.link, "https://site.example/article/1?a=1&region=us")
+        self.assertEqual(e.guid, "g&sect=9")
+        self.assertLessEqual(e.published, time.time())
+        self.assertEqual(e.description, "Short summary.")
+
+    def test_google_news_suffix_removed(self):
+        rss = b"""<rss><channel><item><title>Democrats win the Senate - Reuters</title><link>https://x/1</link></item>
+                  </channel></rss>"""
+        self.assertEqual(feeds.parse(rss, base_url="https://news.google.com/rss/search?q=x").entries[0].title,
+                         "Democrats win the Senate")
+        self.assertEqual(feeds.parse(rss, base_url="https://other.example/rss").entries[0].title,
+                         "Democrats win the Senate - Reuters")
+
+    def test_feedly_paging_handles_ties_and_late_published(self):
+        import feedly
+        # 120 entries; crawl times tie in groups of 7; some have published > crawled.
+        entries = [{"id": str(i), "crawled": 1000 + (i // 7), "published": 1000 + (i // 7) + (500 if i % 11 == 0 else 0)}
+                   for i in range(120)]
+
+        def fake_get(path, params, **kw):
+            page = sorted((e for e in entries if e["crawled"] > params["newerThan"]), key=lambda e: e["crawled"])
+            return {"items": page[:50]}
+        with mock.patch.object(feedly, "_get", fake_get):
+            got = list(feedly.history("https://a.example/rss", since=0))
+        self.assertEqual(sorted(int(e["id"]) for e in got), list(range(120)))
+
+
 class AppTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
 
     def test_v1_database_is_migrated(self):
         db = self.tmp / "old.db"
-        with sqlite3.connect(db) as c:  # schema from the first release, without feeds.via
+        import contextlib
+        with contextlib.closing(sqlite3.connect(db)) as c, c:  # schema from the first release, without feeds.via
             c.executescript("""CREATE TABLE feeds (id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE,
                 title TEXT NOT NULL DEFAULT '', added_at REAL NOT NULL, last_fetched REAL, last_error TEXT,
                 item_count INTEGER NOT NULL DEFAULT 0);""")
             c.execute("INSERT INTO feeds (url, added_at) VALUES ('https://a.example/rss', 0)")
         store = app.Store(db)
         self.assertEqual(store.list_feeds()[0]["via"], None)
+        self.assertEqual(store.list_feeds()[0]["enabled"], 1)  # v5 column added with default "on"
         store.save_fetch(1, feeds.parse(RSS), None, "direct")
         self.assertEqual(store.list_feeds()[0]["via"], "direct")
 

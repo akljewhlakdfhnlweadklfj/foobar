@@ -32,9 +32,11 @@ COVERAGE_RE = re.compile(r'<li><strong>(.*?):</strong>\s*<a href="[^"]+">(.*?)</
 def load_ground_truth(refresh: bool = False) -> list[list[matching.Item]]:
     if refresh or not CACHE.exists():
         CACHE.parent.mkdir(exist_ok=True)
-        with CACHE.open("w") as f:
+        tmp = CACHE.with_suffix(".tmp")  # written fully, then renamed: a failed download leaves no partial cache
+        with tmp.open("w") as f:
             for e in feedly.history(OVERWORLD_FEED):
                 f.write(json.dumps(e) + "\n")
+        tmp.replace(CACHE)
     stories, outlets, next_id = [], {}, 0
     for line in CACHE.open():
         e = json.loads(line)

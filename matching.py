@@ -20,6 +20,7 @@ Tuned with eval_matching.py against Overworld's human-curated story groups.
 
 from __future__ import annotations
 
+import heapq
 import math
 import re
 import unicodedata
@@ -46,6 +47,9 @@ STOPWORDS = frozenset(
 )
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+# Dotted abbreviations the tokenizer would otherwise split into single letters.
+_ABBREV = {"us": "usa", "uk": "britain", "un": "unitednations", "eu": "europeanunion"}
+_ABBREV_RE = re.compile(r"\b(u\.s\.?|u\.k\.?|u\.n\.?|e\.u\.?)(?=\W|$)")
 
 # A few common headline synonyms, mapped to one canonical form.
 SYNONYMS = {
@@ -55,7 +59,7 @@ SYNONYMS = {
     "kills": "kill", "killed": "kill", "killing": "kill",
     "wins": "win", "won": "win", "victory": "win",
     "federal": "fed",
-    "u.s": "us", "usa": "us", "america": "us", "american": "us",
+    "usa": "usa", "america": "usa", "american": "usa", "americans": "usa",
     "uk": "britain", "british": "britain",
     "pm": "minister",
     "lay": "layoff", "lays": "layoff", "laid": "layoff", "redundancies": "layoff", "job": "layoff",
@@ -88,14 +92,18 @@ def _stem(tok: str) -> str:
 
 def tokenize(title: str) -> frozenset[str]:
     text = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+    text = re.sub(r"\b(US|UK|UN|EU)\b", lambda m: _ABBREV[m.group(1).lower()], text)  # all-caps: the country, not "us"
     text = text.lower().replace("'s", "").replace("’s", "")
+    text = _ABBREV_RE.sub(lambda m: _ABBREV[m.group(0).replace(".", "")], text)
     out = set()
     for raw in _TOKEN_RE.findall(text):
         if raw in STOPWORDS:
             continue
         tok = SYNONYMS.get(raw, raw)
         tok = _stem(tok)
-        tok = SYNONYMS.get(tok, tok)
+        mapped = SYNONYMS.get(tok, tok)
+        if mapped != tok:  # the stem matched a synonym: normalise it the same way as direct hits
+            tok = _stem(mapped)
         if tok in STOPWORDS or len(tok) < 2:
             continue
         out.add(tok)
@@ -114,6 +122,7 @@ class Item:
     published: float = 0.0  # unix timestamp
     feed_title: str = ""
     weight: float = DEFAULT_WEIGHT  # outlet prestige, 1 (small blog) .. 5 (paper of record)
+    description: str = ""
     tokens: frozenset[str] = field(default_factory=frozenset)
 
 
@@ -168,10 +177,13 @@ def _weighted_cosine(idf: dict[str, float], a: frozenset[str], b: frozenset[str]
     return sum(idf[t] ** 2 for t in a & b) / math.sqrt(sum(idf[t] ** 2 for t in a) * sum(idf[t] ** 2 for t in b))
 
 
-# Chosen with eval_matching.py against Overworld's curated story groups (1,171 stories):
-# cosine + average linkage @ 0.15 gave F1 0.82 vs 0.36 for the original jaccard + single link @ 0.40.
+# Chosen with two evaluations against Overworld's curated story groups:
+# - eval_matching.py (titles only, 1,183 stories): cosine + average linkage gave F1 0.82 vs 0.36 for
+#   the original jaccard + single linkage.
+# - eval_realistic.py (14 days of full outlet feeds as distractors): title + the description's
+#   first sentence at 0.12 gave F1 0.93 (precision 1.00) vs 0.87 for titles alone at 0.15.
 SIMILARITY = _weighted_cosine
-DEFAULT_THRESHOLD = 0.15
+DEFAULT_THRESHOLD = 0.12
 
 
 def _drop_feed_boilerplate(items: list[Item], min_items: int = 10, share: float = 0.4) -> None:
@@ -193,11 +205,26 @@ def _drop_feed_boilerplate(items: list[Item], min_items: int = 10, share: float 
                 it.tokens = it.tokens - boiler
 
 
+# What text the matcher compares: "title", "title+lead" (title + the description's first
+# sentence) or "title+description". Chosen with eval_matching.py --realistic.
+TEXT_MODE = "title+lead"
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s")
+
+
+def item_text(it: Item, mode: str | None = None) -> str:
+    mode = mode or TEXT_MODE
+    if mode == "title" or not it.description:
+        return it.title
+    if mode == "title+lead":
+        return it.title + " " + _SENTENCE_END.split(it.description, 1)[0][:300]
+    return it.title + " " + it.description
+
+
 def lexical_similarities(items: list[Item], min_shared: int = 2) -> dict[tuple[int, int], float]:
     """Sparse pairwise similarity {(i, j): sim} (i < j) for items sharing >= min_shared tokens."""
     for it in items:
         if not it.tokens:
-            it.tokens = tokenize(it.title)
+            it.tokens = tokenize(item_text(it))
     _drop_feed_boilerplate(items)
     n = len(items)
 
@@ -229,37 +256,80 @@ def lexical_similarities(items: list[Item], min_shared: int = 2) -> dict[tuple[i
 
 def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold: float,
                 linkage: str = "average") -> list[Story]:
-    """Merge items into stories, strongest pairs first.
+    """Merge items into stories.
 
+    linkage="average" (UPGMA): repeatedly merge the two groups with the highest *average*
+    similarity over all their cross-feed item pairs (missing pairs count as 0), while that average
+    is >= threshold. Running similarity sums between groups are kept up to date on each merge, so
+    the cost is proportional to the number of similar pairs, not to group size squared.
     linkage="single": any one pair above threshold links two groups (prone to chaining:
-    A~B and B~C pulls unrelated A and C together). linkage="average": two groups merge only if
-    the mean similarity over all their cross-feed pairs is >= threshold (missing pairs count as 0).
+    A~B and B~C pulls unrelated A and C together). Kept for comparison.
     """
     n = len(items)
-    uf = _UnionFind(n)
-    members = {i: [i] for i in range(n)}
-    for (i, j), s in sorted(sims.items(), key=lambda kv: -kv[1]):
-        if s < threshold:
+    if linkage == "single":
+        uf = _UnionFind(n)
+        for (i, j), s in sims.items():
+            if s >= threshold:
+                uf.union(i, j)
+        groups: dict[int, list[Item]] = defaultdict(list)
+        for i, it in enumerate(items):
+            groups[uf.find(i)].append(it)
+        return [Story(items=g) for g in groups.values()]
+
+    size = [1] * n
+    feeds_in: list[dict[int, int]] = [{it.feed_id: 1} for it in items]   # feed histogram per group
+    sums: list[dict[int, float]] = [dict() for _ in range(n)]            # sums[a][b] = total sim a<->b
+    for (i, j), s in sims.items():
+        if s > 0:
+            sums[i][j] = sums[i].get(j, 0.0) + s
+            sums[j][i] = sums[j].get(i, 0.0) + s
+    alive = [True] * n
+    version = [0] * n
+    members: list[list[int]] = [[i] for i in range(n)]
+
+    def average(a: int, b: int) -> float:
+        hist_a, hist_b = (feeds_in[a], feeds_in[b]) if len(feeds_in[a]) <= len(feeds_in[b]) else (feeds_in[b], feeds_in[a])
+        same = sum(c * hist_b.get(f, 0) for f, c in hist_a.items())
+        cross = size[a] * size[b] - same
+        return sums[a][b] / cross if cross > 0 else 0.0
+
+    heap = []
+    for a in range(n):
+        for b, total in sums[a].items():
+            if a < b:
+                avg = average(a, b)
+                if avg >= threshold:
+                    heap.append((-avg, a, b, 0, 0))
+    heapq.heapify(heap)
+    while heap:
+        neg, a, b, va, vb = heapq.heappop(heap)
+        if not (alive[a] and alive[b]) or va != version[a] or vb != version[b]:
+            continue  # stale entry
+        if -neg < threshold:
             break
-        ri, rj = uf.find(i), uf.find(j)
-        if ri == rj:
-            continue
-        if linkage == "average":
-            total = count = 0
-            for a in members[ri]:
-                for b in members[rj]:
-                    if items[a].feed_id == items[b].feed_id:
-                        continue
-                    count += 1
-                    total += sims.get((a, b) if a < b else (b, a), 0.0)
-            if not count or total / count < threshold:
+        if size[a] < size[b]:
+            a, b = b, a
+        # Merge b into a.
+        alive[b] = False
+        size[a] += size[b]
+        for f, c in feeds_in[b].items():
+            feeds_in[a][f] = feeds_in[a].get(f, 0) + c
+        members[a].extend(members[b])
+        sums[a].pop(b, None)
+        for c, total in sums[b].items():
+            if c == a:
                 continue
-        uf.union(ri, rj)  # parent becomes ri
-        members[ri].extend(members.pop(rj))
-    groups: dict[int, list[Item]] = defaultdict(list)
-    for i, it in enumerate(items):
-        groups[uf.find(i)].append(it)
-    return [Story(items=g) for g in groups.values()]
+            sums[a][c] = sums[a].get(c, 0.0) + total
+            sums[c][a] = sums[a][c]
+            sums[c].pop(b, None)
+        sums[b] = {}
+        version[a] += 1
+        for c in sums[a]:
+            avg = average(a, c)
+            if avg >= threshold:
+                heapq.heappush(heap, (-avg, min(a, c), max(a, c),
+                                      version[min(a, c)], version[max(a, c)]))
+    return [Story(items=[items[i] for i in members[r]]) for r in range(n) if alive[r]]
 
 
 def cluster(items: list[Item], threshold: float = DEFAULT_THRESHOLD, min_shared: int = 2,
