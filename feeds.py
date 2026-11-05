@@ -34,6 +34,7 @@ class ParsedEntry:
     link: str
     published: float  # unix timestamp
     description: str = ""  # plain-text summary, trimmed to DESCRIPTION_CHARS
+    image: str = ""        # http(s) URL of a picture for the item, if the feed has one
 
 
 @dataclass
@@ -161,6 +162,42 @@ def clean_title(title: str, feed_url: str = "") -> str:
     return title
 
 
+_IMG_SRC = re.compile(r"""<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""", re.I)
+_IMAGE_EXT = re.compile(r"\.(jpe?g|png|gif|webp|avif)(\?|$)", re.I)
+
+
+def _image(el: ET.Element, base_url: str = "") -> str:
+    """An item's picture: media:content / media:thumbnail, an image enclosure, or the first <img> in
+    its description or content. Returns an absolute http(s) URL or ""."""
+    candidates = []
+    for c in el.iter():
+        tag = _local(c.tag)
+        url = c.get("url") or c.get("href") or ""
+        if not url:
+            continue
+        kind = (c.get("type") or "").lower()
+        medium = (c.get("medium") or "").lower()
+        if tag == "thumbnail" or (tag == "content" and (medium == "image" or kind.startswith("image/")
+                                                       or (not medium and not kind and _IMAGE_EXT.search(url)))):
+            candidates.append(url)
+        elif tag in ("enclosure", "link") and (kind.startswith("image/") or (tag == "enclosure" and _IMAGE_EXT.search(url))):
+            if tag == "enclosure" or c.get("rel") == "enclosure":
+                candidates.append(url)
+    if not candidates:
+        for names in (("description", "summary"), ("encoded", "content")):
+            child = _child(el, *names)
+            if child is not None:
+                m = _IMG_SRC.search(html.unescape("".join(child.itertext())))
+                if m:
+                    candidates.append(html.unescape(m.group(1)))
+                    break
+    for url in candidates:
+        url = urljoin(base_url, url.strip()) if base_url else url.strip()
+        if url.lower().startswith(("http://", "https://")) and "feedburner.com/~r" not in url:
+            return url
+    return ""
+
+
 def _description(el: ET.Element) -> str:
     """Prefer the short summary; fall back to the full content."""
     for names in (("description", "summary"), ("encoded", "content")):
@@ -220,7 +257,7 @@ def parse(data: bytes, base_url: str = "") -> ParsedFeed:
             link = urljoin(base_url, _atom_link(e)) if base_url else _atom_link(e)
             guid = _raw(_child(e, "id")) or link or t
             pub = min(_parse_date(_text(_child(e, "published", "updated"))) or now, now)  # no future dates
-            entries.append(ParsedEntry(guid, t, link, pub, _description(e)))
+            entries.append(ParsedEntry(guid, t, link, pub, _description(e), _image(e, base_url)))
     elif kind in ("rss", "rdf"):  # RSS 2.0 / RSS 1.0
         channel = _child(root, "channel")
         title = _text(_child(channel, "title")) if channel is not None else ""
@@ -240,7 +277,7 @@ def parse(data: bytes, base_url: str = "") -> ParsedFeed:
                     link = urljoin(base_url, link)
                 guid = _raw(_child(it, "guid")) or link or t
                 pub = min(_parse_date(_text(_child(it, "pubDate", "date", "published", "updated"))) or now, now)
-                entries.append(ParsedEntry(guid, t, link, pub, _description(it)))
+                entries.append(ParsedEntry(guid, t, link, pub, _description(it), _image(it, base_url)))
     else:
         raise FeedError(f"Unrecognised feed format (root element <{_local(root.tag)}>)")
 

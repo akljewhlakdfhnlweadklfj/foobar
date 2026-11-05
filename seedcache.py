@@ -35,7 +35,7 @@ def export(store: Store, vertical: str, out: Path | None = None) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     urls = {f["id"]: f["url"] for f in store.list_feeds()}
     with store._conn() as c:
-        rows = c.execute("SELECT feed_id, guid, title, link, published, description FROM items "
+        rows = c.execute("SELECT feed_id, guid, title, link, published, description, image FROM items "
                          "ORDER BY feed_id, published").fetchall()
     since = min((r["published"] for r in rows), default=time.time())
     tmp = out.with_suffix(".tmp")
@@ -43,7 +43,8 @@ def export(store: Store, vertical: str, out: Path | None = None) -> int:
         f.write(json.dumps({"vertical": vertical, "created": time.time(), "since": since, "items": len(rows)}) + "\n")
         for r in rows:
             f.write(json.dumps({"url": urls[r["feed_id"]], "guid": r["guid"], "title": r["title"], "link": r["link"],
-                                "published": r["published"], "description": r["description"]},
+                                "published": r["published"], "description": r["description"],
+                                "image": r["image"]},
                                ensure_ascii=False) + "\n")
     tmp.replace(out)
     return len(rows)
@@ -60,7 +61,7 @@ def load(store: Store, path: Path) -> tuple[int, int]:
             r = json.loads(line)
             if r["published"] >= cutoff:
                 by_url[r["url"]].append(feeds.ParsedEntry(r["guid"], r["title"], r["link"], r["published"],
-                                                          r.get("description", "")))
+                                                          r.get("description", ""), r.get("image", "")))
     loaded = touched = 0
     for feed in store.list_feeds():
         entries = by_url.get(feed["url"])

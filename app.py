@@ -19,6 +19,7 @@ import sqlite3
 import sys
 import threading
 import time
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -154,6 +155,18 @@ def _clusters(store: Store, hours: float, threshold: float) -> tuple[list[matchi
     return stories, len(items)
 
 
+MIN_HEADLINE_WORDS = 4
+
+
+def headline_item(story: matching.Story, min_weight: float = 0) -> matching.Item:
+    """The headline a story is shown with: the shortest one among its counted outlets.
+    Fragments under MIN_HEADLINE_WORDS words ("Sweet Pea", "Review") are skipped when a fuller
+    headline exists; ties go to the higher-weighted outlet."""
+    pool = [i for i in story.items if i.weight >= min_weight] or story.items
+    full = [i for i in pool if len(i.title.split()) >= MIN_HEADLINE_WORDS] or pool
+    return min(full, key=lambda i: (len(i.title), -i.weight, i.published))
+
+
 def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, min_score: float = 0,
                   only_watched: bool = False, watched_any_coverage: bool = False,
                   require_all: bool = False, min_weight: float = 0) -> dict:
@@ -202,12 +215,15 @@ def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, 
         per_feed: dict[int, matching.Item] = {}
         for it in sorted(s.items, key=lambda i: i.published):
             per_feed[it.feed_id] = it
-        lead = matching.lead_item(s)  # highest-weighted outlet, so it counts whenever any outlet does
-        per_feed[lead.feed_id] = lead  # show the lead outlet's lead headline, not its newest item
+        lead = headline_item(s, min_weight)
+        per_feed[lead.feed_id] = lead  # show the chosen headline for its outlet, not that outlet's newest item
+        best = sorted(s.items, key=lambda i: (-i.weight, -i.published))
+        description = lead.description or next((i.description for i in best if i.description), "")
+        image = lead.image or next((i.image for i in best if i.image), "")
         out.append({
             "title": lead.title,
             "lead": {"feed": lead.feed_title, "link": lead.link, "weight": lead.weight,
-                     "description": lead.description[:400]},
+                     "description": description[:400], "image": image},
             "coverage": coverage,
             "base_score": prestige,
             "outlets": s.coverage,  # including outlets below min_weight
@@ -219,12 +235,124 @@ def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, 
             "sources": [
                 {"feed": it.feed_title, "title": it.title, "link": it.link, "published": it.published,
                  "weight": it.weight, "watched": it.id in watched_items, "snippet": snippets.get(it.id, ""),
+                 "image": it.image,
                  "counted": it.weight >= min_weight}
                 for it in sorted(per_feed.values(), key=lambda i: (-i.weight, i.published))
             ],
         })
     out.sort(key=lambda s: (-s["score"], -s["coverage"], -s["latest"]))
-    return {"stories": out, "items_considered": considered}
+    return {"stories": out, "items_considered": considered, "terms": story_terms(out)}
+
+
+# --- prominent terms (word cloud) ---------------------------------------------------------------
+
+# Headline filler that would otherwise dominate the cloud without saying what the news is about.
+GENERIC_TERMS = frozenset("""
+    trailer trailers review reviews release released releases releasing date dates first season seasons
+    episode episodes game games gameplay update updates launch launches launched launching coming comes
+    year years time times day days week weeks month best top official officially full get gets got getting
+    now here look looks looking set sets make makes making made take takes taking back big one two three
+    part story stories show shows showing star stars film films movie movies book books series anime manga
+    announce announces announced announcement reveal reveals revealed confirm confirms confirmed
+    want wants need needs could would might may will just like also still even every way ways thing things
+    people fans fan report reports reported reportedly rumor rumors leak leaks leaked deal deals sale sales
+    free price prices next last end ends final finally after before start starts starting open opens
+    win wins won world know says said tell tells talk talks call calls go goes going see seen watch new
+    major huge massive including includes include available live early late latest today tonight
+    against during off long short high low good great bad better worse every many much more most
+""".split())
+MIN_SHARE = 0.4
+_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’+\-]*")
+
+
+def _term_key(word: str) -> str | None:
+    w = word.lower().replace("’", "'")
+    if w.endswith("'s"):
+        w = w[:-2]
+    w = w.strip("'-")
+    if len(w) < 3 or w.isdigit() or w in matching.STOPWORDS or w in GENERIC_TERMS:
+        return None
+    key = matching._stem(matching.SYNONYMS.get(w, w))
+    return None if key in GENERIC_TERMS or key in matching.STOPWORDS else key
+
+
+def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
+    """The most prominent words and two-word phrases in these stories' headlines.
+
+    A term counts for a story only if it's in at least MIN_SHARE of that story's headlines (what the
+    story is about, not one outlet's wording), and adds score x share. So terms from widely covered,
+    prestigious stories are biggest. Word variants
+    ("layoff"/"layoffs") are merged; a phrase ("Elder Scrolls") replaces its words when they mostly
+    occur together. Returns [{"term", "weight", "stories", "forms"}], heaviest first.
+    """
+    uni_w, uni_n, bi_w, bi_n = defaultdict(float), defaultdict(int), defaultdict(float), defaultdict(int)
+    forms: dict = defaultdict(Counter)            # key -> surface forms seen
+    proper: dict = defaultdict(int)               # key -> times capitalised inside a sentence-case headline
+    plain: dict = defaultdict(int)                # key -> times lowercase inside a sentence-case headline
+    for s in stories:
+        titles = {x["title"] for x in s["sources"]} | {s["title"]}
+        cnt_u, cnt_b = Counter(), Counter()
+        for title in titles:
+            seen_u, seen_b = set(), set()
+            words = _WORD_RE.findall(title)
+            caps = sum(w[0].isupper() for w in words)
+            sentence_case = len(words) > 3 and caps / len(words) < 0.6
+            keys = []
+            for i, w in enumerate(words):
+                k = _term_key(w)
+                keys.append(k)
+                if not k:
+                    continue
+                form = (w[:-2] if w.lower().endswith(("'s", "’s")) else w).strip("'’-")
+                forms[k][form] += 1
+                if sentence_case and i > 0:
+                    if w[0].isupper():
+                        proper[k] += 1
+                    else:
+                        plain[k] += 1
+                seen_u.add(k)
+            for a, b in zip(keys, keys[1:]):
+                if a and b and a != b:
+                    seen_b.add((a, b))
+            cnt_u.update(seen_u)
+            cnt_b.update(seen_b)
+        need = max(1, MIN_SHARE * len(titles))
+        for k, c in cnt_u.items():
+            if c >= need:
+                uni_w[k] += s["score"] * c / len(titles); uni_n[k] += 1
+        for k, c in cnt_b.items():
+            if c >= need:
+                bi_w[k] += s["score"] * c / len(titles); bi_n[k] += 1
+
+    def display(k: str) -> str:
+        """Names, acronyms and model names keep their capitals; ordinary words are lowercased.
+        A word is a name when it's mostly capitalised mid-headline in sentence-case headlines; with no
+        such headlines to go by, it keeps its most common form."""
+        form = forms[k].most_common(1)[0][0]
+        caps = Counter({f: c for f, c in forms[k].items() if f[:1].isupper()})
+        if (len(form) > 1 and form.isupper()) or any(c.isdigit() for c in form):
+            return form
+        if proper[k] + plain[k] == 0:
+            return caps.most_common(1)[0][0] if caps else form
+        return caps.most_common(1)[0][0] if caps and proper[k] >= plain[k] else form.lower()
+
+    terms = {}
+    for (a, b), n in bi_n.items():
+        if n >= 2 and n >= 0.6 * min(uni_n[a], uni_n[b]):
+            terms[(a, b)] = {"term": f"{display(a)} {display(b)}", "weight": bi_w[(a, b)], "stories": n,
+                             "forms": sorted({f for f in forms[a]} | {f for f in forms[b]})[:6], "parts": (a, b)}
+    absorbed = Counter()
+    for t in terms.values():
+        for part in t["parts"]:
+            absorbed[part] = max(absorbed[part], t["stories"])
+    for k, n in uni_n.items():
+        if n >= 2 and n > 1.25 * absorbed.get(k, 0):
+            terms[k] = {"term": display(k), "weight": uni_w[k], "stories": n, "forms": sorted(forms[k])[:6]}
+    out = sorted(terms.values(), key=lambda t: -t["weight"])[:limit]
+    for t in out:
+        t.pop("parts", None)
+        t["weight"] = round(t["weight"], 2)
+    return out
 
 
 # --- HTTP ------------------------------------------------------------------------------------

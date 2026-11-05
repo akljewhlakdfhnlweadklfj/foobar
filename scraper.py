@@ -36,10 +36,15 @@ def _from_feedly(entries: list[dict], title: str = "", feed_url: str = "") -> fe
     now = time.time()
     parsed = []
     for e in entries:
-        guid, t, link, pub, desc = feedly.entry_fields(e)
+        guid, t, link, pub, desc, image = feedly.entry_fields(e)
         t = feeds.clean_title(feeds.clean_text(t), feed_url)
+        if not image:  # fall back to the first <img> in the HTML summary
+            m = feeds._IMG_SRC.search(desc or "")
+            image = m.group(1) if m else ""
+        if not image.lower().startswith(("http://", "https://")):
+            image = ""
         if t:
-            parsed.append(feeds.ParsedEntry(guid, t, link, min(pub or now, now), feeds.clean_description(desc)))
+            parsed.append(feeds.ParsedEntry(guid, t, link, min(pub or now, now), feeds.clean_description(desc), image))
     return feeds.ParsedFeed(title=title, entries=parsed)
 
 

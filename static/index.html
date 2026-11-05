@@ -63,6 +63,17 @@
   .viewbar label { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
   .viewbar select { width: auto; padding: 4px 8px; }
   .stories { max-width: 900px; }
+  .cloud { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 2px 12px;
+           padding: 14px 16px; margin-bottom: 14px; background: var(--panel); border: 1px solid var(--border);
+           border-radius: 10px; max-width: 900px; line-height: 1.15; }
+  .cloud button { background: none; border: 0; padding: 2px 3px; border-radius: 4px; font-weight: 700; color: var(--text);
+                  cursor: pointer; white-space: nowrap; letter-spacing: -0.01em; }
+  .cloud button.hot { color: var(--accent); }
+  .cloud button.mid { color: var(--text); font-weight: 600; }
+  .cloud button.low { color: var(--muted); font-weight: 500; }
+  .cloud button:hover, .cloud button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+  .cloud .empty-cloud { color: var(--muted); font-size: 13px; }
+  .viewbar .clear { color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: 0; padding: 0; font: inherit; }
   .story { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
   .story.watched { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
   .story-head { display: flex; gap: 12px; align-items: flex-start; }
@@ -71,6 +82,11 @@
   .badge small { display: block; font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
   .badge .score { display: block; margin-top: 3px; padding-top: 3px; border-top: 1px solid currentColor; font-size: 11px; opacity: .85; }
   .story h3 { margin: 0; font-size: 17px; line-height: 1.35; }
+  .story-text { flex: 1; min-width: 0; }
+  .thumb { flex: none; width: 168px; height: 104px; border-radius: 8px; overflow: hidden; background: var(--bg);
+           border: 1px solid var(--border); display: block; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  @media (max-width: 600px) { .thumb { width: 88px; height: 66px; border-radius: 6px; } }
   .story h3 a { text-decoration: none; } .story h3 a:hover { text-decoration: underline; }
   .meta { font-size: 13px; color: var(--muted); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .meta .lead { color: var(--accent); font-weight: 600; }
@@ -185,6 +201,7 @@
 <main>
   <!-- ===== Stories ===== -->
   <section id="view_stories">
+    <div class="cloud" id="cloud" aria-label="Most prominent terms in these stories" hidden></div>
     <div class="viewbar">
       <div class="summary" id="summary">Loading…</div>
       <label for="sort">Sort <select id="sort"><option value="score">Top</option><option value="latest">Latest</option></select></label>
@@ -360,7 +377,10 @@ function render() {
   $("view_scraping").hidden = !(route.top === "settings" && route.sub === "scraping");
   document.title = (route.top === "stories" ? (route.sub === "all" ? "All stories" : label(route.sub))
                     : "Settings · " + (route.sub === "scraping" ? "Scraping" : label(route.sub))) + " · Consensus News";
-  if (route.top === "stories") { V = null; lastStoriesJson = ""; $("stories").innerHTML = ""; $("summary").textContent = "Loading…"; loadStories(true); }
+  if (route.top === "stories") {
+    V = null; lastStoriesJson = ""; activeTerm = null; $("stories").innerHTML = ""; $("cloud").hidden = true;
+    $("summary").textContent = "Loading…"; loadStories(true);
+  }
   else if (route.sub === "scraping") { V = null; loadScrape(); }
   else openVertical(route.sub);
 }
@@ -387,6 +407,47 @@ function hl(text, re) {
 }
 const storyKey = (s) => s.vertical + "|" + (s.lead.link || s.title);
 
+// ---------- Word cloud of prominent terms ----------
+let activeTerm = null, lastTerms = [], lastStories = [];
+function mergeTerms(results) {
+  const by = new Map();
+  for (const r of results) for (const t of r.terms || []) {
+    const k = t.term.toLowerCase(), cur = by.get(k);
+    if (cur) { cur.weight += t.weight; cur.stories += t.stories; cur.forms = [...new Set([...cur.forms, ...t.forms])]; }
+    else by.set(k, { ...t, forms: [...t.forms] });
+  }
+  return [...by.values()].sort((a, b) => b.weight - a.weight).slice(0, 40);
+}
+function termRe(t) {
+  // Phrases match their words in order (punctuation allowed between: "Zelda: Ocarina"); single words
+  // match any form the headlines used ("midterm", "Midterms").
+  const parts = t.term.includes(" ") ? [t.term.split(/\s+/).map(reEsc).join("\\W+")]
+                                     : [...new Set([t.term, ...t.forms])].map(reEsc);
+  return new RegExp(`(?<![\\p{L}\\p{N}_])(?:${parts.join("|")})(?![\\p{L}\\p{N}_])`, "iu");
+}
+const mentions = (s, re) => re.test(s.title) || re.test(s.lead.description || "") || s.sources.some((x) => re.test(x.title));
+function renderCloud(terms) {
+  lastTerms = terms;
+  const el = $("cloud");
+  el.hidden = !terms.length;
+  if (!terms.length) { el.innerHTML = ""; return; }
+  const max = terms[0].weight, ordered = [];
+  terms.forEach((t, i) => (i % 2 ? ordered.push(t) : ordered.unshift(t)));   // biggest in the middle
+  el.innerHTML = ordered.map((t) => {
+    const r = Math.sqrt(t.weight / max), size = Math.round(12 + 22 * r);
+    const tier = r > 0.6 ? "hot" : r > 0.32 ? "mid" : "low";
+    const on = activeTerm && activeTerm.toLowerCase() === t.term.toLowerCase();
+    return `<button type="button" class="${tier}" style="font-size:${size}px" data-term="${esc(t.term)}" aria-pressed="${on}"
+      title="${t.stories} stor${t.stories === 1 ? "y" : "ies"} · click to show only these">${esc(t.term)}</button>`;
+  }).join("");
+}
+$("cloud").addEventListener("click", (e) => {
+  const term = e.target.closest("button")?.dataset.term;
+  if (!term) return;
+  activeTerm = activeTerm && activeTerm.toLowerCase() === term.toLowerCase() ? null : term;
+  renderCloud(lastTerms); renderStoryList(lastStories, route.sub, true);
+});
+
 async function fetchStories(key) {
   const d = await api(`/api/${key}/stories`);
   return { ...d, stories: d.stories.map((s) => ({ ...s, vertical: key })) };
@@ -409,15 +470,31 @@ async function loadStories(force = false) {
   const scanned = results.reduce((t, r) => t + r.items_considered, 0);
   if ($("sort").value === "latest") stories.sort((a, b) => b.latest - a.latest);
   else stories.sort((a, b) => b.score - a.score || b.coverage - a.coverage || b.latest - a.latest);
-  if (sub === "all") {
-    $("summary").textContent = `${stories.length} stories across ${keys.length} verticals · ${scanned} headlines scanned · each vertical uses its own settings`;
-  } else {
-    const c = results[0].settings;
-    $("summary").textContent = `${stories.length} stories reported by ≥ ${c.min_feeds} outlet${c.min_feeds === 1 ? "" : "s"} in the last ${windowText(c.hours)} · ${scanned} headlines scanned`;
-  }
+  summaryBase = sub === "all"
+    ? `${stories.length} stories across ${keys.length} verticals · ${scanned} headlines scanned · each vertical uses its own settings`
+    : `${stories.length} stories reported by ≥ ${results[0].settings.min_feeds} outlet${results[0].settings.min_feeds === 1 ? "" : "s"} in the last ${windowText(results[0].settings.hours)} · ${scanned} headlines scanned`;
   const json = JSON.stringify(stories);
   if (!force && json === lastStoriesJson) return;
   lastStoriesJson = json;
+  const terms = sub === "all" ? mergeTerms(results) : (results[0].terms || []);
+  if (activeTerm && !terms.some((t) => t.term.toLowerCase() === activeTerm.toLowerCase())) activeTerm = null;
+  renderCloud(terms);
+  renderStoryList(stories, sub, force);
+}
+
+let summaryBase = "";
+function renderStoryList(allStories, sub, force) {
+  lastStories = allStories;
+  let stories = allStories;
+  if (activeTerm) {
+    const t = lastTerms.find((x) => x.term.toLowerCase() === activeTerm.toLowerCase());
+    const re = t ? termRe(t) : null;
+    stories = re ? allStories.filter((s) => mentions(s, re)) : allStories;
+    $("summary").innerHTML = `${stories.length} of ${allStories.length} stories mention “${esc(activeTerm)}” · <button type="button" class="clear" id="clear_term">Show all</button>`;
+    $("clear_term").addEventListener("click", () => { activeTerm = null; renderCloud(lastTerms); renderStoryList(lastStories, route.sub, true); });
+  } else {
+    $("summary").textContent = summaryBase;
+  }
   if (!stories.length) {
     $("stories").innerHTML = `<div class="empty">No stories match the current settings yet.<br>
       <a href="#settings/${sub === "all" ? META.verticals[0].key : sub}">Adjust them in Settings</a>, or refresh the feeds.</div>`;
@@ -432,13 +509,15 @@ async function loadStories(force = false) {
     <article class="story${s.watched.length ? " watched" : ""}">
       <div class="story-head">
         <div class="badge" title="${s.coverage} counted outlet${s.coverage === 1 ? "" : "s"}${s.outlets > s.coverage ? ` (of ${s.outlets})` : ""} · prestige ${fmt(s.base_score)}${s.bonus ? ` + ${fmt(s.bonus)} watched bonus` : ""}">${s.coverage}<small>outlets</small><span class="score">★ ${fmt(s.score)}</span></div>
-        <div style="min-width:0">
+        <div class="story-text">
           <h3>${s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${hl(s.title, re)}</a>` : hl(s.title, re)}</h3>
           <div class="meta">${sub === "all" ? `<span class="vtag">${esc(label(s.vertical))}</span>` : ""}
             <span class="lead">${esc(s.lead.feed)}</span><span>first seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</span></div>
           ${s.lead.description ? `<p class="desc">${hl(s.lead.description, re)}</p>` : ""}
           ${s.watched.length ? `<div class="chips">${s.watched.map((w) => `<span class="chip">Watched: ${esc(w.phrase)} +${fmt(w.bonus)}</span>`).join("")}</div>` : ""}
         </div>
+        ${s.lead.image && safeUrl(s.lead.image) !== "#" ? `<a class="thumb" href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer" tabindex="-1" aria-hidden="true">
+          <img src="${esc(s.lead.image)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>` : ""}
       </div>
       <details data-key="${esc(key)}" ${open.has(key) || (s.watched.length && !titleHit) ? "open" : ""}>
         <summary>${s.sources.slice(0, 6).map((x) => esc(x.feed)).join(" · ")}${s.sources.length > 6 ? ` · +${s.sources.length - 6} more` : ""}</summary>

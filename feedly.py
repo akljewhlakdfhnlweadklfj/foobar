@@ -160,11 +160,26 @@ def recent(feed_url: str, count: int = 100, wait: bool = False) -> tuple[str, li
     return d.get("title", ""), d.get("items", [])
 
 
-def entry_fields(e: dict) -> tuple[str, str, str, float, str]:
-    """(guid, title, link, published_unix, raw description HTML) for a Feedly entry."""
+def entry_image(e: dict) -> str:
+    """Feedly's picture for an entry: its "visual", a thumbnail, or an image enclosure."""
+    url = (e.get("visual") or {}).get("url") or ""
+    if url and url != "none":
+        return url
+    for t in e.get("thumbnail") or []:
+        if t.get("url"):
+            return t["url"]
+    for enc in e.get("enclosure") or []:
+        if (enc.get("type") or "").startswith("image/") and enc.get("href"):
+            return enc["href"]
+    return ""
+
+
+def entry_fields(e: dict) -> tuple[str, str, str, float, str, str]:
+    """(guid, title, link, published_unix, raw description HTML, image URL) for a Feedly entry."""
     link = (e.get("alternate") or [{}])[0].get("href") or e.get("canonicalUrl") or e.get("originId", "")
     desc = (e.get("summary") or e.get("content") or {}).get("content", "")
-    return e.get("originId") or e["id"], (e.get("title") or "").strip(), link, e.get("published", 0) / 1000, desc
+    return (e.get("originId") or e["id"], (e.get("title") or "").strip(), link, e.get("published", 0) / 1000,
+            desc, entry_image(e))
 
 
 if __name__ == "__main__":

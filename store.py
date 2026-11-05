@@ -2,7 +2,7 @@
 
 Schema history (PRAGMA user_version): v1 feeds+items; v2 feeds.via; v3 feeds.name; v4 feeds.weight;
 v5 feeds.enabled; v6 feeds.backfilled_since + items.description; v7 feeds.last_run + feeds.required +
-phrases table; v8 settings table; v9 feeds.only (keyword filter).
+phrases table; v8 settings table; v9 feeds.only (keyword filter); v10 items.image.
 Older files are upgraded in place when opened.
 """
 
@@ -22,7 +22,7 @@ import feeds
 import matching
 
 RETENTION_DAYS = 14
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 MAX_WEIGHT = 10.0
 MAX_BONUS = 100.0
 DEFAULT_BONUS = 5.0
@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS items (
     published   REAL NOT NULL,
     fetched_at  REAL NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    image       TEXT NOT NULL DEFAULT '',
     UNIQUE (feed_id, guid)
 );
 CREATE INDEX IF NOT EXISTS items_published ON items(published);
@@ -74,7 +75,7 @@ _ADDED_COLUMNS = {
     "feeds": [("via", "TEXT"), ("name", "TEXT"), ("weight", "REAL"), ("enabled", "INTEGER NOT NULL DEFAULT 1"),
               ("backfilled_since", "REAL"), ("last_run", "TEXT"), ("required", "INTEGER NOT NULL DEFAULT 0"),
               ("only", "TEXT")],
-    "items": [("description", "TEXT NOT NULL DEFAULT ''")],
+    "items": [("description", "TEXT NOT NULL DEFAULT ''"), ("image", "TEXT NOT NULL DEFAULT ''")],
 }
 
 
@@ -241,12 +242,13 @@ class Store:
                 c.execute("UPDATE feeds SET last_fetched = ?, last_error = ? WHERE id = ?", (now, error, feed_id))
                 return
             c.executemany(
-                """INSERT INTO items (feed_id, guid, title, link, published, fetched_at, description)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO items (feed_id, guid, title, link, published, fetched_at, description, image)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT (feed_id, guid) DO UPDATE SET title = excluded.title, link = excluded.link,
                        description = CASE WHEN excluded.description != '' THEN excluded.description
-                                          ELSE items.description END""",
-                [(feed_id, e.guid, e.title, e.link, min(e.published, now), now, e.description)
+                                          ELSE items.description END,
+                       image = CASE WHEN excluded.image != '' THEN excluded.image ELSE items.image END""",
+                [(feed_id, e.guid, e.title, e.link, min(e.published, now), now, e.description, e.image)
                  for e in parsed.entries if e.title and e.published >= now - RETENTION_DAYS * 86400],
             )
             c.execute(
@@ -263,7 +265,7 @@ class Store:
             filters = {r["id"]: keyword_regex(r["only"]) for r in
                        c.execute("SELECT id, only FROM feeds WHERE enabled = 1 AND only IS NOT NULL")}
             rows = c.execute(
-                """SELECT i.id, i.feed_id, i.title, i.link, i.published, i.description,
+                """SELECT i.id, i.feed_id, i.title, i.link, i.published, i.description, i.image,
                           COALESCE(f.name, NULLIF(f.title, ''), f.url) AS feed_title,
                           COALESCE(f.weight, ?) AS weight
                    FROM items i JOIN feeds f ON f.id = i.feed_id

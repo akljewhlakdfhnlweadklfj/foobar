@@ -123,6 +123,7 @@ class Item:
     feed_title: str = ""
     weight: float = DEFAULT_WEIGHT  # outlet prestige, 1 (small blog) .. 5 (paper of record)
     description: str = ""
+    image: str = ""
     tokens: frozenset[str] = field(default_factory=frozenset)
 
 

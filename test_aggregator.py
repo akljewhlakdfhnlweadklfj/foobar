@@ -573,6 +573,44 @@ class SeedCacheTests(unittest.TestCase):
                 self.assertFalse(seedcache.store_is_empty(stores[key]), key)
 
 
+class HeadlineAndImageTests(unittest.TestCase):
+    def test_shortest_full_headline_is_used(self):
+        story = matching.Story(items=[
+            Item(id=1, feed_id=1, title="Review: The Legend of Zelda: Ocarina of Time Remake - One of the Best", weight=5),
+            Item(id=2, feed_id=2, title="Ocarina remake reviewed", weight=2),          # 3 words: too short
+            Item(id=3, feed_id=3, title="Zelda: Ocarina of Time remake review roundup", weight=3),
+            Item(id=4, feed_id=4, title="Ocarina of Time remake: our review", weight=1, image="https://x/i.jpg"),
+        ])
+        self.assertEqual(app.headline_item(story).id, 4)
+        self.assertEqual(app.headline_item(story, min_weight=2).id, 3)               # outlet 4 doesn't count
+
+    def test_images_from_rss_atom_and_feedly(self):
+        rss = b"""<rss xmlns:media="http://search.yahoo.com/mrss/"><channel>
+          <item><title>A</title><link>https://s/1</link><media:content url="https://cdn/a.jpg" medium="image"/></item>
+          <item><title>B</title><link>https://s/2</link><enclosure url="/img/b.png" type="image/png"/></item>
+          <item><title>C</title><link>https://s/3</link><description>&lt;p&gt;&lt;img src="https://cdn/c.webp"&gt; hi&lt;/p&gt;</description></item>
+          <item><title>D</title><link>https://s/4</link><enclosure url="https://s/pod.mp3" type="audio/mpeg"/></item>
+        </channel></rss>"""
+        imgs = [e.image for e in feeds.parse(rss, base_url="https://s/feed").entries]
+        self.assertEqual(imgs, ["https://cdn/a.jpg", "https://s/img/b.png", "https://cdn/c.webp", ""])
+        import feedly
+        self.assertEqual(feedly.entry_image({"visual": {"url": "https://v/x.jpg"}}), "https://v/x.jpg")
+        self.assertEqual(feedly.entry_image({"visual": {"url": "none"}, "thumbnail": [{"url": "https://t/y.jpg"}]}),
+                         "https://t/y.jpg")
+
+    def test_story_output_has_image_and_description_fallback(self):
+        store = app.Store(Path(tempfile.mkdtemp()) / "i.db")
+        now = time.time()
+        for n, (title, desc, img) in enumerate([("Valve announces new Steam Machine hardware today", "", ""),
+                                                 ("Valve announces Steam Machine hardware", "", ""),
+                                                 ("Valve's Steam Machine hardware announced by the company", "Long text.", "https://i/1.jpg")], 1):
+            fid = store.add_feed(f"https://{n}.example/rss", f"Outlet {n}", n)
+            store.save_fetch(fid, feeds.ParsedFeed("x", [feeds.ParsedEntry(f"g{n}", title, f"https://{n}/a", now, desc, img)]), None)
+        s = app.build_stories(store, 3, 48, 0.12)["stories"][0]
+        self.assertEqual(s["title"], "Valve announces Steam Machine hardware")        # shortest
+        self.assertEqual((s["lead"]["description"], s["lead"]["image"]), ("Long text.", "https://i/1.jpg"))
+
+
 class ParserAndPagingTests(unittest.TestCase):
     def test_parser_details(self):
         future = time.time() + 30 * 86400

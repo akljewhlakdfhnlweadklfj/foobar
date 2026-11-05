@@ -51,9 +51,16 @@ unless you trust everyone with the link.
 The app has two sections (top left):
 
 **Stories**: the reader. Pick **All** (every vertical, each using its own settings, with a label on
-each story) or a single vertical, and sort by **Top** (score) or **Latest**. Each story shows how many
-outlets reported it, its score, the lead outlet's headline and description, and (expanded) every
-outlet's headline. Watched phrases are highlighted.
+each story) or a single vertical, and sort by **Top** (score) or **Latest**.
+- A **word cloud** at the top shows the most prominent words and phrases in the stories listed:
+  a term counts for a story when it's in at least 40% of that story's headlines, and is sized by the
+  scores of the stories using it. Generic headline words (trailer, review, season…) are left out.
+  Click a term to show only stories mentioning it; click again (or "Show all") to clear.
+- Each story shows how many outlets reported it, its score, a headline, a description and, when the
+  feeds provide one, an image on the right. The headline is the **shortest** one among the story's
+  outlets (ignoring fragments under 4 words); the description and image fall back to the
+  highest-weighted outlet that has them. Expand a story to see every outlet's headline.
+  Watched phrases are highlighted.
 
 **Settings**: one sub-tab per vertical, plus **Scraping**.
 - **Which stories show** (saved on the server, per vertical): reported by at least N outlets, time
@@ -129,7 +136,7 @@ Movies & TV). The weights are editorial judgment calls assigned by Claude, not m
 
 - A story's **score** = the sum of its distinct (counted) outlets' weights + the bonus of every watched
   phrase it mentions.
-- Each story shows the headline from its highest-weighted outlet.
+- Weights decide ranking, not the headline: each story shows its shortest headline (see Stories above).
 - Weights can be changed per outlet in the UI (0–10); feeds you add yourself start at 2.
 
 **Games** (57 feeds)

@@ -61,7 +61,7 @@ SHIM = r"""
         if (s.watched.length && c.watched_any) return true;
         return s.coverage >= c.min_feeds && s.score >= c.min_score;
       });
-      return reply({ stories, items_considered: SNAP.items[v], settings: c });
+      return reply({ stories, items_considered: SNAP.items[v], settings: c, terms: SNAP.terms[v] });
     }
     return reply({ error: "Not available in this snapshot" }, 404);
   };
@@ -72,6 +72,8 @@ SHIM = r"""
 HIDE_CSS = """
   /* Read-only snapshot: just the Stories viewer. */
   #top_tabs, .scrape button { display: none !important; }
+  /* Artifact pages can't load images from other sites. */
+  .thumb { display: none !important; }
   .snapnote { font-size: 12px; color: var(--muted); }
 """
 
@@ -87,7 +89,7 @@ def build(data_dir: Path, out: Path) -> dict:
                  "max_weight": app.MAX_WEIGHT, "default_bonus": app.DEFAULT_BONUS, "max_bonus": app.MAX_BONUS},
         "scrape": {"state": "idle", "run": None, "resumable": False, "auto": False, "interval_minutes": 0,
                    "last_run": {"finished_at": now}},
-        "feeds": {}, "phrases": {}, "stories": {}, "items": {}, "settings": {},
+        "feeds": {}, "phrases": {}, "stories": {}, "items": {}, "settings": {}, "terms": {},
     }
     for v in app.VERTICALS:
         st = stores[v.key]
@@ -99,6 +101,10 @@ def build(data_dir: Path, out: Path) -> dict:
         # kept when they're watched or the vertical's minimum is 1, to keep the page small.
         res = app.build_stories(st, min(2, cfg["min_feeds"]), cfg["hours"], cfg["threshold"], 0, watched_any_coverage=True)
         snap["stories"][v.key] = res["stories"]
+        shown = app.build_stories(st, cfg["min_feeds"], cfg["hours"], cfg["threshold"], cfg["min_score"],
+                                  only_watched=cfg["only_watched"], watched_any_coverage=cfg["watched_any"],
+                                  require_all=cfg["require_all"], min_weight=cfg["min_weight"])
+        snap["terms"][v.key] = shown["terms"]  # word cloud for the stories the viewer shows
         snap["items"][v.key] = res["items_considered"]
 
     html = (ROOT / "static" / "index.html").read_text()
