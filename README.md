@@ -18,7 +18,7 @@ python3 app.py                  # afterwards
 | `--data data/` | folder with one database per tab |
 | `--interval 15` | minutes between automatic refreshes |
 | `--no-auto` | no scheduled refreshes; something else calls the scrape API |
-| `--backfill DAYS` | load up to 14 days of history from Feedly first (resumable) |
+| `--backfill DAYS` | load up to 30 days of history from Feedly first (resumable) |
 | `--import FILE --vertical games` | add the feed URLs in FILE to a tab |
 | `--no-serve` | exit after seeding / import / backfill |
 | `--api-token TOKEN` (or `$NEWS_API_TOKEN`) | let other machines call the API with `Authorization: Bearer TOKEN` |
@@ -70,21 +70,49 @@ each story) or a single vertical, and sort by **Top** (score) or **Latest**.
   headline. Description and image fall back to the highest-weighted outlet that has them.
   Watched phrases are highlighted.
 
-**Settings**: one sub-tab per vertical, plus **Scraping**.
-- **Which stories show** (saved on the server, per vertical): reported by at least N outlets, or at
+**Settings**: one sub-tab per vertical, plus **Scraping**. Your settings, watched phrases and outlet
+choices are **saved in your browser** (each viewer has their own; see [Architecture](#architecture-many-viewers-little-server-work)).
+- **Which stories show** (per vertical): reported by at least N outlets, or at
   least a percentage of the vertical's enabled outlets (rounded up, minimum 1; it follows outlets
   being switched on/off), time window, only count outlets weighted at least X (lower-weighted outlets still help group headlines
   but don't count toward N or the score), minimum score, match strictness, and, when outlets are
-  marked required, whether stories need any or all of them. Changes save automatically.
+  marked required, whether stories need any or all of them. Time windows go up to 30 days.
+  Changes save automatically; **Reset to defaults** returns to the vertical's defaults.
 - **Watched phrases**: add a phrase and a bonus (0–100). Stories mentioning it in any outlet's title
   or description are outlined and highlighted, and the bonus is added to the score. Options: only
   show watched stories; show watched stories even if fewer outlets report them.
-- **Outlets**: add feeds; switch each on or off (off = left out of stories, still fetched); mark
-  **Required** (stories must include it); set its weight (0–10); search; all on / all off; remove.
+- **Outlets**: switch each on or off for you (off = left out of your stories); mark **Required**
+  (stories must include it); set your own weight (0–10); search; all on / all off.
+  **Catalog (all users)** under an outlet changes the shared catalog: its default weight, keyword
+  filter, or removing it. **Shared catalog (admin)** adds feeds and sets the match strictness. These
+  go to the server and regroup stories for everyone.
 - **Scraping**: progress of the current run, Refresh all, Stop, Resume, Backfill N days, and the
   automatic schedule (on/off and interval).
 
 The header always shows scraping status, with a quick Refresh / Stop.
+
+## Architecture: many viewers, little server work
+
+Grouping headlines into stories is the only expensive step, and it doesn't depend on who is looking.
+So the server does it **once per vertical after each scrape** (and after a catalog change), for
+three windows (2, 7 and 30 days), and saves the result as a static **digest**:
+`data/digests/<vertical>-<hours>.json` (plus `.json.gz`), also kept in memory and served by
+`GET /api/<v>/digest?hours=N` with gzip, an `ETag` (unchanged digests cost a 304) and
+`Cache-Control: public, max-age=60`. Every viewer downloads the same file, so the files can sit behind
+a CDN or be served by any static host.
+
+The browser does everything personal: which outlets are on, weights, required outlets, "only count
+outlets weighted at least", watched phrases and bonuses, "reported by at least N / N%", minimum
+score, the exact time window (cut from the smallest digest that covers it), sorting and key-term
+filters. Preferences live in `localStorage` (`consensus-prefs-v1`), so the server stores no per-user
+state. A digest holds every outlet in the catalog (including ones switched off by default), one
+headline per outlet per story (its shortest full one), descriptions trimmed to 240 characters, and the
+story's key terms. Stories reported by a single outlet are left out to keep files small, so the
+lowest "reported by" setting is effectively 2.
+
+Rough sizes (2 days of data): General News ~690 stories, ~480 KB gzipped, built in ~8 s; Games ~200
+stories, ~130 KB. Settings and phrases saved on the server by earlier versions remain as each
+vertical's defaults (`/api/<v>/settings`), but personal changes are now browser-only.
 
 ## Verticals and data
 
@@ -109,17 +137,12 @@ The header always shows scraping status, with a quick Refresh / Stop.
   - **Removed URLs** stay until you remove them in the UI. Deleting every feed in a tab doesn't bring
     the seeds back.
   - **Weights** only fill feeds that have none, so change an existing feed's weight in the UI.
-- **Reddit**: each vertical has a few news-focused subreddits (r/Games, r/movies, r/worldnews, r/anime…)
-  at weight 1, as a community signal: they help group headlines and count toward "reported by N",
-  but barely move scores (use "Only count outlets weighted at least 2" to leave them out of the count).
-  Feed URLs are `https://www.reddit.com/r/<name>/.rss`. Reddit throttles feed readers and Feedly rarely
-  has fresh copies, so they depend on direct fetches; requests to reddit.com send a descriptive user
-  agent. Discussion-heavy subreddits (r/anime, r/manga, r/NintendoSwitch, r/PS5) carry keyword filters.
+- **Retention**: headlines are kept for 30 days (`RETENTION_DAYS` in `store.py`), the longest time window.
 - **One feed per publisher** in each vertical. Two feeds from the same newsroom (e.g. NYT Movies and
   NYT Television) often carry identical headlines and would count one story twice toward N.
 - **Cached history** (`seed_cache/<vertical>.jsonl.gz`, currently Anime and Manga): 14 days of
   pre-fetched items, loaded in about a second the first time a vertical has feeds but no headlines,
-  instead of a slow Feedly backfill. Items older than 14 days are skipped on load, so rebuild the cache
+  instead of a slow Feedly backfill. Items older than the 30-day retention are skipped on load, so rebuild the cache
   now and then:
   ```bash
   python3 app.py --data /tmp/seed --backfill 14 --no-serve
@@ -214,7 +237,7 @@ Movies & TV). The weights are editorial judgment calls assigned by Claude, not m
 
 ## Scraping: API, scheduling and resume
 
-A *scrape run* either **refreshes** feeds (fetches them now) or **backfills** them (loads up to 14 days
+A *scrape run* either **refreshes** feeds (fetches them now) or **backfills** them (loads up to 30 days
 of history from Feedly). By default a refresh runs every 15 minutes; turn that off (`--no-auto`, the
 Auto checkbox, or the schedule endpoint) to drive scraping from cron, Airflow or similar.
 
@@ -306,11 +329,12 @@ The app has no user accounts. To make it safe to run on a laptop or in a Codespa
 
 ## API
 
-Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `news`).
+Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `news`, `anime`, `manga`).
 
 | Method | Path | |
 |---|---|---|
-| GET | `/api/verticals` | tab list and defaults |
+| GET | `/api/verticals` | tab list, defaults, digest `windows`, `retention_days` |
+| GET | `/api/<v>/digest?hours=N` | the shared digest covering N hours (gzip, ETag, 60 s cache); what the UI uses |
 | GET | `/api/<v>/feeds` | feeds, their status, and scrape status |
 | POST | `/api/<v>/feeds` `{"url": ...}` | add a feed (validated first) |
 | PATCH | `/api/<v>/feeds/{id}` `{"weight": 4, "enabled": false, "required": true, "only": "manga, manhwa"}` | change one feed (`"only": ""` clears the filter) |
@@ -322,7 +346,7 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 | DELETE | `/api/<v>/phrases/{id}` | stop watching it |
 | GET | `/api/<v>/settings` | the vertical's story settings (and defaults) |
 | PATCH | `/api/<v>/settings` `{"min_feeds": 3, "hours": 72}`, `{"min_feeds_mode": "percent", "min_feeds_percent": 10}` / `{"reset": true}` | change / reset them (responses include `min_feeds_effective`) |
-| GET | `/api/<v>/stories` | stories ranked by score, using the saved settings; any of `min_feeds`, `hours`, `threshold`, `min_score`, `min_weight`, `only_watched`, `watched_any`, `require_all` as query parameters override them |
+| GET | `/api/<v>/stories` | (for scripts; the UI uses digests) stories ranked by score, using the saved settings; any of `min_feeds`, `hours`, `threshold`, `min_score`, `min_weight`, `only_watched`, `watched_any`, `require_all` as query parameters override them |
 | | `/api/scrape/...` | see [Scraping](#scraping-api-scheduling-and-resume) |
 
 ## Code layout
@@ -337,7 +361,8 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 | `matching.py` | tokenizer, similarity, clustering, lead headline |
 | `eval_matching.py`, `eval_realistic.py` | matching evaluations |
 | `seedcache.py`, `tools/build_seed_cache.py` | cached history for new verticals (load / build) |
-| `tools/build_snapshot.py` | static read-only snapshot of the UI (for sharing as a page) |
+| `digest.py` | shared per-vertical story digests (build, cache, disk, background rebuilds) |
+| `tools/build_snapshot.py` | static snapshot of the UI with the digests embedded (for sharing as a page) |
 | `static/index.html` | the UI |
 
 ## Tests

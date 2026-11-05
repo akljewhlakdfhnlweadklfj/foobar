@@ -7,6 +7,7 @@ import ipaddress
 import re
 import socket
 import time
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -15,7 +16,6 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
 
 USER_AGENT = "Mozilla/5.0 (compatible; NewsAggregator/1.0)"
-REDDIT_USER_AGENT = "python:consensus-news:1.0 (personal RSS reader)"
 MAX_BYTES = 10 * 1024 * 1024
 _TAG_RE = re.compile(r"<(/?[a-zA-Z][a-zA-Z0-9:-]*(\s[^<>]*)?/?|!--.*?--)>", re.S)
 DESCRIPTION_CHARS = 600
@@ -93,8 +93,7 @@ def fetch(url: str, timeout: float = 20.0) -> bytes:
     req = urllib.request.Request(
         url,
         headers={
-            # Reddit throttles generic clients and asks feed readers to identify themselves.
-            "User-Agent": REDDIT_USER_AGENT if "reddit.com" in (urlsplit(url).hostname or "") else USER_AGENT,
+            "User-Agent": USER_AGENT,
             "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
         },
     )
@@ -115,6 +114,10 @@ def fetch(url: str, timeout: float = 20.0) -> bytes:
             data = b"".join(chunks)
     except FeedError:
         raise
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            raise FeedError("Rate-limited by the site (HTTP 429): temporary, retried at the next refresh") from e
+        raise FeedError(f"Fetch failed: HTTP {e.code} {e.reason}") from e
     except Exception as e:  # noqa: BLE001 - surface any network error to the UI
         raise FeedError(f"Fetch failed: {e}") from e
     return data

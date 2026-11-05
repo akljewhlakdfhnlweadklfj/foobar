@@ -26,7 +26,3 @@ http://www.independent.ie/entertainment/books/rss                        # Irish
 https://www.ft.com/books?format=rss                                      # Financial Times (Books) | w=4 | general | ~12/wk
 https://www.theatlantic.com/feed/channel/books/                          # The Atlantic (Books) | w=4 | general | ~7/wk
 http://www.csmonitor.com/rss/books.rss                                   # Christian Science Monitor (Books) | w=3 | general | ~2/wk
-
-# --- Reddit (community signal; weight 1, so they help group headlines but barely move scores).
-# Reddit throttles feed readers and Feedly rarely has fresh copies, so these depend on direct fetches.
-https://www.reddit.com/r/books/.rss                   # Reddit r/books | w=1 | reddit

@@ -2,11 +2,11 @@
 
     python3 tools/build_snapshot.py DATA_DIR OUT.html
 
-The page is static/index.html with:
-  - a small script that answers the page's API calls from embedded JSON instead of the server
-    (tabs, "reported by at least N", minimum score and the watched-phrase filters keep working);
-  - editing controls hidden (adding/removing feeds and phrases, weights, outlet switches, scraping);
-  - the time window and match strictness fixed (changing them would need the server).
+The page is static/index.html with the shared story digests embedded (the files the server
+publishes; windows up to 7 days) and a small script answering the page's API calls from them. Since
+all personal filtering already happens in the browser, Stories and the per-vertical Settings work as
+in the app (choices are kept in the viewer's browser); the shared catalog, admin controls and
+scraping are hidden.
 It's written for publishing as a claude.ai Artifact, whose wrapper supplies <html>/<head>/<body>.
 """
 
@@ -23,45 +23,27 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import app  # noqa: E402
+import digest as digest_mod  # noqa: E402
 import matching  # noqa: E402
-
-FEED_FIELDS = ("id", "url", "title", "name", "item_count", "last_fetched", "via", "weight", "enabled", "required")
 
 SHIM = r"""
 <script>
 (() => {
+  // Answers the page's API calls from the embedded digests (the same files the server publishes).
   const SNAP = JSON.parse(document.getElementById("snapshot-data").textContent);
-  const reply = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
+  const reply = (obj, status = 200) => new Response(typeof obj === "string" ? obj : JSON.stringify(obj),
+    { status, headers: { "Content-Type": "application/json" } });
   window.fetch = async (path, opts = {}) => {
     const u = new URL(path, "https://snapshot.invalid/");
     const parts = u.pathname.split("/").filter(Boolean);
     if ((opts.method || "GET") !== "GET") return reply({ error: "This is a read-only snapshot." }, 403);
     if (u.pathname === "/api/verticals") return reply(SNAP.meta);
     if (u.pathname === "/api/scrape/status") return reply(SNAP.scrape);
-    const v = parts[1];
-    if (parts[2] === "settings") return reply({ settings: SNAP.settings[v], defaults: SNAP.settings[v] });
-    if (parts[2] === "feeds") return reply({ feeds: SNAP.feeds[v], refreshing: false, scrape: SNAP.scrape });
-    if (parts[2] === "phrases") return reply({ phrases: SNAP.phrases[v] });
-    if (parts[2] === "stories") {
-      // The viewer asks without parameters: apply the vertical's saved settings, as the server does.
-      const c = SNAP.settings[v];
-      const required = new Set(SNAP.feeds[v].filter((f) => f.required === 1).map((f) => f.name || f.title || f.url));
-      const stories = SNAP.stories[v].map((s) => {
-        const sources = s.sources.map((x) => ({ ...x, counted: x.weight >= c.min_weight }));
-        const counted = sources.filter((x) => x.counted);
-        const base = counted.reduce((t, x) => t + x.weight, 0);
-        return { ...s, sources, coverage: counted.length, base_score: base, score: base + s.bonus, outlets: s.sources.length };
-      }).filter((s) => {
-        if (!s.coverage) return false;
-        if (required.size) {
-          const have = s.sources.filter((x) => required.has(x.feed)).length;
-          if (!have || (c.require_all && have < required.size)) return false;
-        }
-        if (c.only_watched && !s.watched.length) return false;
-        if (s.watched.length && c.watched_any) return true;
-        return s.coverage >= (c.min_feeds_effective ?? c.min_feeds) && s.score >= c.min_score;
-      });
-      return reply({ stories, items_considered: SNAP.items[v], settings: c, terms: SNAP.terms[v] });
+    if (parts[2] === "digest") {
+      const d = SNAP.digests[parts[1]] || {};
+      const h = Number(u.searchParams.get("hours")) || 0;
+      const w = SNAP.meta.windows.find((x) => h <= x) ?? SNAP.meta.windows[SNAP.meta.windows.length - 1];
+      return d[w] ? reply(d[w]) : reply({ error: "Not in this snapshot" }, 404);
     }
     return reply({ error: "Not available in this snapshot" }, 404);
   };
@@ -70,42 +52,41 @@ SHIM = r"""
 """
 
 HIDE_CSS = """
-  /* Read-only snapshot: just the Stories viewer. */
-  #top_tabs, .scrape button { display: none !important; }
+  /* Snapshot: stories plus personal settings (kept in this browser); no catalog, admin or scraping. */
+  .scrape button, #admin_panel, details.cat, #sub_tabs a[href="#settings/scraping"] { display: none !important; }
   /* Artifact pages can't load images from other sites. */
   .thumb { display: none !important; }
   .snapnote { font-size: 12px; color: var(--muted); }
 """
 
 
-def build(data_dir: Path, out: Path) -> dict:
+def _swap(html: str, old: str, new: str) -> str:
+    if old not in html:
+        raise SystemExit(f"build_snapshot: the page no longer contains {old!r}; update tools/build_snapshot.py")
+    return html.replace(old, new, 1)
+
+
+def build(data_dir: Path, out: Path, max_hours: int = 168) -> dict:
     stores = app.open_stores(data_dir, seed=False)
+    digests = app.make_digests(stores)       # in memory only
     now = time.time()
-    snap = {
-        "taken": now,
-        "meta": {"verticals": [{"key": v.key, "label": v.label, "default_min_feeds": v.default_min_feeds}
-                               for v in app.VERTICALS],
-                 "default_threshold": matching.DEFAULT_THRESHOLD, "default_weight": matching.DEFAULT_WEIGHT,
-                 "max_weight": app.MAX_WEIGHT, "default_bonus": app.DEFAULT_BONUS, "max_bonus": app.MAX_BONUS},
-        "scrape": {"state": "idle", "run": None, "resumable": False, "auto": False, "interval_minutes": 0,
-                   "last_run": {"finished_at": now}},
-        "feeds": {}, "phrases": {}, "stories": {}, "items": {}, "settings": {}, "terms": {},
-    }
-    for v in app.VERTICALS:
-        st = stores[v.key]
-        snap["feeds"][v.key] = [{k: f.get(k) for k in FEED_FIELDS} for f in st.list_feeds()]
-        snap["phrases"][v.key] = st.list_phrases()
-        cfg = app.effective_settings(v, st)
-        snap["settings"][v.key] = cfg
-        # Stories the viewer may show (the shim applies the saved filters); single-outlet stories are only
-        # kept when they're watched or the vertical's minimum is 1, to keep the page small.
-        res = app.build_stories(st, min(2, cfg["min_feeds_effective"]), cfg["hours"], cfg["threshold"], 0, watched_any_coverage=True)
-        snap["stories"][v.key] = res["stories"]
-        shown = app.build_stories(st, cfg["min_feeds_effective"], cfg["hours"], cfg["threshold"], cfg["min_score"],
-                                  only_watched=cfg["only_watched"], watched_any_coverage=cfg["watched_any"],
-                                  require_all=cfg["require_all"], min_weight=cfg["min_weight"])
-        snap["terms"][v.key] = shown["terms"]  # word cloud for the stories the viewer shows
-        snap["items"][v.key] = res["items_considered"]
+    windows = [w for w in digest_mod.WINDOWS if w <= max_hours] or [digest_mod.WINDOWS[0]]
+    meta = {"verticals": [{"key": v.key, "label": v.label, "default_min_feeds": v.default_min_feeds}
+                          for v in app.VERTICALS if v.key in stores],
+            "default_threshold": matching.DEFAULT_THRESHOLD, "default_weight": matching.DEFAULT_WEIGHT,
+            "max_weight": app.MAX_WEIGHT, "default_bonus": app.DEFAULT_BONUS, "max_bonus": app.MAX_BONUS,
+            "windows": windows, "retention_days": windows[-1] / 24}
+    snap = {"meta": meta,
+            "scrape": {"state": "idle", "run": None, "resumable": False, "auto": False, "interval_minutes": 0,
+                       "last_run": {"finished_at": now}},
+            "digests": {}}
+    counts = {}
+    for v in meta["verticals"]:
+        snap["digests"][v["key"]] = {}
+        for w in windows:
+            d = json.loads(digests.get(v["key"], w)["json"])
+            snap["digests"][v["key"]][str(w)] = d
+            counts[f"{v['key']}-{w}h"] = len(d["stories"])
 
     html = (ROOT / "static" / "index.html").read_text()
     # The Artifact wrapper supplies the document skeleton.
@@ -123,16 +104,22 @@ def build(data_dir: Path, out: Path) -> dict:
                             + " color-scheme: dark; }\n  }\n  :root[data-theme=\"dark\"] {" + dark + " color-scheme: dark; }\n")
     html = html.replace("</style>", HIDE_CSS + "</style>", 1)
     taken = dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime("%b %-d, %Y %H:%M UTC")
-    html = html.replace('<span id="status" aria-live="polite"></span>',
-                        f'<span class="snapnote">Read-only snapshot · {taken}</span><span id="status" hidden></span>', 1)
-    # Always open on the Stories view (settings aren't editable here).
-    html = html.replace('if (!location.hash) history.replaceState(null, "", "#stories/all");',
-                        'if (!location.hash.startsWith("#stories")) history.replaceState(null, "", "#stories/all");', 1)
+    html = html.replace(' “Catalog” under an outlet changes it for everyone (admin).', '', 1)
+    html = _swap(html, '<span id="status" aria-live="polite"></span>',
+                 f'<span class="snapnote">Read-only snapshot · {taken}</span><span id="status" hidden></span>')
+    # Settings open on the first vertical (the Scraping page isn't part of the snapshot), and the time
+    # window only offers what's embedded.
+    first = meta["verticals"][0]["key"]
+    html = _swap(html, '<a href="#settings/scraping" data-top="settings">', f'<a href="#settings/{first}" data-top="settings">')
+    html = _swap(html, 'keys.includes(sub) ? sub : "scraping" }', f'keys.includes(sub) ? sub : "{first}" }}')
+    html = _swap(html, 'if (!location.hash) history.replaceState(null, "", "#stories/all");',
+                 'if (!location.hash || location.hash.startsWith("#settings/scraping")) history.replaceState(null, "", "#stories/all");')
+    html = re.sub(r'\s*<option value="(\d+)"[^>]*>[^<]*</option>',
+                  lambda m: "" if float(m.group(1)) > windows[-1] else m.group(0), html)
     data = json.dumps(snap, separators=(",", ":")).replace("</", "<\\/")
-    html = html.replace("<script>\nconst $ =",
-                        f'<script type="application/json" id="snapshot-data">{data}</script>\n{SHIM}\n<script>\nconst $ =', 1)
+    html = _swap(html, "\n<script>\n", f'\n<script type="application/json" id="snapshot-data">{data}</script>\n{SHIM}\n<script>\n')
     out.write_text(html)
-    return {k: len(v) for k, v in snap["stories"].items()}
+    return counts
 
 
 if __name__ == "__main__":

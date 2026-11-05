@@ -178,7 +178,11 @@
   ul.feeds .ctl { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
   ul.feeds .ctl .row { display: flex; gap: 6px; align-items: center; }
   input.weight { width: 4.4em; padding: 3px 6px; font-size: 13px; text-align: right; }
-  details.kw { margin-top: 4px; }
+  details.kw, details.cat { margin-top: 4px; }
+  details.cat .catrow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: var(--muted); }
+  details.cat .catrow input[type=text] { flex: 1; min-width: 140px; padding: 4px 8px; font-size: 13px; }
+  details.cat .catrow input[type=number] { width: 4.4em; padding: 3px 6px; font-size: 13px; }
+  details.cat .catrow button { padding: 2px 8px; font-size: 12px; }
   details.kw summary { font-size: 12px; overflow-wrap: anywhere; }
   details.kw[data-set] summary { color: var(--accent); }
   details.kw input { margin-top: 4px; padding: 4px 8px; font-size: 13px; }
@@ -230,8 +234,8 @@
   <section id="view_vertical" hidden>
     <div class="grid">
       <div class="panel" id="filters_panel">
-        <h2>Which stories show <span class="saved" id="saved" hidden>Saved</span></h2>
-        <p class="intro">Used by this vertical's Stories tab and by “All”.</p>
+        <h2>Which stories show <span class="saved" id="saved" hidden>Saved in this browser</span></h2>
+        <p class="intro">Your settings for this vertical's Stories tab and for “All”. They're saved in this browser.</p>
         <div class="fields">
           <div class="field">
             <label for="s_min_feeds">Reported by at least</label>
@@ -248,7 +252,7 @@
             <select id="s_hours">
               <option value="6">6 hours</option><option value="12">12 hours</option><option value="24">24 hours</option>
               <option value="48">48 hours</option><option value="72">3 days</option><option value="168">7 days</option>
-              <option value="336">14 days</option>
+              <option value="336">14 days</option><option value="720">30 days</option>
             </select>
           </label>
           <label class="field">Only count outlets weighted at least
@@ -259,10 +263,7 @@
             <input type="number" id="s_min_score" min="0" step="1">
             <span class="hint">Outlet weights + watched bonuses. 0 = no minimum.</span>
           </label>
-          <label class="field full">Title match strictness: <output id="threshold_out"></output>
-            <input type="range" id="s_threshold" min="0.05" max="0.5" step="0.01">
-            <span class="hint">Lower groups loosely related headlines; higher only near-identical ones.</span>
-          </label>
+          <p class="field full hint" id="grouping_info"></p>
         </div>
         <div class="required-note" id="required_note" hidden>
           <div id="required_list"></div>
@@ -295,12 +296,9 @@
 
       <div class="panel wide" id="outlets_panel">
         <h2>Outlets (<span id="feed_count">0</span>)</h2>
-        <p class="intro">Switch outlets on or off, mark ones a story must include, and set each outlet's prestige weight (1 = small blog, 5 = paper of record; 0–10 allowed).</p>
-        <form class="row" id="add_form">
-          <label for="feed_url" class="sr-only">Feed URL</label>
-          <input type="url" id="feed_url" placeholder="Add an RSS or Atom feed: https://example.com/rss.xml" required>
-          <button type="submit" id="add_btn">Add</button>
-        </form>
+        <p class="intro">Your choices, saved in this browser: switch outlets on or off, mark ones a story must include,
+          and set your own prestige weight for each (1 = small blog, 5 = paper of record; 0–10 allowed).
+          “Catalog” under an outlet changes it for everyone (admin).</p>
         <div class="msg" id="add_msg"></div>
         <div class="tools">
           <label for="feed_search" class="sr-only">Search outlets</label>
@@ -310,6 +308,23 @@
         </div>
         <div class="using" id="using"></div>
         <ul class="feeds" id="feeds"></ul>
+      </div>
+
+      <div class="panel wide" id="admin_panel">
+        <h2>Shared catalog (admin)</h2>
+        <p class="intro">Changes here apply to everyone using this server. From another machine they need the API token.</p>
+        <div class="fields">
+          <form class="row full" id="add_form">
+            <label for="feed_url" class="sr-only">Feed URL</label>
+            <input type="url" id="feed_url" placeholder="Add an RSS or Atom feed to this vertical: https://example.com/rss.xml" required>
+            <button type="submit" id="add_btn">Add feed</button>
+          </form>
+          <label class="field full">Match strictness for this vertical: <output id="threshold_out"></output>
+            <input type="range" id="a_threshold" min="0.05" max="0.5" step="0.01">
+            <span class="hint">How similar headlines must be to count as one story. Lower groups loosely related headlines; higher only near-identical ones. Stories are re-grouped for everyone after a change.</span>
+          </label>
+        </div>
+        <div class="msg" id="admin_msg"></div>
       </div>
     </div>
   </section>
@@ -329,7 +344,7 @@
         </div>
         <div class="btnrow">
           <label for="sc_days" class="muted" style="font-size:13px">Backfill</label>
-          <input type="number" id="sc_days" min="1" max="14" step="1" value="3" style="width:5em">
+          <input type="number" id="sc_days" min="1" max="30" step="1" value="3" style="width:5em">
           <span class="muted" style="font-size:13px">days</span>
           <button class="ghost" id="sc_backfill">Start backfill</button>
         </div>
@@ -352,6 +367,10 @@ GET  /api/scrape/status</pre>
 </main>
 
 <script>
+// Consensus News: the browser does all per-viewer work.
+// The server publishes one shared digest per vertical and window (stories already grouped, with key
+// terms). Here we apply this viewer's settings, saved in localStorage: outlets on/off, weights,
+// required outlets, watched phrases, the "reported by" minimum, minimum score and the time window.
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : "#";
@@ -373,8 +392,111 @@ async function api(path, opts = {}) {
 const patch = (path, body) => api(path, { method: "PATCH", body: JSON.stringify(body) });
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
 
-let META = { verticals: [], default_weight: 2, max_weight: 10, default_bonus: 5, max_bonus: 100 };
+let META = { verticals: [], default_weight: 2, max_weight: 10, default_bonus: 5, max_bonus: 100, windows: [48, 168, 720] };
 const label = (key) => META.verticals.find((v) => v.key === key)?.label || key;
+
+// ---------- This viewer's preferences (localStorage) ----------
+const PREFS_KEY = "consensus-prefs-v1";
+let PREFS = {};
+try { PREFS = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") || {}; } catch { PREFS = {}; }
+function vp(v) {
+  PREFS[v] = PREFS[v] || {};
+  PREFS[v].settings = PREFS[v].settings || {};
+  PREFS[v].outlets = PREFS[v].outlets || {};
+  PREFS[v].phrases = PREFS[v].phrases || [];
+  return PREFS[v];
+}
+function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(PREFS)); } catch {} }
+
+// ---------- Shared digests ----------
+const DIGESTS = new Map();   // "v:window" -> {data, at}
+const windowFor = (h) => META.windows.find((w) => h <= w) ?? META.windows[META.windows.length - 1];
+async function getDigest(v, hours, force = false) {
+  const w = windowFor(hours), key = `${v}:${w}`, hit = DIGESTS.get(key);
+  if (hit && !force && Date.now() - hit.at < 55000) return hit.data;
+  const res = await fetch(`/api/${v}/digest?hours=${w}`);     // the browser revalidates with its ETag
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  const data = await res.json();
+  DIGESTS.set(key, { data, at: Date.now() });
+  return data;
+}
+function forgetDigests(v) { for (const k of [...DIGESTS.keys()]) if (k.startsWith(v + ":")) DIGESTS.delete(k); }
+
+// Effective settings and outlet choices: the digest's defaults, overridden by this viewer's.
+const settingsFor = (v, d) => ({ ...d.defaults, ...vp(v).settings });
+function outletState(v, o) {
+  const p = vp(v).outlets[o.id] || {};
+  return { on: p.on ?? o.enabled, req: p.req ?? o.required, w: p.w ?? o.weight };
+}
+
+// ---------- Per-viewer story computation ----------
+const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const phraseSource = (p) => p.trim().split(/\s+/).map(reEsc).join("\\s+");
+const wordRe = (src, flags = "iu") => new RegExp(`(?<![\\p{L}\\p{N}_])(?:${src})(?![\\p{L}\\p{N}_])`, flags);
+// Headlines labelled as a format rather than the news itself ("Opinion |", "WATCH:").
+const LABELLED = /^\s*(opinion|op-ed|watch|video|videos|listen|podcast|live|live updates|analysis|editorial|explainer|review|reviews|preview|quiz|letters?|photos?|in pictures|the latest|perspective|column|commentary|interview|recap)\b\s*[:|\-–—]/i;
+
+function snippetAround(text, m) {
+  let start = Math.max(0, m.index - 70), end = Math.min(text.length, m.index + m[0].length + 110);
+  if (start > 0) start = text.indexOf(" ", start) + 1 || start;
+  if (end < text.length) { const sp = text.lastIndexOf(" ", end); if (sp > m.index + m[0].length) end = sp; }
+  return (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
+}
+
+function computeStories(v, digest, cfg) {
+  const now = Date.now() / 1000, cut = now - cfg.hours * 3600;
+  const outlets = new Map(digest.outlets.map((o) => [o.id, { ...o, ...outletState(v, o) }]));
+  const enabled = [...outlets.values()].filter((o) => o.on).length;
+  const minN = cfg.min_feeds_mode === "percent" ? Math.max(1, Math.ceil(cfg.min_feeds_percent / 100 * enabled)) : cfg.min_feeds;
+  const required = new Set([...outlets.values()].filter((o) => o.req).map((o) => o.id));
+  const phrases = vp(v).phrases.map((p) => ({ ...p, re: wordRe(phraseSource(p.phrase)) }));
+  const out = [];
+  for (const st of digest.stories) {
+    const srcs = st.s.filter((x) => x.p >= cut && outlets.get(x.f)?.on);
+    if (!srcs.length) continue;
+    if (required.size) {
+      const have = new Set(srcs.map((x) => x.f).filter((f) => required.has(f)));
+      if (!have.size || (cfg.require_all && have.size < required.size)) continue;
+    }
+    const weight = (x) => outlets.get(x.f).w;
+    const counted = srcs.filter((x) => weight(x) >= cfg.min_weight);
+    if (!counted.length) continue;
+    const base = counted.reduce((t, x) => t + weight(x), 0);
+    const hits = [], snippets = new Map(), watchedSrc = new Set();
+    for (const p of phrases) {
+      let found = false;
+      for (const x of srcs) {
+        if (p.re.test(x.t)) { found = true; watchedSrc.add(x); continue; }
+        const m = x.d && x.d.match(p.re);
+        if (m) { found = true; watchedSrc.add(x); if (!snippets.has(x)) snippets.set(x, snippetAround(x.d, m)); }
+      }
+      if (found) hits.push(p);
+    }
+    if (cfg.only_watched && !hits.length) continue;
+    const bonus = hits.reduce((t, p) => t + p.bonus, 0), score = base + bonus;
+    if (!(hits.length && cfg.watched_any) && (counted.length < minN || score < cfg.min_score)) continue;
+    // Headline: the shortest one among counted outlets (4+ words, not a labelled format piece).
+    const pool = counted.filter((x) => x.t.split(/\s+/).length >= 4);
+    const plain = (pool.length ? pool : counted).filter((x) => !LABELLED.test(x.t));
+    const lead = (plain.length ? plain : (pool.length ? pool : counted))
+      .reduce((a, b) => (b.t.length < a.t.length || (b.t.length === a.t.length && weight(b) > weight(a)) ? b : a));
+    const best = [...srcs].sort((a, b) => weight(b) - weight(a) || b.p - a.p);
+    const desc = lead.d || best.find((x) => x.d)?.d || "";
+    const image = lead.i || best.find((x) => x.i)?.i || "";
+    const ordered = [lead, ...srcs.filter((x) => x !== lead).sort((a, b) => weight(b) - weight(a) || a.p - b.p)];
+    out.push({
+      vertical: v, id: st.id, title: lead.t,
+      lead: { feed: outlets.get(lead.f).name, link: lead.l, weight: weight(lead), description: desc, image },
+      coverage: counted.length, outlets: srcs.length, base_score: base, bonus, score,
+      watched: hits.map((p) => ({ phrase: p.phrase, bonus: p.bonus })),
+      first_seen: Math.min(...srcs.map((x) => x.p)), latest: Math.max(...srcs.map((x) => x.p)),
+      keywords: (st.k || []).map((k) => ({ term: k.t, weight: k.w, forms: k.f })),
+      sources: ordered.map((x) => ({ feed: outlets.get(x.f).name, title: x.t, link: x.l, published: x.p, weight: weight(x),
+                                     watched: watchedSrc.has(x), snippet: snippets.get(x) || "", counted: weight(x) >= cfg.min_weight })),
+    });
+  }
+  return { stories: out, minN, enabled, scanned: digest.stories.length };
+}
 
 // ---------- Routing: #stories/<all|vertical>  and  #settings/<vertical|scraping> ----------
 let route = { top: "stories", sub: "all" };
@@ -390,7 +512,6 @@ function render() {
     const on = a.dataset.top === route.top;
     a.classList.toggle("active", on); on ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current");
   });
-  // The Settings link remembers the last settings sub-tab; Stories remembers the last view.
   document.querySelector('#top_tabs a[data-top="' + route.top + '"]').setAttribute("href", "#" + route.top + "/" + route.sub);
   const subs = route.top === "stories"
     ? [["all", "All"], ...META.verticals.map((v) => [v.key, v.label])]
@@ -404,8 +525,7 @@ function render() {
   if (route.top === "stories") {
     V = null; lastStoriesJson = ""; activeTerm = null; $("stories").innerHTML = ""; $("cloud").hidden = true;
     $("summary").textContent = "Loading…"; loadStories(true);
-  }
-  else if (route.sub === "scraping") { V = null; loadScrape(); }
+  } else if (route.sub === "scraping") { V = null; loadScrape(); }
   else openVertical(route.sub);
 }
 window.addEventListener("hashchange", render);
@@ -415,12 +535,9 @@ let storiesSeq = 0, lastStoriesJson = "";
 try { $("sort").value = localStorage.getItem("news-sort") || "score"; } catch {}
 $("sort").addEventListener("change", () => { try { localStorage.setItem("news-sort", $("sort").value); } catch {} loadStories(true); });
 
-// Highlight a story's watched phrases (case-insensitive, whole words, any whitespace between words).
-const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function phraseRe(phrases) {
   if (!phrases.length) return null;
-  const parts = phrases.map((p) => p.split(/\s+/).map(reEsc).join("\\s+"));
-  return new RegExp(`(?<![\\p{L}\\p{N}_])(?:${parts.join("|")})(?![\\p{L}\\p{N}_])`, "giu");
+  return wordRe(phrases.map(phraseSource).join("|"), "giu");
 }
 function hl(text, re) {
   text = String(text ?? "");
@@ -429,117 +546,58 @@ function hl(text, re) {
   for (const m of text.matchAll(re)) { out += esc(text.slice(last, m.index)) + "<mark>" + esc(m[0]) + "</mark>"; last = m.index + m[0].length; }
   return out + esc(text.slice(last));
 }
-const storyKey = (s) => s.vertical + "|" + (s.lead.link || s.title);
+const storyKey = (s) => s.vertical + "|" + s.id;
+const windowText = (h) => h >= 48 && h % 24 === 0 ? `${h / 24} days` : `${fmt(h)} hours`;
 
-// ---------- Word cloud of prominent terms ----------
-let activeTerm = null, lastTerms = [], lastStories = [], shownStories = [];   // activeTerm: {term, forms}
-const openStories = new Set();   // keys of expanded stories (kept across refreshes)
-function mergeTerms(results) {
-  const by = new Map();
-  for (const r of results) for (const t of r.terms || []) {
-    const k = t.term.toLowerCase(), cur = by.get(k);
-    if (cur) { cur.weight += t.weight; cur.stories += t.stories; cur.forms = [...new Set([...cur.forms, ...t.forms])]; }
-    else by.set(k, { ...t, forms: [...t.forms] });
-  }
-  return [...by.values()].sort((a, b) => b.weight - a.weight).slice(0, 40);
-}
+let activeTerm = null, lastStories = [], shownStories = [], summaryBase = "";   // activeTerm: {term, forms}
+const openStories = new Set();
+$("cloud").hidden = true;   // the per-story key term is shown inline instead
 function termRe(t) {
-  // Phrases match their words in order (punctuation allowed between: "Zelda: Ocarina"); single words
-  // match any form the headlines used ("midterm", "Midterms").
-  const parts = t.term.includes(" ") ? [t.term.split(/\s+/).map(reEsc).join("\\W+")]
-                                     : [...new Set([t.term, ...t.forms])].map(reEsc);
-  return new RegExp(`(?<![\\p{L}\\p{N}_])(?:${parts.join("|")})(?![\\p{L}\\p{N}_])`, "iu");
+  const parts = t.term.includes(" ") ? [t.term.split(/\s+/).map(reEsc).join("\\W+")] : [...new Set([t.term, ...(t.forms || [])])].map(reEsc);
+  return wordRe(parts.join("|"));
 }
 const mentions = (s, re) => re.test(s.title) || re.test(s.lead.description || "") || s.sources.some((x) => re.test(x.title));
-const SHOW_GLOBAL_CLOUD = false;   // the per-story keyword is shown inline instead
-function renderCloud(terms) {
-  lastTerms = terms;
-  const el = $("cloud");
-  if (!SHOW_GLOBAL_CLOUD) { el.hidden = true; el.innerHTML = ""; return; }
-  el.hidden = !terms.length;
-  if (!terms.length) { el.innerHTML = ""; return; }
-  const max = terms[0].weight, ordered = [];
-  terms.forEach((t, i) => (i % 2 ? ordered.push(t) : ordered.unshift(t)));   // biggest in the middle
-  el.innerHTML = ordered.map((t) => {
-    const r = Math.sqrt(t.weight / max), size = Math.round(12 + 22 * r);
-    const tier = r > 0.6 ? "hot" : r > 0.32 ? "mid" : "low";
-    const on = !!activeTerm && activeTerm.term.toLowerCase() === t.term.toLowerCase();
-    return `<button type="button" class="${tier}" style="font-size:${size}px" data-term="${esc(t.term)}" aria-pressed="${on}"
-      title="${t.stories} stor${t.stories === 1 ? "y" : "ies"} · click to show only these">${esc(t.term)}</button>`;
-  }).join("");
-}
-$("cloud").addEventListener("click", (e) => {
-  const term = e.target.closest("button")?.dataset.term;
-  if (!term) return;
-  toggleTerm(lastTerms.find((t) => t.term === term));
-});
 function toggleTerm(t) {
   if (!t) return;
   activeTerm = activeTerm && activeTerm.term.toLowerCase() === t.term.toLowerCase() ? null : { term: t.term, forms: t.forms || [] };
-  renderCloud(lastTerms); renderStoryList(lastStories, route.sub, true);
+  renderStoryList(lastStories, route.sub, true);
   if (activeTerm) $("view_stories").scrollIntoView({ block: "start", behavior: "smooth" });
 }
-function setOpen(article, open) {
-  const key = article.dataset.key;
-  open ? openStories.add(key) : openStories.delete(key);
-  article.classList.toggle("open", open);
-  article.querySelector(".more").hidden = !open;
-  const btn = article.querySelector(".expand");
-  btn.setAttribute("aria-expanded", open); btn.setAttribute("aria-label", `${open ? "Hide" : "Show"} details`);
-  const img = article.querySelector("img[data-src]");      // images load only when a story is opened
-  if (open && img) { img.src = img.dataset.src; img.removeAttribute("data-src"); }
-}
-$("stories").addEventListener("click", (e) => {
-  const article = e.target.closest("article.story");
-  if (!article) return;
-  if (e.target.closest(".expand") || (!e.target.closest("a, button, .more") && e.target.closest(".row"))) {
-    return setOpen(article, !openStories.has(article.dataset.key));
-  }
-  const b = e.target.closest("button[data-kw]");
-  if (!b) return;
-  const s = shownStories[Number(b.closest("article").dataset.idx)];
-  toggleTerm(s?.keywords?.[Number(b.dataset.kw)]);
-});
-
-async function fetchStories(key) {
-  const d = await api(`/api/${key}/stories`);
-  return { ...d, stories: d.stories.map((s) => ({ ...s, vertical: key })) };
-}
-const windowText = (h) => h >= 48 && h % 24 === 0 ? `${h / 24} days` : `${fmt(h)} hours`;
 
 async function loadStories(force = false) {
   if (route.top !== "stories") return;
   const sub = route.sub, seq = ++storiesSeq;
   const keys = sub === "all" ? META.verticals.map((v) => v.key) : [sub];
   let results;
-  try { results = await Promise.all(keys.map(fetchStories)); }
-  catch (e) {
+  try {
+    results = await Promise.all(keys.map(async (v) => {
+      const d0 = await getDigest(v, vp(v).settings.hours ?? 48);
+      const cfg = settingsFor(v, d0);
+      const d = windowFor(cfg.hours) === d0.window_hours ? d0 : await getDigest(v, cfg.hours);
+      return { v, cfg, ...computeStories(v, d, cfg) };
+    }));
+  } catch (e) {
     if (seq !== storiesSeq) return;
     $("summary").textContent = "Couldn't load stories: " + e.message; $("stories").innerHTML = ""; lastStoriesJson = "";
     return;
   }
   if (seq !== storiesSeq || route.top !== "stories" || route.sub !== sub) return;
   const stories = results.flatMap((r) => r.stories);
-  const scanned = results.reduce((t, r) => t + r.items_considered, 0);
   if ($("sort").value === "latest") stories.sort((a, b) => b.latest - a.latest);
   else stories.sort((a, b) => b.score - a.score || b.coverage - a.coverage || b.latest - a.latest);
-  summaryBase = sub === "all"
-    ? `${stories.length} stories across ${keys.length} verticals · ${scanned} headlines scanned · each vertical uses its own settings`
-    : (() => {
-        const c = results[0].settings, n = c.min_feeds_effective ?? c.min_feeds;
-        const how = c.min_feeds_mode === "percent" ? ` (${fmt(c.min_feeds_percent)}% of ${c.enabled_outlets})` : "";
-        return `${stories.length} stories reported by ≥ ${n} outlet${n === 1 ? "" : "s"}${how} in the last ${windowText(c.hours)} · ${scanned} headlines scanned`;
-      })();
-  const json = JSON.stringify(stories);
-  if (!force && json === lastStoriesJson) return;
+  if (sub === "all") {
+    summaryBase = `${stories.length} stories across ${keys.length} verticals · each vertical uses your settings for it`;
+  } else {
+    const r = results[0], c = r.cfg;
+    const how = c.min_feeds_mode === "percent" ? ` (${fmt(c.min_feeds_percent)}% of ${r.enabled})` : "";
+    summaryBase = `${stories.length} stories reported by ≥ ${r.minN} outlet${r.minN === 1 ? "" : "s"}${how} in the last ${windowText(c.hours)}`;
+  }
+  const json = JSON.stringify(stories.map((s) => [s.id, s.score, s.coverage, s.latest]));
+  if (!force && json === lastStoriesJson) { if (!activeTerm) $("summary").textContent = summaryBase; return; }
   lastStoriesJson = json;
-  const terms = sub === "all" ? mergeTerms(results) : (results[0].terms || []);
-  // (a story keyword can be active even if it isn't in the top cloud, so keep it)
-  renderCloud(terms);
   renderStoryList(stories, sub, force);
 }
 
-let summaryBase = "";
 function renderStoryList(allStories, sub, force) {
   lastStories = allStories;
   let stories = allStories;
@@ -547,13 +605,13 @@ function renderStoryList(allStories, sub, force) {
     const re = termRe(activeTerm);
     stories = allStories.filter((s) => mentions(s, re));
     $("summary").innerHTML = `${stories.length} of ${allStories.length} stories mention “${esc(activeTerm.term)}” · <button type="button" class="clear" id="clear_term">Show all</button>`;
-    $("clear_term").addEventListener("click", () => { activeTerm = null; renderCloud(lastTerms); renderStoryList(lastStories, route.sub, true); });
+    $("clear_term").addEventListener("click", () => { activeTerm = null; renderStoryList(lastStories, route.sub, true); });
   } else {
     $("summary").textContent = summaryBase;
   }
   if (!stories.length) {
-    $("stories").innerHTML = `<div class="empty">No stories match the current settings yet.<br>
-      <a href="#settings/${sub === "all" ? META.verticals[0].key : sub}">Adjust them in Settings</a>, or refresh the feeds.</div>`;
+    $("stories").innerHTML = `<div class="empty">No stories match your settings yet.<br>
+      <a href="#settings/${sub === "all" ? META.verticals[0].key : sub}">Adjust them in Settings</a>, or check back after the next refresh.</div>`;
     return;
   }
   shownStories = stories;
@@ -574,7 +632,7 @@ function renderStoryList(allStories, sub, force) {
       <div class="more" ${isOpen ? "" : "hidden"}>
         <div class="more-head">
           <div class="story-text">
-            <div class="meta">${route.sub === "all" ? `<span class="vtag">${esc(label(s.vertical))}</span>` : ""}
+            <div class="meta">${sub === "all" ? `<span class="vtag">${esc(label(s.vertical))}</span>` : ""}
               <span title="${s.coverage} counted outlet${s.coverage === 1 ? "" : "s"}${s.outlets > s.coverage ? ` (of ${s.outlets})` : ""}"><strong>${s.coverage}</strong> outlets</span>
               <span title="prestige ${fmt(s.base_score)}${s.bonus ? ` + ${fmt(s.bonus)} watched bonus` : ""}">★ ${fmt(s.score)}</span>
               <span class="lead">${esc(s.lead.feed)}</span><span>first seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</span></div>
@@ -594,16 +652,38 @@ function renderStoryList(allStories, sub, force) {
   }).join("");
 }
 
-// ---------- Settings: one vertical ----------
-const S_FIELDS = ["min_feeds", "min_feeds_mode", "min_feeds_percent", "hours", "threshold", "min_score", "min_weight",
+function setOpen(article, open) {
+  const key = article.dataset.key;
+  open ? openStories.add(key) : openStories.delete(key);
+  article.classList.toggle("open", open);
+  article.querySelector(".more").hidden = !open;
+  const btn = article.querySelector(".expand");
+  btn.setAttribute("aria-expanded", open); btn.setAttribute("aria-label", `${open ? "Hide" : "Show"} details`);
+  const img = article.querySelector("img[data-src]");      // images load only when a story is opened
+  if (open && img) { img.src = img.dataset.src; img.removeAttribute("data-src"); }
+}
+$("stories").addEventListener("click", (e) => {
+  const article = e.target.closest("article.story");
+  if (!article) return;
+  if (e.target.closest(".expand") || (!e.target.closest("a, button, .more") && e.target.closest(".row"))) {
+    return setOpen(article, !openStories.has(article.dataset.key));
+  }
+  const b = e.target.closest("button[data-kw]");
+  if (!b) return;
+  const s = shownStories[Number(article.dataset.idx)];
+  toggleTerm(s?.keywords?.[Number(b.dataset.kw)]);
+});
+
+// ---------- Settings: one vertical (your settings, saved in this browser) ----------
+const S_FIELDS = ["min_feeds", "min_feeds_mode", "min_feeds_percent", "hours", "min_score", "min_weight",
                   "only_watched", "watched_any", "require_all"];
 const S_BOOL = new Set(["only_watched", "watched_any"]);
-let V = null, vSeq = 0, lastFeedsJson = "";
+let V = null, VDIGEST = null, vSeq = 0;
 
 function showSettings(cfg) {
   S_FIELDS.forEach((k) => {
     const el = $("s_" + k);
-    if (el === document.activeElement && k !== "threshold") return;  // don't fight the user's typing
+    if (el === document.activeElement) return;  // don't fight the user's typing
     if (S_BOOL.has(k)) el.checked = !!cfg[k];
     else if (k === "require_all") el.value = String(!!cfg[k]);
     else if (k === "min_feeds_mode") el.value = cfg[k];
@@ -612,12 +692,16 @@ function showSettings(cfg) {
       el.value = String(cfg.hours);
     } else el.value = fmt(cfg[k]);
   });
-  $("threshold_out").textContent = Number(cfg.threshold).toFixed(2);
   const pct = cfg.min_feeds_mode === "percent";
   $("s_min_feeds").hidden = pct; $("s_min_feeds_percent").hidden = !pct;
-  $("min_feeds_hint").textContent = pct
-    ? `= ${cfg.min_feeds_effective} of ${cfg.enabled_outlets} enabled outlets (rounded up)`
-    : `of ${cfg.enabled_outlets} enabled outlets`;
+  if (VDIGEST) {
+    const enabled = VDIGEST.outlets.filter((o) => outletState(V, o).on).length;
+    const n = pct ? Math.max(1, Math.ceil(cfg.min_feeds_percent / 100 * enabled)) : cfg.min_feeds;
+    $("min_feeds_hint").textContent = pct ? `= ${n} of ${enabled} enabled outlets (rounded up)` : `of ${enabled} enabled outlets`;
+    $("grouping_info").textContent = `Headlines are grouped into stories for everyone (match strictness ${Number(VDIGEST.threshold).toFixed(2)}; digest updated ${ago(VDIGEST.generated_at)}). Stories from a single outlet aren't included.`;
+    $("threshold_out").textContent = Number(VDIGEST.threshold).toFixed(2);
+    if (document.activeElement !== $("a_threshold")) $("a_threshold").value = VDIGEST.threshold;
+  }
 }
 function readSetting(k) {
   const el = $("s_" + k);
@@ -626,24 +710,18 @@ function readSetting(k) {
   if (k === "min_feeds_mode") return el.value;
   return el.value === "" ? NaN : Number(el.value);
 }
-const pending = {};
-let saveTimer, savedTimer;
-function queueSave(k) {
-  const v = V;
-  pending[k] = readSetting(k);
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    const body = {};
-    for (const [key, val] of Object.entries(pending)) if (!(typeof val === "number" && !Number.isFinite(val))) body[key] = val;
-    Object.keys(pending).forEach((key) => delete pending[key]);
-    if (!Object.keys(body).length) return;
-    try {
-      const d = await patch(`/api/${v}/settings`, body);
-      if (v !== V) return;
-      $("settings_msg").textContent = ""; showSettings(d.settings);
-      $("saved").hidden = false; clearTimeout(savedTimer); savedTimer = setTimeout(() => ($("saved").hidden = true), 1500);
-    } catch (e) { if (v === V) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = e.message; } }
-  }, 400);
+const LIMITS = { min_feeds: [1, 100], min_feeds_percent: [1, 100], hours: [1, 720], min_score: [0, 10000], min_weight: [0, 10] };
+let savedTimer;
+function saveSetting(k) {
+  const val = readSetting(k);
+  if (typeof val === "number") {
+    if (!Number.isFinite(val)) return;
+    const [lo, hi] = LIMITS[k]; if (val < lo || val > hi) return;
+  }
+  vp(V).settings[k] = k === "min_feeds" ? Math.round(val) : val;
+  savePrefs();
+  showSettings(settingsFor(V, VDIGEST));
+  $("saved").hidden = false; clearTimeout(savedTimer); savedTimer = setTimeout(() => ($("saved").hidden = true), 1500);
 }
 $("s_min_feeds_mode").addEventListener("change", (e) => {
   const pct = e.target.value === "percent";
@@ -651,178 +729,171 @@ $("s_min_feeds_mode").addEventListener("change", (e) => {
 });
 S_FIELDS.forEach((k) => {
   const el = $("s_" + k);
-  el.addEventListener(S_BOOL.has(k) || el.tagName === "SELECT" ? "change" : "input", () => {
-    if (k === "threshold") $("threshold_out").textContent = Number(el.value).toFixed(2);
-    queueSave(k);
-  });
+  el.addEventListener(S_BOOL.has(k) || el.tagName === "SELECT" ? "change" : "input", () => { if (V && VDIGEST) saveSetting(k); });
 });
-$("reset_settings").addEventListener("click", async () => {
-  const v = V;
-  try { const d = await patch(`/api/${v}/settings`, { reset: true }); if (v === V) { showSettings(d.settings); $("settings_msg").textContent = ""; } }
-  catch (e) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = e.message; }
+$("reset_settings").addEventListener("click", () => {
+  if (!V) return;
+  vp(V).settings = {}; savePrefs(); showSettings(settingsFor(V, VDIGEST));
+  $("settings_msg").className = "msg ok"; $("settings_msg").textContent = "Back to this vertical's defaults.";
 });
 
 async function openVertical(key) {
-  V = key; const my = ++vSeq;
+  V = key; VDIGEST = null; const my = ++vSeq;
   $("feeds").innerHTML = ""; $("phrases").innerHTML = ""; $("feed_count").textContent = "…"; $("using").textContent = "";
-  $("add_msg").textContent = ""; $("watch_msg").textContent = ""; $("settings_msg").textContent = ""; $("feed_search").value = "";
-  $("required_note").hidden = true; lastFeedsJson = "";
+  $("add_msg").textContent = ""; $("watch_msg").textContent = ""; $("settings_msg").textContent = ""; $("admin_msg").textContent = "";
+  $("feed_search").value = ""; $("required_note").hidden = true;
   try {
-    const d = await api(`/api/${key}/settings`);
+    const d = await getDigest(key, vp(key).settings.hours ?? 48);
     if (my !== vSeq) return;
-    showSettings(d.settings);
-  } catch (e) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = e.message; }
-  await Promise.all([loadFeeds(true), loadPhrases(true)]);
+    VDIGEST = d;
+  } catch (e) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = "Couldn't load this vertical: " + e.message; return; }
+  showSettings(settingsFor(key, VDIGEST));
+  renderPhrases(); renderOutlets(true);
 }
 
-// Watched phrases
-async function loadPhrases(force = false) {
-  const v = V; if (!v) return;
-  let d; try { d = await api(`/api/${v}/phrases`); } catch { return; }
-  if (v !== V) return;
-  if (!force && $("phrases").contains(document.activeElement)) return;
-  $("phrases").innerHTML = d.phrases.map((p) => `<li><span class="p">${esc(p.phrase)}</span>
-      <label class="sr-only" for="pb${p.id}">Bonus for ${esc(p.phrase)}</label>
-      <input type="number" id="pb${p.id}" min="0" max="${META.max_bonus}" step="1" value="${fmt(p.bonus)}" data-pbonus="${p.id}" data-v="${v}" title="Bonus points">
-      <button class="ghost" aria-label="Stop watching ${esc(p.phrase)}" data-pdel="${p.id}" data-v="${v}">×</button></li>`).join("")
+// Watched phrases (this browser)
+function renderPhrases() {
+  const v = V;
+  $("phrases").innerHTML = vp(v).phrases.map((p, i) => `<li><span class="p">${esc(p.phrase)}</span>
+      <label class="sr-only" for="pb${i}">Bonus for ${esc(p.phrase)}</label>
+      <input type="number" id="pb${i}" min="0" max="${META.max_bonus}" step="1" value="${fmt(p.bonus)}" data-pbonus="${i}" title="Bonus points">
+      <button class="ghost" aria-label="Stop watching ${esc(p.phrase)}" data-pdel="${i}">×</button></li>`).join("")
     || `<li class="muted" style="font-size:13px">No phrases yet.</li>`;
 }
-$("watch_form").addEventListener("submit", async (e) => {
+$("watch_form").addEventListener("submit", (e) => {
   e.preventDefault();
-  const v = V, bonus = parseFloat($("watch_bonus").value);
-  try {
-    await post(`/api/${v}/phrases`, { phrase: $("watch_phrase").value.trim(), bonus: Number.isFinite(bonus) ? bonus : META.default_bonus });
-    if (v === V) { $("watch_phrase").value = ""; $("watch_msg").textContent = ""; loadPhrases(true); }
-  } catch (err) { if (v === V) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; } }
+  const phrase = $("watch_phrase").value.trim().replace(/\s+/g, " "), bonus = parseFloat($("watch_bonus").value);
+  const list = vp(V).phrases;
+  if (!phrase || phrase.length > 100) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = "Phrases are 1 to 100 characters."; return; }
+  if (list.some((p) => p.phrase.toLowerCase() === phrase.toLowerCase())) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = "That phrase is already watched."; return; }
+  list.push({ phrase, bonus: Number.isFinite(bonus) ? Math.min(META.max_bonus, Math.max(0, bonus)) : META.default_bonus });
+  savePrefs(); $("watch_phrase").value = ""; $("watch_msg").textContent = ""; renderPhrases();
 });
-$("phrases").addEventListener("click", async (e) => {
-  const { pdel: id, v } = e.target.dataset; if (!id) return;
-  try { await api(`/api/${v}/phrases/${id}`, { method: "DELETE" }); } catch (err) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; }
-  if (v === V) loadPhrases(true);
+$("phrases").addEventListener("click", (e) => {
+  const i = e.target.dataset.pdel; if (i === undefined) return;
+  vp(V).phrases.splice(Number(i), 1); savePrefs(); renderPhrases();
 });
-$("phrases").addEventListener("change", async (e) => {
-  const { pbonus: id, v } = e.target.dataset; if (!id) return;
+$("phrases").addEventListener("change", (e) => {
+  const i = e.target.dataset.pbonus; if (i === undefined) return;
   const bonus = parseFloat(e.target.value);
-  try {
-    if (!Number.isFinite(bonus) || bonus < 0 || bonus > META.max_bonus) throw new Error(`Bonus goes from 0 to ${META.max_bonus}.`);
-    await patch(`/api/${v}/phrases/${id}`, { bonus });
-  } catch (err) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = err.message; }
-  e.target.blur(); if (v === V) loadPhrases(true);
+  if (!Number.isFinite(bonus) || bonus < 0 || bonus > META.max_bonus) { $("watch_msg").className = "msg err"; $("watch_msg").textContent = `Bonus goes from 0 to ${META.max_bonus}.`; return renderPhrases(); }
+  vp(V).phrases[Number(i)].bonus = bonus; savePrefs(); e.target.blur();
 });
-$("phrases").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.pbonus) e.target.blur(); });
+$("phrases").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.dataset.pbonus !== undefined) e.target.blur(); });
 
-// Outlets
-function feedRow(f, v) {
-  const viaFeedly = f.via === "feedly", failed = f.last_error && !viaFeedly;
-  const state = failed ? "err" : (viaFeedly ? "warn" : (f.last_fetched ? "" : "pending"));
-  const via = viaFeedly ? ` · <span class="warn" title="${esc(f.last_error || "")}">via Feedly</span>` : "";
-  const sub = failed ? `<div class="sub err">${esc(f.last_error)}</div>`
-                     : `<div class="sub">${f.item_count} items · fetched ${ago(f.last_fetched)}${via}</div>`;
-  const name = f.name || f.title || f.url, w = Number(f.weight ?? META.default_weight);
-  const on = f.enabled !== 0, req = f.required === 1;
-  return `<li class="${on ? "" : "off"}${req ? " required" : ""}" data-search="${esc((name + " " + f.url).toLowerCase())}">
+// Outlets: your choices (this browser) + the shared catalog (admin)
+function feedRow(o) {
+  const st = o.status || {}, viaFeedly = st.via === "feedly", failed = st.last_error && !viaFeedly;
+  const state = failed ? "err" : (viaFeedly ? "warn" : (st.last_fetched ? "" : "pending"));
+  const via = viaFeedly ? ` · <span class="warn" title="${esc(st.last_error || "")}">via Feedly</span>` : "";
+  const sub = failed ? `<div class="sub err">${esc(st.last_error)}</div>`
+                     : `<div class="sub">${st.item_count ?? 0} items · fetched ${ago(st.last_fetched)}${via}</div>`;
+  const me = outletState(V, o), name = o.name;
+  return `<li class="${me.on ? "" : "off"}${me.req ? " required" : ""}" data-search="${esc((name + " " + o.url).toLowerCase())}">
     <span class="dot ${state}"></span>
-    <div class="info"><div class="name">${esc(name)}</div><div class="sub">${esc(f.url)}</div>${sub}
-      <details class="kw" ${f.only ? "data-set" : ""}>
-        <summary>${f.only ? `Only items mentioning: ${esc(f.only.length > 70 ? f.only.slice(0, 70) + "…" : f.only)}` : "Keyword filter"}</summary>
-        <label class="sr-only" for="kw${f.id}">Keyword filter for ${esc(name)}</label>
-        <input type="text" id="kw${f.id}" value="${esc(f.only || "")}" data-only="${f.id}" data-v="${v}" maxlength="500"
-               placeholder="Comma-separated words; only matching items are used (blank = all)">
+    <div class="info"><div class="name">${esc(name)}</div><div class="sub">${esc(o.url)}</div>${sub}
+      ${o.only ? `<div class="sub">Only items mentioning: ${esc(o.only.length > 70 ? o.only.slice(0, 70) + "…" : o.only)}</div>` : ""}
+      <details class="cat"><summary class="sub">Catalog (all users)</summary>
+        <div class="catrow"><label for="cw${o.id}">Default weight</label>
+          <input type="number" id="cw${o.id}" min="0" max="${META.max_weight}" step="0.5" value="${fmt(o.weight)}" data-cweight="${o.id}"></div>
+        <div class="catrow"><label for="kw${o.id}">Keyword filter</label>
+          <input type="text" id="kw${o.id}" value="${esc(o.only || "")}" data-only="${o.id}" maxlength="500" placeholder="Comma-separated words; blank = all items"></div>
+        <div class="catrow"><button class="ghost" data-del="${o.id}" aria-label="Remove ${esc(name)} for everyone">Remove for everyone</button></div>
       </details></div>
     <div class="ctl">
       <div class="row">
-        <label class="switch" title="${on ? "Used in stories" : "Not used in stories"}"><input type="checkbox" ${on ? "checked" : ""} data-toggle="${f.id}" data-v="${v}" aria-label="Use ${esc(name)}">${on ? "On" : "Off"}</label>
-        <label class="req" title="Only show stories this outlet reports"><input type="checkbox" ${req ? "checked" : ""} data-require="${f.id}" data-v="${v}" aria-label="Require ${esc(name)}"> Required</label>
+        <label class="switch" title="${me.on ? "Used in your stories" : "Not used in your stories"}"><input type="checkbox" ${me.on ? "checked" : ""} data-toggle="${o.id}" aria-label="Use ${esc(name)}">${me.on ? "On" : "Off"}</label>
+        <label class="req" title="Only show stories this outlet reports"><input type="checkbox" ${me.req ? "checked" : ""} data-require="${o.id}" aria-label="Require ${esc(name)}"> Required</label>
       </div>
       <div class="row">
-        <input type="number" class="weight" min="0" max="${META.max_weight}" step="0.5" value="${fmt(w)}" data-weight="${f.id}" data-v="${v}" aria-label="Prestige weight for ${esc(name)}" title="Prestige weight">
-        <button class="ghost" aria-label="Remove ${esc(name)}" title="Remove feed" data-del="${f.id}" data-v="${v}">×</button>
+        <input type="number" class="weight" min="0" max="${META.max_weight}" step="0.5" value="${fmt(me.w)}" data-weight="${o.id}" aria-label="Your prestige weight for ${esc(name)}" title="Your prestige weight (catalog default ${fmt(o.weight)})">
       </div>
     </div>
   </li>`;
 }
-function renderRequired(feeds) {
-  const req = feeds.filter((f) => f.required === 1), name = (f) => f.name || f.title || f.url;
+function renderRequired() {
+  const outs = VDIGEST.outlets, req = outs.filter((o) => outletState(V, o).req);
   $("required_note").hidden = !req.length;
   if (!req.length) return;
-  $("required_list").innerHTML = `<strong>Required outlet${req.length === 1 ? "" : "s"}:</strong> ${req.map((f) => esc(name(f))).join(", ")}`;
+  $("required_list").innerHTML = `<strong>Required outlet${req.length === 1 ? "" : "s"}:</strong> ${req.map((o) => esc(o.name)).join(", ")}`;
   $("s_require_all").disabled = req.length < 2;
-  const off = req.filter((f) => f.enabled === 0);
+  const off = req.filter((o) => !outletState(V, o).on);
   $("required_warn").hidden = !off.length;
-  $("required_warn").textContent = off.length ? `${off.map(name).join(", ")} ${off.length === 1 ? "is" : "are"} switched off, so ${off.length === 1 ? "it" : "they"} can't appear in any story.` : "";
+  $("required_warn").textContent = off.length ? `${off.map((o) => o.name).join(", ")} ${off.length === 1 ? "is" : "are"} switched off, so ${off.length === 1 ? "it" : "they"} can't appear in any story.` : "";
 }
 function applySearch() {
   const q = $("feed_search").value.trim().toLowerCase();
   document.querySelectorAll("#feeds li[data-search]").forEach((li) => { li.hidden = !!q && !li.dataset.search.includes(q); });
 }
 $("feed_search").addEventListener("input", applySearch);
-let feedsSeq = 0;
-async function loadFeeds(force = false) {
-  const v = V, seq = ++feedsSeq; if (!v) return;
-  let d; try { d = await api(`/api/${v}/feeds`); } catch (e) { return; }
-  if (v !== V || seq !== feedsSeq) return;
-  const feeds = d.feeds, on = feeds.filter((f) => f.enabled !== 0).length;
-  $("feed_count").textContent = feeds.length;
-  $("using").textContent = feeds.length ? `${on} of ${feeds.length} outlets switched on` : "";
-  renderRequired(feeds);
-  const json = JSON.stringify(feeds);
-  if (force || (!$("feeds").contains(document.activeElement) && json !== lastFeedsJson)) {
-    $("feeds").innerHTML = feeds.map((f) => feedRow(f, v)).join("") || `<li class="muted">No feeds yet. Add an RSS or Atom URL above.</li>`;
-    lastFeedsJson = json; applySearch();
-  }
+function renderOutlets(force = false) {
+  if (!VDIGEST) return;
+  if (!force && $("feeds").contains(document.activeElement)) return;
+  const outs = [...VDIGEST.outlets].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  const on = outs.filter((o) => outletState(V, o).on).length;
+  $("feed_count").textContent = outs.length;
+  $("using").textContent = outs.length ? `${on} of ${outs.length} outlets switched on for you` : "";
+  $("feeds").innerHTML = outs.map(feedRow).join("") || `<li class="muted">No feeds yet. Add one under Shared catalog.</li>`;
+  applySearch(); renderRequired(); showSettings(settingsFor(V, VDIGEST));
 }
-async function refreshSettingsHint(v) {
-  try { const d = await api(`/api/${v}/settings`); if (v === V) showSettings(d.settings); } catch {}
-}
-async function feedChange(v, id, body, what) {
-  try { await patch(`/api/${v}/feeds/${id}`, body); }
-  catch (err) { $("add_msg").className = "msg err"; $("add_msg").textContent = `Couldn't change the ${what}: ${err.message}`; }
-  if (v === V) { loadFeeds(true); refreshSettingsHint(v); }
+function setMine(id, change) {
+  const o = vp(V).outlets; o[id] = { ...(o[id] || {}), ...change }; savePrefs();
 }
 $("feeds").addEventListener("change", (e) => {
-  const t = e.target, { v } = t.dataset; if (!v) return;
-  if (t.dataset.toggle) { t.closest("li").classList.toggle("off", !t.checked); return feedChange(v, t.dataset.toggle, { enabled: t.checked }, "outlet setting"); }
-  if (t.dataset.require) { t.closest("li").classList.toggle("required", t.checked); return feedChange(v, t.dataset.require, { required: t.checked }, "required setting"); }
-  if (t.dataset.only) { t.blur(); return feedChange(v, t.dataset.only, { only: t.value }, "keyword filter"); }
+  const t = e.target;
+  if (t.dataset.toggle) { setMine(Number(t.dataset.toggle), { on: t.checked }); return renderOutlets(true); }
+  if (t.dataset.require) { setMine(Number(t.dataset.require), { req: t.checked }); return renderOutlets(true); }
   if (t.dataset.weight) {
     const w = parseFloat(t.value);
-    if (!Number.isFinite(w) || w < 0 || w > META.max_weight) { $("add_msg").className = "msg err"; $("add_msg").textContent = `Weights go from 0 to ${META.max_weight}.`; return loadFeeds(true); }
-    t.blur(); return feedChange(v, t.dataset.weight, { weight: w }, "weight");
+    if (!Number.isFinite(w) || w < 0 || w > META.max_weight) { $("add_msg").className = "msg err"; $("add_msg").textContent = `Weights go from 0 to ${META.max_weight}.`; return renderOutlets(true); }
+    setMine(Number(t.dataset.weight), { w }); t.blur(); return;
+  }
+  if (t.dataset.cweight) {
+    const w = parseFloat(t.value);
+    if (!Number.isFinite(w) || w < 0 || w > META.max_weight) { $("add_msg").className = "msg err"; $("add_msg").textContent = `Weights go from 0 to ${META.max_weight}.`; return; }
+    return catalogChange(() => patch(`/api/${V}/feeds/${t.dataset.cweight}`, { weight: w }), "default weight");
+  }
+  if (t.dataset.only !== undefined && t.dataset.only !== "") {
+    return catalogChange(() => patch(`/api/${V}/feeds/${t.dataset.only}`, { only: t.value }), "keyword filter");
   }
 });
-$("feeds").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.target.dataset.weight || e.target.dataset.only)) e.target.blur(); });
-$("feeds").addEventListener("click", async (e) => {
-  const { del: id, v } = e.target.dataset;
-  if (!id || !confirm("Remove this feed and its stored headlines?")) return;
-  try { await api(`/api/${v}/feeds/${id}`, { method: "DELETE" }); } catch (err) { $("add_msg").className = "msg err"; $("add_msg").textContent = err.message; }
-  if (v === V) loadFeeds(true);
+$("feeds").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.target.dataset.weight || e.target.dataset.cweight || e.target.dataset.only)) e.target.blur(); });
+$("feeds").addEventListener("click", (e) => {
+  const id = e.target.dataset.del;
+  if (!id || !confirm("Remove this feed for everyone, with its stored headlines?")) return;
+  catalogChange(() => api(`/api/${V}/feeds/${id}`, { method: "DELETE" }), "catalog");
 });
-async function setAll(enabled) {
-  const v = V;
-  try { await patch(`/api/${v}/feeds`, { enabled }); } catch (err) { $("add_msg").className = "msg err"; $("add_msg").textContent = err.message; }
-  if (v === V) { loadFeeds(true); refreshSettingsHint(v); }
-}
+function setAll(on) { for (const o of VDIGEST.outlets) setMine(o.id, { on }); renderOutlets(true); }
 $("all_on").addEventListener("click", () => setAll(true));
 $("all_off").addEventListener("click", () => setAll(false));
-$("clear_required").addEventListener("click", async () => {
+$("clear_required").addEventListener("click", () => { for (const o of VDIGEST.outlets) setMine(o.id, { req: false }); renderOutlets(true); });
+
+// Shared catalog (admin): changes go to the server, which re-groups stories for everyone.
+async function catalogChange(call, what, okText) {
   const v = V;
-  try { await patch(`/api/${v}/feeds`, { required: false }); } catch (err) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = err.message; }
-  if (v === V) loadFeeds(true);
-});
+  try { await call(); }
+  catch (err) { $("admin_msg").className = $("add_msg").className = "msg err"; $("admin_msg").textContent = $("add_msg").textContent = `Couldn't change the ${what}: ${err.message}`; return false; }
+  $("admin_msg").className = "msg ok"; $("admin_msg").textContent = okText || "Saved for everyone. Stories are being re-grouped…";
+  forgetDigests(v);
+  setTimeout(async () => { if (v === V) { VDIGEST = await getDigest(v, vp(v).settings.hours ?? 48, true).catch(() => VDIGEST); renderOutlets(true); } }, 3000);
+  return true;
+}
 $("add_form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const v = V; $("add_btn").disabled = true;
-  $("add_msg").className = "msg"; $("add_msg").textContent = `Checking feed for ${label(v)}…`;
-  try {
-    const { feed } = await post(`/api/${v}/feeds`, { url: $("feed_url").value.trim() });
-    if (v !== V) return;
-    $("add_msg").className = "msg ok"; $("add_msg").textContent = `Added “${feed.name || feed.title || feed.url}” to ${label(v)} (${feed.item_count} items).`;
-    $("feed_url").value = ""; loadFeeds(true);
-  } catch (err) { if (v === V) { $("add_msg").className = "msg err"; $("add_msg").textContent = err.message; } }
-  finally { $("add_btn").disabled = false; }
+  $("admin_msg").className = "msg"; $("admin_msg").textContent = `Checking feed for ${label(v)}…`;
+  let added = null;
+  await catalogChange(async () => { added = (await post(`/api/${v}/feeds`, { url: $("feed_url").value.trim() })).feed; }, "catalog");
+  if (added && v === V) { $("admin_msg").textContent = `Added “${added.name || added.title || added.url}” for everyone (${added.item_count} items).`; $("feed_url").value = ""; }
+  $("add_btn").disabled = false;
+});
+$("a_threshold").addEventListener("input", (e) => { $("threshold_out").textContent = Number(e.target.value).toFixed(2); });
+$("a_threshold").addEventListener("change", (e) => {
+  catalogChange(() => patch(`/api/${V}/settings`, { threshold: Number(e.target.value) }), "match strictness",
+                "Saved for everyone. Stories are being re-grouped…");
 });
 
-// ---------- Scraping (header + Settings › Scraping) ----------
+// ---------- Scraping (header + Settings › Scraping; admin) ----------
 let SCRAPE = null, wasBusy = false;
 function renderScrape(st) {
   if (!st) return;
@@ -850,10 +921,10 @@ function renderScrape(st) {
   $("sc_refresh").disabled = $("sc_backfill").disabled = busy;
   if (document.activeElement !== $("sc_auto")) $("sc_auto").checked = st.auto;
   if (document.activeElement !== $("sc_interval")) $("sc_interval").value = fmt(st.interval_minutes);
-  if (wasBusy && !busy) loadStories();
+  if (wasBusy && !busy) setTimeout(() => { DIGESTS.clear(); loadStories(); }, 4000);   // new digests are being built
   wasBusy = busy;
 }
-async function loadScrape() { try { renderScrape(await api("/api/scrape/status")); } catch (e) { $("status").textContent = "Can't reach the server"; } }
+async function loadScrape() { try { renderScrape(await api("/api/scrape/status")); } catch (e) { $("status").textContent = ""; } }
 async function scrapeAction(path, body, what) {
   try { renderScrape(await post(path, body)); $("scrape_msg").textContent = ""; }
   catch (e) { $("scrape_msg").className = "msg err"; $("scrape_msg").textContent = `Couldn't ${what}: ${e.message}`; $("status").textContent = `Couldn't ${what}`; }
@@ -866,7 +937,7 @@ $("sc_resume").addEventListener("click", () => scrapeAction("/api/scrape/start",
 $("sc_stop").addEventListener("click", () => scrapeAction("/api/scrape/stop", {}, "stop"));
 $("sc_backfill").addEventListener("click", () => {
   const days = parseFloat($("sc_days").value);
-  if (!Number.isFinite(days) || days < 1 || days > 14) { $("scrape_msg").className = "msg err"; $("scrape_msg").textContent = "Backfill 1 to 14 days."; return; }
+  if (!Number.isFinite(days) || days < 1 || days > 30) { $("scrape_msg").className = "msg err"; $("scrape_msg").textContent = "Backfill 1 to 30 days."; return; }
   scrapeAction("/api/scrape/start", { kind: "backfill", days, resume: false }, "start a backfill");
 });
 $("sc_auto").addEventListener("change", (e) => scrapeAction("/api/scrape/schedule", { auto: e.target.checked }, "change the schedule"));
@@ -878,14 +949,13 @@ $("sc_interval").addEventListener("change", (e) => {
 
 // ---------- Start ----------
 api("/api/verticals").then((d) => {
-  META = d; $("watch_bonus").value = d.default_bonus;
+  META = { ...META, ...d }; $("watch_bonus").value = d.default_bonus;
   if (!location.hash) history.replaceState(null, "", "#stories/all");
   render();
 }).catch((e) => { $("summary").textContent = "Can't reach the server: " + e.message; });
 loadScrape();
-setInterval(loadScrape, 5000);
-setInterval(() => { if (route.top === "settings" && route.sub !== "scraping") loadFeeds(); }, 5000);
-setInterval(() => { if (route.top === "stories") loadStories(); }, 60000);
+setInterval(() => { if (!document.hidden) loadScrape(); }, 30000);
+setInterval(() => { if (!document.hidden && route.top === "stories") loadStories(); }, 60000);
 </script>
 </body>
 </html>

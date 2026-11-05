@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import digest as digests_mod
 import feeds
 import matching
 import seedcache
@@ -318,7 +319,16 @@ NOT_NOUNS = frozenset(matching._stem(w) for w in """
     black white red blue green new old big small first last final major minor record female male young
     former latest early late dark bright huge massive key main real true false full free live dead open close
     official top best worst little great high low long short fresh rare global local national federal
-    possible likely unlikely second third
+    possible likely unlikely second third shut shuts closes closed close
+""".split())
+# Words that are capitalised as part of a name ("Nagoshi Studio", "Booker Prize", "President Biden") but
+# aren't names on their own: never a single-word proper noun, still fine inside a multi-word name.
+NAME_PARTS = frozenset(matching._stem(w) for w in """
+    studio studios creator creators developer developers publisher publishers series sequel franchise company
+    team union president minister senator governor speaker leader chief director actor actress author writer
+    prize award awards festival league cup university college school press group network channel museum
+    department ministry agency council committee party court house senate congress city state county
+    season episode chapter volume edition collection remaster remake trailer showcase direct conference
 """.split())
 _NOT_NOUN_ENDINGS = ("ed", "ing", "ly", "ous", "ive", "able", "ible", "ful", "less", "ish")
 
@@ -587,6 +597,15 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
             return caps_.most_common(1)[0][0] if caps_ else form
         return caps_.most_common(1)[0][0] if caps_ and proper[k] >= plain[k] else form.lower()
 
+    def run_is_proper(k: tuple) -> bool:
+        """A detected name, or a word run with at least one real name in it ("Nagoshi Studio": Nagoshi
+        is capitalised mid-sentence in sentence-case headlines). Title Case alone isn't evidence:
+        "Additional Cast" from a Title Case outlet is not a name."""
+        if k[0] == "name":
+            return True
+        return all(w[:1].isupper() or w[:1].isdigit() for w in multi_display(k).split()) and \
+            any(proper[w] > plain[w] and w not in NAME_PARTS for w in k[1:])   # not "Nintendo team (up)"
+
     def multi_display(k: tuple) -> str:
         if k[0] == "name":
             return _display_name(multi_forms[k])
@@ -657,7 +676,9 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
             wks = word_keys(k)
             if not wks or any(wks <= c[0] for c in chosen):
                 continue                          # "Elder Scrolls VI" after "Elder Scrolls 6"; "GTA" after "GTA 6"
-            if k[0] == "pair" and share < 0.8 * max(own_u.get(w, 0) for w in wks):
+            # A phrase must cover most uses of its words; names less strictly, since outlets often
+            # shorten them ("Nagoshi's studio" for "Nagoshi Studio").
+            if k[0] == "pair" and share < (0.5 if run_is_proper(k) else 0.8) * max(own_u.get(w, 0) for w in wks):
                 continue
             if k[0] == "pair" and any(c[3] and wks & c[0] for c in chosen):
                 continue                          # "Midnight director" overlaps the name "South of Midnight"
@@ -669,7 +690,7 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
                 cands[c[2]] = None
             chosen.append((wks, share, len(cands), k[0] == "name"))
             text = multi_display(k)
-            proper_run = k[0] == "name" or all(w[:1].isupper() for w in text.split())
+            proper_run = run_is_proper(k)
             # Headlines often use only a surname ("Johnson out as House leader"): credit those to the
             # full name ("Mike Johnson") when the last word is itself a capitalised name.
             last = _term_key(k[-1]) if k[0] == "name" else k[-1]
@@ -686,7 +707,7 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
                 shown = display(k)
                 single_proper = proper[k] > plain[k] or (shown.isupper() and len(shown) > 1) or (
                     any(ch.isdigit() for ch in shown) and any(ch.isalpha() for ch in shown) and not shown[:1].isdigit())
-                is_name = single_proper and k not in NOT_NOUNS
+                is_name = single_proper and k not in NOT_NOUNS and k not in NAME_PARTS
                 cands.append((prominence(k, share, uni_n[k], SINGLE_NAME_BOOST if is_name else 1.0, is_name),
                               shown, sorted(forms[k])[:6], (k,)))
         cands.sort(key=lambda c: -c[0])
@@ -701,10 +722,10 @@ def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | 
             if any(w[:1].isdigit() for w in words[:1]):
                 return False                       # "20th anniversary", "8 million copies"
             if k[0] == "pair":
-                return all(w[:1].isupper() for w in words)
+                return run_is_proper(k)
             return (proper[k[0]] > plain[k[0]] or text.isupper() and len(text) > 1
                     or (any(ch.isdigit() for ch in text) and any(ch.isalpha() for ch in text))) \
-                and k[0] not in NOT_NOUNS
+                and k[0] not in NOT_NOUNS and k[0] not in NAME_PARTS
         top_score = cands[0][0] if cands else 0
         lead = next((c for c in cands if is_proper(c) and c[0] >= PROPER_LEAD_MIN * top_score), None)
         if lead is None:
@@ -762,8 +783,20 @@ class Security:
         return hmac.compare_digest(header[7:].strip(), self.api_token)
 
 
-def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security | None = None):
+def make_digests(stores: dict[str, Store], out_dir: Path | None = None, log=None) -> digests_mod.Digests:
+    """Shared digests for every vertical (see digest.py)."""
+    def builder(key: str, window: int) -> dict:
+        v, store = VERTICALS_BY_KEY[key], stores[key]
+        cfg = effective_settings(v, store)
+        defaults = {k: cfg[k] for k in SETTING_SPECS if k != "threshold"}
+        return digests_mod.build_digest(key, v.label, store, window, cfg["threshold"], defaults, story_terms)
+    return digests_mod.Digests(out_dir, builder, list(stores), log=log)
+
+
+def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security | None = None,
+                 digests: digests_mod.Digests | None = None):
     security = security or Security()
+    digests = digests or make_digests(stores)
     seen_hosts: set[str] = set()
 
     class Handler(BaseHTTPRequestHandler):
@@ -826,6 +859,26 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             if self.command == "POST" and ctype != "application/json":
                 raise HTTPError(415, "Send changes as Content-Type: application/json")
 
+        def _send_digest(self, entry: dict):
+            """A shared digest: same bytes for everyone, so it's cacheable (ETag, gzip, max-age)."""
+            if self.headers.get("If-None-Match") == entry["etag"]:
+                self.send_response(304)
+                self.send_header("ETag", entry["etag"])
+                self.end_headers()
+                return
+            gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
+            body = entry["gz"] if gz else entry["json"]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            if gz:
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+            self.send_header("ETag", entry["etag"])
+            self.send_header("Cache-Control", "public, max-age=60")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _vertical_key(self) -> str:
             return urlparse(self.path).path.strip("/").split("/")[1]
 
@@ -844,6 +897,9 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 if method != "GET":
                     self._guard_write()
                 getattr(self, "_" + method)()
+                parts = urlparse(self.path).path.strip("/").split("/")
+                if method != "GET" and len(parts) >= 3 and parts[1] in stores and parts[2] in ("feeds", "settings"):
+                    digests.request_rebuild([parts[1]])   # the shared catalog changed
             except HTTPError as e:
                 self._json({"error": str(e)}, e.status)
             except (BrokenPipeError, ConnectionResetError):
@@ -885,9 +941,17 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                     "max_weight": MAX_WEIGHT,
                     "default_bonus": DEFAULT_BONUS,
                     "max_bonus": MAX_BONUS,
+                    "windows": list(digests_mod.WINDOWS),
+                    "retention_days": RETENTION_DAYS,
                 })
             elif path == "/api/scrape/status":
                 self._json(scraper.status())
+            elif store and rest == ["digest"]:
+                try:
+                    hours = float(q.get("hours", digests_mod.WINDOWS[0]))
+                except ValueError:
+                    raise HTTPError(400, "hours must be a number")
+                self._send_digest(digests.get(self._vertical_key(), hours))
             elif store and rest == ["feeds"]:
                 st = scraper.status()
                 last = st["last_run"] or {}
@@ -1106,8 +1170,9 @@ def main():
         n = stores[args.vertical].add_feeds(read_feed_list(Path(args.import_file)))
         print(f"Imported {n} new feed(s) into {args.vertical}")
 
+    digests = make_digests(stores, data_dir / "digests", log=print)
     scraper = Scraper(stores, data_dir / "scrape_state.json", interval_minutes=args.interval,
-                      auto=not args.no_auto and args.interval > 0, log=print)
+                      auto=not args.no_auto and args.interval > 0, log=print, on_finish=digests.request_rebuild)
     if args.backfill:
         backfill(stores, args.backfill, scraper)
     if args.no_serve:
@@ -1116,9 +1181,10 @@ def main():
     if not args.no_resume:
         scraper.resume_interrupted()
     threading.Thread(target=scraper.loop, daemon=True, name="scheduler").start()
+    digests.request_rebuild()   # fresh digests from whatever is stored now
     security = Security(api_token=args.api_token, allowed_hosts=tuple(h.lower() for h in args.allow_host)
                         + ((args.host.lower(),) if args.host not in ("0.0.0.0", "::") else ()))
-    srv = ThreadingHTTPServer((args.host, args.port), make_handler(stores, scraper, security))
+    srv = ThreadingHTTPServer((args.host, args.port), make_handler(stores, scraper, security, digests))
     print(f"News aggregator running at http://{args.host}:{args.port}  (data: {args.data})")
     st = scraper.status()
     print(f"Scraping: {'every %g min' % st['interval_minutes'] if st['auto'] else 'manual (POST /api/scrape/start)'}"

@@ -69,8 +69,10 @@ def fetch_with_fallback(url: str) -> tuple[feeds.ParsedFeed, str, str | None]:
 
 class Scraper:
     def __init__(self, stores: dict[str, Store], state_path: Path | None = None,
-                 interval_minutes: float = 15, auto: bool = True, log: Callable[[str], None] | None = None):
+                 interval_minutes: float = 15, auto: bool = True, log: Callable[[str], None] | None = None,
+                 on_finish: Callable[[list[str]], None] | None = None):
         self.stores = stores
+        self.on_finish = on_finish  # called with the run's verticals when a run ends (e.g. rebuild digests)
         self.state_path = state_path
         self.log = log or (lambda msg: None)
         self._lock = threading.RLock()
@@ -253,6 +255,8 @@ class Scraper:
                     self.state["last_run"] = dict(run)
                 self._save()
             self.log(f"Scrape {run['id']} {run['status']}: {run['done']}/{run['total']} feeds, {run['failed']} failed")
+            if self.on_finish:
+                self.on_finish(list(run["verticals"]))
         except Exception as e:  # noqa: BLE001 - record the failure instead of dying silently
             with self._lock:
                 run["status"], run["error"] = "interrupted", f"{type(e).__name__}: {e}"

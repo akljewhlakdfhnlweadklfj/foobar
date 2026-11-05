@@ -340,6 +340,67 @@ class FeedlyThrottlingTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+class DigestTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.store = app.Store(self.tmp / "games.db")
+        now = time.time()
+        for n in (1, 2, 3):
+            fid = self.store.add_feed(f"https://{n}.example/rss", f"Outlet {n}", n)
+            self.store.save_fetch(fid, feeds.ParsedFeed(f"Outlet {n}", [
+                feeds.ParsedEntry(f"g{n}", f"Valve announces Steam Machine hardware {n}", f"Desc {n}", now - 3600),
+                feeds.ParsedEntry(f"old{n}", f"Nintendo Direct dated for Thursday {n}", "", now - 10 * 86400),
+                feeds.ParsedEntry(f"solo{n}", ["Capcom hires new chief", "Teacher strike enters week", "Volcano erupts near Iceland town"][n - 1], "", now)]), None)
+        self.store.update_feed(3, enabled=False)
+        self.digests = app.make_digests({"games": self.store}, self.tmp / "digests")
+
+    def test_digest_has_every_outlet_and_multi_outlet_stories_only(self):
+        d = json.loads(self.digests.get("games", 48)["json"])
+        self.assertEqual(d["window_hours"], 48)
+        self.assertEqual([(o["id"], o["weight"], o["enabled"]) for o in d["outlets"]], [(1, 1, True), (2, 2, True), (3, 3, False)])
+        self.assertEqual(len(d["stories"]), 1)                       # the old story is outside 48h; solos dropped
+        st = d["stories"][0]
+        self.assertEqual(sorted(x["f"] for x in st["s"]), [1, 2, 3])   # switched-off outlets included: viewers choose
+        self.assertTrue(st["k"] and st["k"][0]["t"])
+        self.assertIn("min_feeds", d["defaults"])
+        d30 = json.loads(self.digests.get("games", 300)["json"])     # 300h -> 30-day window
+        self.assertEqual((d30["window_hours"], len(d30["stories"])), (720, 2))
+
+    def test_written_to_disk_and_reloaded_with_same_etag(self):
+        e = self.digests.get("games", 24)
+        self.assertTrue((self.tmp / "digests" / "games-48.json.gz").exists())
+        again = app.make_digests({"games": self.store}, self.tmp / "digests")
+        self.assertEqual(again.get("games", 24)["etag"], e["etag"])
+
+    def test_http_etag_gzip_and_rebuild_after_catalog_change(self):
+        import gzip, threading, urllib.request
+        from http.server import ThreadingHTTPServer
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), app.make_handler({"games": self.store}, app.Scraper({}, auto=False),
+                                                                      digests=self.digests))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        get = lambda h: urllib.request.urlopen(urllib.request.Request(base + "/api/games/digest?hours=48", headers=h), timeout=10)
+        with mock.patch.dict("os.environ", {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}):
+            with get({"Accept-Encoding": "gzip"}) as r:
+                etag = r.headers["ETag"]
+                self.assertEqual(r.headers["Content-Encoding"], "gzip")
+                self.assertIn("max-age", r.headers["Cache-Control"])
+                self.assertEqual(len(json.loads(gzip.decompress(r.read()))["stories"]), 1)
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                get({"If-None-Match": etag})
+            self.assertEqual(cm.exception.code, 304)
+            with urllib.request.urlopen(base + "/api/verticals", timeout=10) as r:
+                self.assertEqual(json.load(r)["windows"], [48, 168, 720])
+            req = urllib.request.Request(base + "/api/games/feeds/1", data=b'{"weight": 6}', method="PATCH",
+                                         headers={"Content-Type": "application/json"})
+            with mock.patch.object(self.digests, "request_rebuild") as rebuild:
+                urllib.request.urlopen(req, timeout=10).close()
+            rebuild.assert_called_once_with(["games"])
+        self.digests.build_now("games", (48,))
+        self.assertNotEqual(self.digests.get("games", 48)["etag"], etag)
+
+
 class HttpTestCase(unittest.TestCase):
     """Starts the real handler on a free port."""
 
@@ -747,6 +808,21 @@ class ParserAndPagingTests(unittest.TestCase):
             c.execute("INSERT INTO items (feed_id, guid, title, published, fetched_at, description) "
                       "VALUES (?, 'g', 'T', ?, ?, 'null')", (fid, time.time(), time.time()))
         self.assertEqual(app.Store(db).items_since(0)[0].description, "")   # cleaned on open
+
+    def test_v11_drops_subreddit_feeds(self):
+        db = Path(tempfile.mkdtemp()) / "r.db"
+        st = app.Store(db)
+        keep = st.add_feed("https://a.example/rss")
+        gone = st.add_feed("https://www.reddit.com/r/Games/.rss")
+        for fid in (keep, gone):
+            st.save_fetch(fid, feeds.ParsedFeed("x", [feeds.ParsedEntry(f"g{fid}", "Some headline here", "", time.time())]), None)
+        with st._conn() as c:
+            c.execute("PRAGMA user_version = 10")
+        st = app.Store(db)
+        self.assertEqual([f["url"] for f in st.list_feeds()], ["https://a.example/rss"])
+        self.assertEqual(len(st.items_since(0, include_disabled=True)), 1)
+        st.add_feed("https://www.reddit.com/r/x/.rss")      # added by hand later: kept
+        self.assertEqual(len(app.Store(db).list_feeds()), 2)
 
     def test_google_news_suffix_removed(self):
         rss = b"""<rss><channel><item><title>Democrats win the Senate - Reuters</title><link>https://x/1</link></item>

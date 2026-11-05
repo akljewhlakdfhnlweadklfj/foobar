@@ -21,8 +21,8 @@ from typing import Iterator
 import feeds
 import matching
 
-RETENTION_DAYS = 14
-SCHEMA_VERSION = 10
+RETENTION_DAYS = 30
+SCHEMA_VERSION = 11
 MAX_WEIGHT = 10.0
 MAX_BONUS = 100.0
 DEFAULT_BONUS = 5.0
@@ -120,7 +120,8 @@ class Store:
         self._lock = threading.Lock()
         self.version = 0  # bumped on every write; lets callers cache derived results
         with self._conn() as c:
-            self.is_new = c.execute("PRAGMA user_version").fetchone()[0] == 0 and not c.execute(
+            prior = c.execute("PRAGMA user_version").fetchone()[0]
+            self.is_new = prior == 0 and not c.execute(
                 "SELECT 1 FROM sqlite_master WHERE name = 'feeds'").fetchone()
             c.executescript(SCHEMA)
             for table, cols in _ADDED_COLUMNS.items():
@@ -131,6 +132,9 @@ class Store:
             # Earlier versions stored placeholder descriptions some feeds send literally.
             c.execute("UPDATE items SET description = '' "
                       "WHERE lower(trim(description)) IN ('null', 'none', 'undefined', 'nan')")
+            if 0 < prior < 11:  # v11 dropped the subreddit feeds (throttled, mostly discussion)
+                c.execute("DELETE FROM items WHERE feed_id IN (SELECT id FROM feeds WHERE url LIKE '%reddit.com/%')")
+                c.execute("DELETE FROM feeds WHERE url LIKE '%reddit.com/%'")
             c.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
@@ -262,17 +266,19 @@ class Store:
                 (now, error, via, parsed.title, parsed.title, feed_id, feed_id),
             )
 
-    def items_since(self, since: float) -> list[matching.Item]:
-        """Items from switched-on feeds published at or after `since`."""
+    def items_since(self, since: float, include_disabled: bool = False) -> list[matching.Item]:
+        """Items published at or after `since`, from switched-on feeds (or all feeds), with each feed's
+        keyword filter applied."""
+        enabled_sql = "" if include_disabled else " AND f.enabled = 1"
         with self._conn() as c:
             filters = {r["id"]: keyword_regex(r["only"]) for r in
-                       c.execute("SELECT id, only FROM feeds WHERE enabled = 1 AND only IS NOT NULL")}
+                       c.execute("SELECT id, only FROM feeds WHERE only IS NOT NULL")}
             rows = c.execute(
                 """SELECT i.id, i.feed_id, i.title, i.link, i.published, i.description, i.image,
                           COALESCE(f.name, NULLIF(f.title, ''), f.url) AS feed_title,
                           COALESCE(f.weight, ?) AS weight
                    FROM items i JOIN feeds f ON f.id = i.feed_id
-                   WHERE i.published >= ? AND f.enabled = 1""",
+                   WHERE i.published >= ?""" + enabled_sql,
                 (matching.DEFAULT_WEIGHT, since),
             ).fetchall()
         items = []

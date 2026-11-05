@@ -32,9 +32,3 @@ https://moxie.foxnews.com/google-publisher/entertainment.xml             # Fox N
 https://www.rollingstone.com/tv-movies/feed/                             # Rolling Stone (TV & Movies) | w=3 | general | ~26/wk
 https://www.avclub.com/rss                                               # The A.V. Club | w=3 | general | ~148/wk
 https://www.cbc.ca/webfeed/rss/rss-arts                                  # CBC (Arts) | w=3 | general | ~21/wk
-
-# --- Reddit (community signal; weight 1, so they help group headlines but barely move scores).
-# Reddit throttles feed readers and Feedly rarely has fresh copies, so these depend on direct fetches.
-http://www.reddit.com/r/movies/.rss                   # Reddit r/movies | w=1 | reddit
-https://www.reddit.com/r/television/.rss              # Reddit r/television | w=1 | reddit
-https://www.reddit.com/r/boxoffice/.rss               # Reddit r/boxoffice | w=1 | reddit
