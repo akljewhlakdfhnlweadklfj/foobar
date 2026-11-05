@@ -88,7 +88,7 @@ def clean(body: dict, current: dict | None, verticals: list[str]) -> dict:
     """A validated group config: `current` with the changes in `body` applied (a new group when None).
     Raises ValueError with a message for the API."""
     cfg = json.loads(json.dumps(current)) if current else {
-        "name": "", "verticals": [], "ai_summary": False, "position": 0, "settings": dict(DEFAULT_SETTINGS), "outlets": {}}
+        "name": "", "verticals": [], "ai_summary": False, "position": None, "settings": dict(DEFAULT_SETTINGS), "outlets": {}}
     unknown = set(body) - {"name", "verticals", "ai_summary", "position", "settings", "outlets"}
     if unknown:
         raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}")
@@ -169,7 +169,7 @@ class GroupStore:
     def __init__(self, path: Path):
         self.path = str(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.version = 0
         with self._conn() as c:
             c.execute("CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY, config TEXT NOT NULL, "
@@ -196,6 +196,13 @@ class GroupStore:
         return {**json.loads(row[1]), "id": row[0], "updated_at": row[2]} if row else None
 
     def create(self, cfg: dict) -> int:
+        """Add a group (at the end unless cfg sets a position)."""
+        with self._lock:
+            if cfg.get("position") is None:
+                cfg = {**cfg, "position": 1 + max((g["position"] for g in self.list()), default=-1)}
+            return self._insert(cfg)
+
+    def _insert(self, cfg: dict) -> int:
         with self._lock, self._conn() as c:
             gid = c.execute("INSERT INTO groups (config, updated_at) VALUES (?, ?)",
                             (json.dumps(cfg), time.time())).lastrowid
@@ -210,7 +217,36 @@ class GroupStore:
             self.version += 1
             return n > 0
 
+    def change(self, gid: int, body: dict, verticals: list[str]) -> dict | None:
+        """Apply a validated change atomically (no lost updates); None if there's no such group.
+        Raises ValueError for an invalid change."""
+        with self._lock:
+            current = self.get(gid)
+            if current is None:
+                return None
+            self.update(gid, clean(body, current, verticals))
+            return self.get(gid)
+
+    def forget_outlet(self, vertical: str, feed_id: int) -> None:
+        """Drop every group's settings for an outlet (when it's removed, or its id is given to a new feed)."""
+        with self._lock:
+            for g in self.list():
+                if str(feed_id) in g.get("outlets", {}).get(vertical, {}):
+                    g["outlets"][vertical].pop(str(feed_id))
+                    if not g["outlets"][vertical]:
+                        g["outlets"].pop(vertical)
+                    self.update(g["id"], g)
+
     def delete(self, gid: int) -> bool:
+        """Remove a group; the last one can't be removed (ValueError)."""
+        with self._lock:
+            if self.get(gid) is None:
+                return False
+            if len(self.list()) <= 1:
+                raise ValueError("Keep at least one group")
+            return self._delete(gid)
+
+    def _delete(self, gid: int) -> bool:
         with self._lock, self._conn() as c:
             n = c.execute("DELETE FROM groups WHERE id = ?", (gid,)).rowcount
             self.version += 1
@@ -230,24 +266,32 @@ def _headline(counted: list[dict], weight: Callable[[dict], float]) -> dict:
     return min(plain, key=lambda x: (len(x["t"]), -weight(x), x["p"]))
 
 
+def min_outlets(cfg: dict, countable: int) -> int:
+    """The "reported by at least" number: a count, or a share of the outlets that can count (rounded
+    up, at least 1; rounded exactly, so 7% of 100 is 7)."""
+    if cfg["min_feeds_mode"] != "percent":
+        return cfg["min_feeds"]
+    return max(1, math.ceil(round(cfg["min_feeds_percent"] * countable / 100, 9)))
+
+
 def build_view(group: dict, digest_for: Callable[[str, float], dict], summarizer=None, now: float | None = None) -> dict:
     """Apply a group's filters to the shared digests of its verticals."""
     now = now or time.time()
     cfg = {**DEFAULT_SETTINGS, **group.get("settings", {})}
     cut = now - cfg["hours"] * 3600
-    stories, min_out, countable = [], {}, {}
+    stories, min_out, countable, built = [], {}, {}, 0
     ai_on = bool(group.get("ai_summary"))
     for v in group["verticals"]:
         d = digest_for(v, cfg["hours"])
+        built = max(built, d.get("generated_at", 0))
         over = group.get("outlets", {}).get(v, {})
         outlets = {}
         for o in d["outlets"]:
             ov = over.get(str(o["id"]), {})
-            outlets[o["id"]] = {"name": o["name"], "on": ov.get("on", o["enabled"]), "req": ov.get("req", o["required"]),
+            outlets[o["id"]] = {"name": o["name"], "on": ov.get("on", o["enabled"]), "req": ov.get("req", False),
                                 "w": ov.get("w", o["weight"])}
         n_count = sum(1 for o in outlets.values() if o["on"] and o["w"] >= cfg["min_weight"])
-        need = (max(1, math.ceil(cfg["min_feeds_percent"] / 100 * n_count)) if cfg["min_feeds_mode"] == "percent"
-                else cfg["min_feeds"])
+        need = min_outlets(cfg, n_count)
         min_out[v], countable[v] = need, n_count
         required = {fid for fid, o in outlets.items() if o["req"]}
         for st in d["stories"]:
@@ -278,7 +322,7 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], summarizer
             if extra:
                 out["x"] = 1
             elif ai_on and summarizer is not None:
-                text = summarizer.lookup(keys, len(srcs))
+                text = summarizer.lookup(keys)
                 if text:
                     out["a"] = text
                 else:
@@ -291,7 +335,8 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], summarizer
         ai.update(available=st["available"], reason=st.get("reason", ""),
                   pending=sum(1 for s in stories if "x" not in s and "a" not in s))
     public = {k: v for k, v in group.items() if k != "updated_at"}
-    return {"group": public, "generated_at": round(now), "min_outlets": min_out, "countable": countable,
+    # generated_at is the digests' (not now), so an unchanged result has unchanged bytes and ETag.
+    return {"group": public, "generated_at": built, "min_outlets": min_out, "countable": countable,
             "ai": ai, "stories": stories}
 
 
@@ -314,7 +359,8 @@ class Views:
         hours = {**DEFAULT_SETTINGS, **group.get("settings", {})}["hours"]
         tags = tuple(self._digest(v, hours)[0] for v in group["verticals"])
         # Time moves the window's cut-off too: rebuild at least once a minute.
-        key = (group["updated_at"], tags, getattr(self.summarizer, "version", 0), int(time.time() // 60))
+        ai_version = getattr(self.summarizer, "version", 0) if group.get("ai_summary") else 0
+        key = (group["updated_at"], tags, ai_version, int(time.time() // 60))
         with self._lock:
             hit = self._cache.get(gid)
             if hit and hit[0] == key:

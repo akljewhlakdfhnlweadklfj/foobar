@@ -446,16 +446,24 @@ const savePrefs = () => saveJson(PREFS_KEY, PREFS);
 let SEEN = loadJson(SEEN_KEY, {});
 (() => { const cut = Date.now() / 1000 - SEEN_KEEP; for (const k in SEEN) if (SEEN[k] < cut) delete SEEN[k]; })();
 
-// When was this story first shown in this browser? Records it now when it's on screen.
+// When was this story first shown in this browser? It counts as shown when most of its articles were
+// (so a new story that shares one article with an old one is still new). Records it when on screen.
 function firstShown(s, now, visible) {
-  let first = Infinity;
-  for (const h of s.h) if (SEEN[h] !== undefined && SEEN[h] < first) first = SEEN[h];
-  if (first === Infinity) first = now;
-  if (visible) for (const h of s.h) if (SEEN[h] === undefined) { SEEN[h] = first; seenDirty = true; }
+  const known = s.h.filter((h) => SEEN[h] !== undefined);
+  const first = 2 * known.length >= s.h.length && known.length ? Math.min(...known.map((h) => SEEN[h])) : now;
+  if (visible) for (const h of s.h) if (SEEN[h] === undefined) { SEEN[h] = Math.round(first); seenDirty = true; }
   return first;
 }
 let seenDirty = false;
-function saveSeen() { if (seenDirty) { saveJson(SEEN_KEY, SEEN); seenDirty = false; } }
+function mergeSeen(other) {   // another tab's records: keep the earliest time per article
+  for (const k in other || {}) if (SEEN[k] === undefined || other[k] < SEEN[k]) SEEN[k] = other[k];
+}
+function saveSeen() {
+  if (!seenDirty) return;
+  mergeSeen(loadJson(SEEN_KEY, {}));
+  saveJson(SEEN_KEY, SEEN); seenDirty = false;
+}
+window.addEventListener("storage", (e) => { if (e.key === SEEN_KEY) mergeSeen(loadJson(SEEN_KEY, {})); });
 
 // ---------- Group views (built and cached by the server) ----------
 const VIEWS = new Map();   // group id -> {data, at}
@@ -705,7 +713,7 @@ $("stories").addEventListener("click", (e) => {
 });
 
 // ---------- Settings › Groups (shared; saved on the server) ----------
-let G = null, gSeq = 0, savedTimer;
+let G = null, gSeq = 0, saveSeq = 0, savedTimer;
 const CATALOG = new Map();   // vertical -> feeds from /api/<v>/feeds
 async function catalog(v, force = false) {
   if (!force && CATALOG.has(v)) return CATALOG.get(v);
@@ -766,9 +774,10 @@ async function updateGroupHints() {
 }
 async function saveGroup(change, rerenderOutlets = false) {
   if (!G) return;
-  const gid = G.id;
+  const gid = G.id, my = ++saveSeq;
   try {
     const d = await patch(`/api/groups/${gid}`, change);
+    if (my !== saveSeq) { VIEWS.delete(gid); return; }      // a newer save's answer is (or will be) shown
     const i = GROUPS.findIndex((g) => g.id === gid);
     if (i >= 0) GROUPS[i] = d.group;
     VIEWS.delete(gid);
@@ -778,7 +787,7 @@ async function saveGroup(change, rerenderOutlets = false) {
     if (rerenderOutlets) await renderGroupOutlets();
     $("g_saved").hidden = false; clearTimeout(savedTimer); savedTimer = setTimeout(() => ($("g_saved").hidden = true), 1500);
     updateGroupHints();
-  } catch (e) { $("g_msg").className = "msg err"; $("g_msg").textContent = "Couldn't save: " + e.message; showGroup(); }
+  } catch (e) { $("g_msg").className = "msg err"; $("g_msg").textContent = "Couldn't save: " + e.message; if (G && G.id === gid) showGroup(); }
 }
 $("g_name").addEventListener("change", () => saveGroup({ name: $("g_name").value }));
 $("g_verticals").addEventListener("change", () => {
@@ -995,7 +1004,7 @@ $("feeds").addEventListener("click", (e) => {
 const PENDING_THRESHOLD = new Map(), REGROUPING = new Set(), regroupSeq = new Map();
 function setRegrouping(v, on) { on ? REGROUPING.add(v) : REGROUPING.delete(v); if (v === V) $("regrouping").hidden = !on; }
 async function catalogChange(call, what, okText, ready = () => true) {
-  const v = V, before = VDIGEST?.generated_at ?? 0;
+  const v = V, before = VDIGEST?.generated_at ?? Math.floor(Date.now() / 1000);
   try { await call(); }
   catch (err) { $("admin_msg").className = "msg err"; $("admin_msg").textContent = `Couldn't change the ${what}: ${err.message}`; return false; }
   $("admin_msg").className = "msg ok"; $("admin_msg").textContent = okText || "Saved for everyone. Stories are being re-grouped…";

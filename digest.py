@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import threading
 import time
 import traceback
@@ -103,6 +104,7 @@ class Digests:
         self._lock = threading.Lock()
         self._cache: dict[tuple[str, int], dict] = {}     # (vertical, window) -> {"json", "gz", "etag", "at"}
         self._pending: set[str] = set()
+        self._build_locks: dict[str, threading.Lock] = {}
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         if out_dir:
@@ -113,8 +115,14 @@ class Digests:
         for path in self.out_dir.glob("*.json.gz"):
             m = re.fullmatch(r"(\w+)-(\d+)\.json\.gz", path.name)
             if m and m.group(1) in self.verticals:
-                gz = path.read_bytes()
-                body = gzip.decompress(gz)
+                try:
+                    gz = path.read_bytes()
+                    body = gzip.decompress(gz)
+                    json.loads(body)
+                except (OSError, EOFError, ValueError):   # damaged (e.g. a crash mid-write): rebuild it instead
+                    self.log(f"digest {path.name} is damaged; it will be rebuilt")
+                    path.unlink(missing_ok=True)
+                    continue
                 self._cache[(m.group(1), int(m.group(2)))] = {
                     "gz": gz, "json": body, "etag": self._etag(body), "at": path.stat().st_mtime}
 
@@ -131,11 +139,24 @@ class Digests:
         if self.out_dir:  # also written to disk: survives restarts, and can be served by a CDN as static files
             for suffix, data in ((".json", body), (".json.gz", gz)):
                 path = self.out_dir / f"{key}-{window}{suffix}"
-                tmp = path.with_suffix(path.suffix + ".tmp")
-                tmp.write_bytes(data)
-                os.replace(tmp, path)
+                fd, tmp = tempfile.mkstemp(dir=self.out_dir, prefix=path.name + ".", suffix=".tmp")
+                try:
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(data)
+                    os.replace(tmp, path)
+                except BaseException:
+                    Path(tmp).unlink(missing_ok=True)
+                    raise
+
+    def _key_lock(self, key: str) -> threading.Lock:
+        with self._lock:
+            return self._build_locks.setdefault(key, threading.Lock())
 
     def build_now(self, key: str, windows: tuple[int, ...] = WINDOWS) -> None:
+        with self._key_lock(key):              # one build per vertical at a time (background or on demand)
+            self._build(key, windows)
+
+    def _build(self, key: str, windows: tuple[int, ...]) -> None:
         for w in windows:
             t0 = time.time()
             digest = self.builder(key, w)
@@ -148,9 +169,13 @@ class Digests:
         with self._lock:
             entry = self._cache.get((key, w))
         if entry is None:
-            self.build_now(key, (w,))
-            with self._lock:
-                entry = self._cache[(key, w)]
+            with self._key_lock(key):
+                with self._lock:
+                    entry = self._cache.get((key, w))
+                if entry is None:                 # not built by whoever held the lock
+                    self._build(key, (w,))
+                    with self._lock:
+                        entry = self._cache[(key, w)]
         return entry
 
     def data(self, key: str, hours: float) -> tuple[str, dict]:

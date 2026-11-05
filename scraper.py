@@ -115,6 +115,9 @@ class Scraper:
     def status(self) -> dict:
         with self._lock:
             run = self.state.get("run")
+            held = self.state.get("held_backfill")
+            if held and not self.running and not (run and run["status"] in UNFINISHED):
+                run = held                     # a stopped backfill waiting behind the scheduled refreshes
             return {
                 "state": ("stopping" if self._stop.is_set() else "running") if self.running else "idle",
                 "run": dict(run) if run else None,
@@ -141,17 +144,26 @@ class Scraper:
         with self._lock:
             if self.running:
                 return False, "a scrape is already running; stop it first"
-            prev = self.state.get("run")
-            if resume and prev and prev["status"] in UNFINISHED and prev["kind"] == kind \
-                    and (kind != "backfill" or prev.get("days") == days) \
-                    and set(verticals) <= set(prev["verticals"]):
-                run = prev
+            prev, held = self.state.get("run"), self.state.get("held_backfill")
+            cand = prev if prev and prev["status"] in UNFINISHED and prev["kind"] == kind else (
+                held if kind == "backfill" else None)
+            if resume and cand and (kind != "backfill" or cand.get("days") == days) \
+                    and set(verticals) <= set(cand["verticals"]):
+                run = cand
+                if cand is held:
+                    self.state.pop("held_backfill")
                 run.update(status="running", resumed_at=time.time(), trigger=trigger, error=None)
                 run["resumes"] = run.get("resumes", 0) + 1
             else:
                 if prev and prev["status"] in UNFINISHED:
-                    prev["status"] = "abandoned"
-                    self.state["last_run"] = prev
+                    if prev["kind"] == "backfill" and kind == "refresh":
+                        self.state["held_backfill"] = prev     # refreshes don't abandon a resumable backfill
+                    else:
+                        prev["status"] = "abandoned"
+                        self.state["last_run"] = prev
+                if kind == "backfill" and held and held is not prev:
+                    held["status"] = "abandoned"               # a new backfill replaces the held one
+                    self.state.pop("held_backfill", None)
                 run = {"id": f"{kind}-{int(time.time() * 1000)}", "kind": kind, "verticals": verticals,
                        "days": days, "status": "running", "trigger": trigger, "started_at": time.time(),
                        "finished_at": None, "total": 0, "done": 0, "failed": 0, "current": [], "error": None}

@@ -786,7 +786,7 @@ class Security:
     def token_ok(self, header: str | None) -> bool:
         if not self.api_token or not header or not header.startswith("Bearer "):
             return False
-        return hmac.compare_digest(header[7:].strip(), self.api_token)
+        return hmac.compare_digest(header[7:].strip().encode(), self.api_token.encode())
 
 
 def make_digests(stores: dict[str, Store], out_dir: Path | None = None, log=None) -> digests_mod.Digests:
@@ -805,9 +805,11 @@ def seed_groups(group_store: groups_mod.GroupStore, stores: dict[str, Store]) ->
         return 0
     for pos, v in enumerate(v for v in VERTICALS if v.key in stores):
         cfg = effective_settings(v, stores[v.key])
-        settings = {k: cfg[k] for k in groups_mod.SETTING_SPECS}
-        group_store.create(groups_mod.clean({"name": v.label, "verticals": [v.key], "position": pos,
-                                             "settings": settings}, None, list(stores)))
+        settings = {k: cfg[k] for k in groups_mod.SETTING_SPECS if k in cfg}
+        # Outlets marked "required" in the earlier design become this group's own setting.
+        required = {str(f["id"]): {"req": True} for f in stores[v.key].list_feeds() if f.get("required")}
+        group_store.create(groups_mod.clean({"name": v.label, "verticals": [v.key], "position": pos, "settings": settings,
+                                             "outlets": {v.key: required} if required else {}}, None, list(stores)))
     return len(stores)
 
 
@@ -1039,8 +1041,6 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                     cfg = groups_mod.clean(body, None, list(stores))
                 except ValueError as e:
                     raise HTTPError(400, str(e))
-                if "position" not in body:
-                    cfg["position"] = 1 + max((g["position"] for g in group_store.list()), default=-1)
                 return self._json({"group": group_store.get(group_store.create(cfg))}, 201)
             if store and rest == ["feeds"]:
                 url = str(body.get("url", "")).strip()
@@ -1054,6 +1054,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                     feed_id = store.add_feed(url)
                 except sqlite3.IntegrityError:
                     raise HTTPError(409, "That feed is already added")
+                group_store.forget_outlet(self._vertical_key(), feed_id)   # an id can be reused after a delete
                 store.save_fetch(feed_id, parsed, note, via)
                 return self._json({"feed": store.get_feed(feed_id)}, 201)
             if store and rest == ["phrases"]:
@@ -1087,15 +1088,13 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             rest, _, store = self._route()
             body = self._body()
             if len(rest) == 3 and rest[:2] == ["api", "groups"] and rest[2].isdigit():
-                current = group_store.get(int(rest[2]))
-                if current is None:
-                    raise HTTPError(404, "No such group")
                 try:
-                    cfg = groups_mod.clean(body, current, list(stores))
+                    group = group_store.change(int(rest[2]), body, list(stores))
                 except ValueError as e:
                     raise HTTPError(400, str(e))
-                group_store.update(int(rest[2]), cfg)
-                return self._json({"group": group_store.get(int(rest[2]))})
+                if group is None:
+                    raise HTTPError(404, "No such group")
+                return self._json({"group": group})
             if store and rest == ["settings"]:
                 if body.get("reset") is True:
                     store.reset_settings()
@@ -1137,13 +1136,15 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
         def _DELETE(self):
             rest, _, store = self._route()
             if len(rest) == 3 and rest[:2] == ["api", "groups"] and rest[2].isdigit():
-                if len(group_store.list()) <= 1:
-                    raise HTTPError(400, "Keep at least one group")
-                if group_store.delete(int(rest[2])):
-                    return self._json({"ok": True})
+                try:
+                    if group_store.delete(int(rest[2])):
+                        return self._json({"ok": True})
+                except ValueError as e:
+                    raise HTTPError(400, str(e))
                 raise HTTPError(404, "No such group")
             if store and len(rest) == 2 and rest[1].isdigit():
                 if rest[0] == "feeds" and store.delete_feed(int(rest[1])):
+                    group_store.forget_outlet(self._vertical_key(), int(rest[1]))
                     return self._json({"ok": True})
                 if rest[0] == "phrases" and store.delete_phrase(int(rest[1])):
                     return self._json({"ok": True})

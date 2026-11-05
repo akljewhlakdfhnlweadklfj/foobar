@@ -64,10 +64,11 @@ def _reserve_slot(wait: bool, deadline: float) -> None:
                 _next_slot = now + MIN_INTERVAL
                 return
             blocked = _blocked_until - now
-        if not wait and blocked > 0:
-            raise RateLimited(blocked)
-        if start > deadline:
+        if blocked > 0 and not wait:
+            raise RateLimited(blocked)          # in a 429 cooldown and the caller won't wait
+        if wait and start > deadline:
             raise RateLimited(start - now)
+        # Otherwise it's just pacing (a fraction of a second per request ahead): wait our turn.
         time.sleep(min(start - now, 5.0))
 
 

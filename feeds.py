@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import http.client
 import ipaddress
 import re
 import socket
@@ -85,7 +86,52 @@ class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_opener = urllib.request.build_opener(_CheckedRedirects)
+def _proxy_hosts() -> set[str]:
+    return {urlsplit(u if "//" in u else "//" + u).hostname or "" for u in urllib.request.getproxies().values()}
+
+
+def _guarded_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, *args, **kwargs):
+    """socket.create_connection that checks the address it actually connects to. check_url resolves the
+    name first, but a hostile DNS server could answer differently the second time (DNS rebinding), so
+    the connection itself is made to an address checked here. Proxies (their own address) are allowed."""
+    host, port = address[0], address[1]
+    if ALLOW_PRIVATE or host in _proxy_hosts():
+        return socket.create_connection(address, timeout, source_address, *args, **kwargs)
+    last = None
+    for family, _type, _proto, _name, sa in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        ip = ipaddress.ip_address(sa[0].split("%")[0])
+        if not ip.is_global or ip.is_multicast:
+            raise FeedError(f"Refusing to fetch {host}: it points to a private or local address ({ip})")
+        try:
+            return socket.create_connection((sa[0], port), timeout, source_address, *args, **kwargs)
+        except OSError as e:
+            last = e
+    raise last or OSError(f"can't connect to {host}")
+
+
+class _GuardedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _guarded_connection
+
+
+class _GuardedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _guarded_connection
+
+
+class _GuardedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_GuardedHTTPConnection, req)
+
+
+class _GuardedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_GuardedHTTPSConnection, req, context=self._context)
+
+
+_opener = urllib.request.build_opener(_CheckedRedirects, _GuardedHTTPHandler, _GuardedHTTPSHandler)
 
 
 def fetch(url: str, timeout: float = 20.0) -> bytes:

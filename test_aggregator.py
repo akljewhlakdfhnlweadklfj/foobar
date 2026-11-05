@@ -538,52 +538,89 @@ class GroupTests(unittest.TestCase):
 
 
 class SummarizerTests(unittest.TestCase):
-    """AI headlines with a fake Claude client."""
+    """AI headlines with a fake Claude client: headline = first title + " today"; a story whose titles
+    contain REFUSE makes the whole request refused; a 400 can be raised for the fallback form."""
 
-    def fake(self, refuse=False, reject_fallbacks=False):
+    def fake(self, bad_request=None, shuffle=False):
+        import re as _re
         import types
         calls = []
 
         def create(**kw):
             calls.append(kw)
-            if reject_fallbacks and "fallbacks" in kw:
-                raise type("BadRequestError", (Exception,), {})("fallbacks not supported")
-            n = kw["messages"][0]["content"].count("[")
-            body = {"headlines": [{"n": i, "headline": f"  Short   headline {i} "} for i in range(1, n + 1)]}
-            return types.SimpleNamespace(stop_reason="refusal" if refuse else "end_turn",
-                                         content=[types.SimpleNamespace(type="text", text=json.dumps(body))])
+            if bad_request and "fallbacks" in kw:
+                raise type("BadRequestError", (Exception,), {})(bad_request)
+            text = kw["messages"][0]["content"]
+            if "REFUSE" in text:
+                return types.SimpleNamespace(stop_reason="refusal", content=[])
+            stories = _re.findall(r"<story n=(\d+)>\n- ([^\n]*)", text)
+            out = [{"n": int(n) if not shuffle else len(stories) + 1 - int(n), "headline": f"  {t}   today "} for n, t in stories]
+            return types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text=json.dumps({"headlines": out}))])
         msgs = types.SimpleNamespace(create=create)
         return types.SimpleNamespace(messages=msgs, beta=types.SimpleNamespace(messages=msgs)), calls
 
-    def test_writes_caches_and_rewrites_when_story_grows(self):
+    def test_writes_caches_and_matches_by_most_articles(self):
         import ai
         client, calls = self.fake()
-        s = ai.Summarizer(Path(tempfile.mkdtemp()) / "ai.db", model="m", client=client)
-        self.assertIsNone(s.lookup(["a", "b"], 2))
+        path = Path(tempfile.mkdtemp()) / "ai.db"
+        s = ai.Summarizer(path, model="m", client=client)
+        self.assertIsNone(s.lookup(["a", "b"]))
         s.want(["a", "b"], ["Valve announces Steam Machine", "Steam Machine revealed"], 2, 200.0)
-        s.want(["c", "d"], ["Nintendo Direct Thursday", "Direct dated"], 2, 100.0)   # older: written second
+        s.want(["c", "d", "e"], ["Nintendo Direct dated", "Direct on Thursday"], 3, 100.0)
         self.assertFalse(s.run_once())
-        self.assertEqual(s.lookup(["a", "b"], 2), "Short headline 1")
-        self.assertEqual(s.lookup(["b", "z"], 3), "Short headline 1")      # same story, an outlet joined
-        self.assertIsNone(s.lookup(["a", "b"], 5))                          # grew a lot: write again
+        self.assertEqual(s.lookup(["a", "b"]), "Valve announces Steam Machine today")
+        self.assertEqual(s.lookup(["a", "b", "z"]), "Valve announces Steam Machine today")   # an outlet joined
+        self.assertIsNone(s.lookup(["a", "x", "y"]))                  # shares one article: a different story
+        self.assertIsNone(s.lookup(["a", "b", "x", "y", "w"]))        # mostly new articles: write again
+        self.assertIsNone(s.lookup(["c", "q"]))                       # only 1 of the 3 it was written from
         self.assertEqual(calls[0]["fallbacks"], "default")
         self.assertEqual(calls[0]["output_config"]["effort"], "low")
         self.assertIn("- Steam Machine revealed", calls[0]["messages"][0]["content"])
-        again = ai.Summarizer(Path(s.path), client=client)                  # kept on disk
-        self.assertEqual(again.lookup(["c"], 2), "Short headline 2")
+        again = ai.Summarizer(path, client=client)                   # kept on disk, as is today's count
+        self.assertEqual(again.lookup(["c", "d"]), "Nintendo Direct dated today")
+        self.assertEqual(again.status()["written_today"], 2)
 
-    def test_refusal_fallback_rejection_and_missing_key(self):
+    def test_a_declined_story_doesnt_block_its_batch(self):
         import ai
-        client, _ = self.fake(refuse=True)
+        client, calls = self.fake()
         s = ai.Summarizer(None, client=client)
-        s.want(["a"], ["x"], 2, 0); s.run_once()
-        self.assertIsNone(s.lookup(["a"], 2))
-        client, calls = self.fake(reject_fallbacks=True)
+        for i in range(5):
+            s.want([f"k{i}"], [f"Story number {i} REFUSE" if i == 3 else f"Story number {i}"], 2, float(i))
+        s.run_once()
+        self.assertEqual([s.lookup([f"k{i}"]) is not None for i in range(5)], [True, True, True, False, True])
+        n_calls = len(calls)
+        s.want(["k3"], ["Story number 3 REFUSE"], 2, 3.0)            # not asked again for a while
+        self.assertFalse(s.run_once())
+        self.assertEqual(len(calls), n_calls)
+
+    def test_bad_replies_cap_and_fallback_handling(self):
+        import ai
+        client, _ = self.fake(shuffle=True)                         # headlines numbered for the wrong stories
         s = ai.Summarizer(None, client=client)
-        s.want(["a"], ["x"], 2, 0); s.run_once()
-        self.assertEqual(s.lookup(["a"], 2), "Short headline 1")
+        s.want(["a"], ["Valve announces Steam Machine"], 2, 2.0)
+        s.want(["b"], ["Nintendo Direct dated"], 2, 1.0)
+        s.run_once()
+        self.assertEqual((s.lookup(["a"]), s.lookup(["b"])), (None, None))
+        client, calls = self.fake(bad_request="Unknown parameter: fallbacks")
+        s = ai.Summarizer(None, client=client)
+        s.want(["a"], ["Valve announces Steam Machine"], 2, 0); s.run_once()
+        self.assertEqual(s.lookup(["a"]), "Valve announces Steam Machine today")
         self.assertEqual(["fallbacks" in c for c in calls], [True, False])
-        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "", "ANTHROPIC_AUTH_TOKEN": ""}):
+        client, calls = self.fake(bad_request="Your credit balance is too low")
+        s = ai.Summarizer(None, client=client)
+        s.want(["a"], ["Valve announces Steam Machine"], 2, 0); s.run_once()
+        self.assertTrue(s._use_fallbacks)                            # an unrelated 400 doesn't turn them off
+        self.assertIn("credit", s.status()["reason"])
+        client, _ = self.fake()
+        with mock.patch.object(ai, "MAX_PER_DAY", 3):
+            s = ai.Summarizer(None, client=client)
+            for i in range(5):
+                s.want([f"k{i}"], [f"Story number {i}"], 2, float(i))
+            s.run_once(); s.run_once()
+            self.assertEqual(sum(s.lookup([f"k{i}"]) is not None for i in range(5)), 3)
+            self.assertIn("daily limit", s.status()["reason"])
+        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "", "ANTHROPIC_AUTH_TOKEN": ""}), \
+             mock.patch.object(ai.Path, "home", lambda: Path(tempfile.mkdtemp())):
             st = ai.Summarizer(None).status()
         self.assertFalse(st["available"])
         self.assertTrue(st["reason"])
@@ -713,6 +750,31 @@ class ScrapeControlTests(HttpTestCase):
         self.assertEqual(sc2.status()["run"]["status"], "completed")
         self.assertEqual(len(self.fetched), 20 - len(already))                 # only the unfinished feeds
         self.assertGreater(len(already), 0)
+
+    def test_refresh_keeps_a_stopped_backfill_resumable(self):
+        sc = self.make()
+        backfilled = []
+        def history(url, since=0, **kw):
+            backfilled.append(url); time.sleep(0.2)
+            return iter(())
+        with mock.patch("feedly.history", history):
+            sc.start("backfill", ["games"], 3)
+            time.sleep(0.3)
+            sc.stop(wait=True)
+            bf = sc.status()["run"]
+            self.assertEqual((bf["kind"], bf["status"]), ("backfill", "stopped"))
+            sc.start("refresh", ["games"])                      # e.g. the scheduler
+            self.wait_idle(sc)
+            st = sc.status()
+            self.assertEqual((st["run"]["id"], st["resumable"]), (bf["id"], True))
+            n = len(backfilled)
+            sc.start("backfill", ["games"], 3)                  # resumes it
+            self.assertEqual(sc.status()["run"]["id"], bf["id"])
+            self.wait_idle(sc)
+            self.assertEqual(sc.status()["run"]["status"], "completed")
+            self.assertEqual(len(set(backfilled)), 20)
+            self.assertEqual(len(backfilled), 20)                # nothing loaded twice
+            self.assertGreater(n, 0)
 
     def test_schedule_toggle_persists(self):
         sc = self.make()
@@ -1017,6 +1079,15 @@ class ParserAndPagingTests(unittest.TestCase):
         self.assertEqual(len(st.items_since(0, include_disabled=True)), 1)
         st.add_feed("https://www.reddit.com/r/x/.rss")      # added by hand later: kept
         self.assertEqual(len(app.Store(db).list_feeds()), 2)
+
+    def test_dns_rebinding_is_refused_at_connect(self):
+        import socket as _socket
+        answers = iter([[(2, 1, 6, "", ("93.184.216.34", 443))], [(2, 1, 6, "", ("127.0.0.1", 80))]])
+        with mock.patch.object(feeds.urllib.request, "getproxies", lambda: {}), \
+             mock.patch.object(_socket, "getaddrinfo", lambda *a, **k: next(answers)):
+            with self.assertRaises(feeds.FeedError) as cm:
+                feeds.fetch("http://rebind.example/rss")
+        self.assertIn("private or local", str(cm.exception))
 
     def test_google_news_suffix_removed(self):
         rss = b"""<rss><channel><item><title>Democrats win the Senate - Reuters</title><link>https://x/1</link></item>
