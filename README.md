@@ -63,8 +63,8 @@ The app has two sections (top left):
     (verbs and adjectives like "delayed", "Black" are skipped via a word list and word endings,
     since there's no part-of-speech tagger). Shown in the accent colour; click it to show only
     stories mentioning it.
-  - **Headline**: the shortest one among the story's outlets (4+ words; labelled pieces like
-    "Opinion |" or "WATCH:" are skipped when possible), or, in groups with **AI summary** on, one
+  - **Headline**: the shortest one among the story's outlets (labelled pieces like "Opinion |" or
+    "WATCH:" are skipped when possible), or, in groups with **AI summary** on, one
     written by Claude from all the outlets' headlines (marked "AI").
 - **Last seen**: the page remembers when it first showed you each story. A story stays in the list
   for an hour after that (so coming back within the hour shows the same items), then it's hidden and

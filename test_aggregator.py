@@ -146,7 +146,7 @@ class WeightTests(unittest.TestCase):
             Item(id=4, feed_id=3, title="Studio X is closing", weight=3),
         ])
         self.assertEqual(story.score, 9)
-        self.assertEqual(matching.pick_headline(story.items).id, 4)                 # shortest full headline
+        self.assertEqual(matching.pick_headline(story.items).id, 4)                 # shortest headline
 
     def test_seed_weights_parsed_and_ui_edits_kept(self):
         tmp = Path(tempfile.mkdtemp())
@@ -798,15 +798,18 @@ class SeedCacheTests(unittest.TestCase):
 
 
 class HeadlineAndImageTests(unittest.TestCase):
-    def test_shortest_full_headline_is_used(self):
+    def test_shortest_unlabelled_headline_is_used(self):
         story = matching.Story(items=[
             Item(id=1, feed_id=1, title="Review: The Legend of Zelda: Ocarina of Time Remake - One of the Best", weight=5),
-            Item(id=2, feed_id=2, title="Ocarina remake reviewed", weight=2),          # 3 words: too short
+            Item(id=2, feed_id=2, title="Ocarina remake reviewed", weight=2),          # short headlines count too
             Item(id=3, feed_id=3, title="Zelda: Ocarina of Time remake review roundup", weight=3),
             Item(id=4, feed_id=4, title="Ocarina of Time remake: our review", weight=1, image="https://x/i.jpg"),
         ])
-        self.assertEqual(matching.pick_headline(story.items).id, 4)
-        self.assertEqual(matching.pick_headline([i for i in story.items if i.weight >= 2]).id, 3)   # outlet 4 doesn't count
+        self.assertEqual(matching.pick_headline(story.items).id, 2)
+        self.assertEqual(matching.pick_headline([i for i in story.items if i.weight != 2]).id, 4)   # "Review: ..." is labelled
+        self.assertEqual(matching.pick_headline([i for i in story.items if i.weight >= 3]).id, 3)
+        self.assertEqual(matching.pick_headline([Item(id=9, feed_id=9, title="R.I.P. Patrick Stewart"),
+                                                 Item(id=8, feed_id=8, title="Patrick Stewart dies at 86")]).id, 9)
         labelled = matching.Story(items=[Item(id=1, feed_id=1, title="Opinion | The end of aid to Israel?"),
                                          Item(id=2, feed_id=2, title="US will stop $4B in aid to Israel, Trump says")])
         self.assertEqual(matching.pick_headline(labelled.items).id, 2)

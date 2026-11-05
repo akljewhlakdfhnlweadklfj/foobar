@@ -20,6 +20,7 @@ Tuned with eval_matching.py against Overworld's human-curated story groups.
 
 from __future__ import annotations
 
+import bisect
 import heapq
 import math
 import re
@@ -169,17 +170,11 @@ class _UnionFind:
             self.parent[rb] = ra
 
 
-def _weighted_cosine(idf: dict[str, float], a: frozenset[str], b: frozenset[str]) -> float:
-    """Cosine similarity of IDF-weighted binary token vectors."""
-    return sum(idf[t] ** 2 for t in a & b) / math.sqrt(sum(idf[t] ** 2 for t in a) * sum(idf[t] ** 2 for t in b))
-
-
 # Chosen with two evaluations against Overworld's curated story groups:
 # - eval_matching.py (titles only, 1,183 stories): cosine + average linkage gave F1 0.82 vs 0.36 for
 #   the original jaccard + single linkage.
 # - eval_realistic.py (14 days of full outlet feeds as distractors): title + the description's
 #   first sentence at 0.12 gave F1 0.93 (precision 1.00) vs 0.87 for titles alone at 0.15.
-SIMILARITY = _weighted_cosine
 DEFAULT_THRESHOLD = 0.12
 # A story covers one news cycle: its first and last headline are at most this far apart. Similar
 # headlines further apart (next month's Nintendo Direct, another weekend's box office) are separate stories.
@@ -220,8 +215,15 @@ def item_text(it: Item, mode: str | None = None) -> str:
     return it.title + " " + it.description
 
 
-def lexical_similarities(items: list[Item], min_shared: int = 2) -> dict[tuple[int, int], float]:
-    """Sparse pairwise similarity {(i, j): sim} (i < j) for items sharing >= min_shared tokens."""
+def lexical_similarities(items: list[Item], min_shared: int = 2,
+                         max_span_hours: float | None = MAX_SPAN_HOURS) -> dict[tuple[int, int], float]:
+    """Sparse pairwise similarity {(i, j): sim} (i < j): IDF-weighted cosine of token sets, for items
+    from different feeds sharing >= min_shared tokens and published within max_span_hours of each
+    other (None: any time apart).
+
+    Items are swept in time order through an inverted index whose postings are trimmed to the span,
+    so pairs further apart are never generated (a 30-day window costs about as much per day as a
+    2-day one); shared IDF weight is summed while walking the postings, with norms precomputed."""
     for it in items:
         if not it.tokens:
             it.tokens = tokenize(item_text(it))
@@ -233,24 +235,34 @@ def lexical_similarities(items: list[Item], min_shared: int = 2) -> dict[tuple[i
     for it in items:
         for t in it.tokens:
             df[t] += 1
-    idf = {t: math.log((n + 1) / (c + 0.5)) for t, c in df.items()}
+    w2 = {t: math.log((n + 1) / (c + 0.5)) ** 2 for t, c in df.items()}     # squared IDF
+    norm = [math.sqrt(sum(w2[t] for t in it.tokens)) for it in items]
 
-    # Inverted index so we only compare items that share at least one token.
-    index: dict[str, list[int]] = defaultdict(list)
-    for i, it in enumerate(items):
-        for t in it.tokens:
-            index[t].append(i)
-
+    span = math.inf if max_span_hours is None else max_span_hours * 3600
+    order = sorted(range(n), key=lambda i: items[i].published)
+    pub = [items[i].published for i in order]
+    index: dict[str, list[int]] = defaultdict(list)     # token -> positions in `order`, oldest first
     sims: dict[tuple[int, int], float] = {}
-    for i, a in enumerate(items):
-        shared_counts: dict[int, int] = defaultdict(int)
+    for pos, i in enumerate(order):
+        a = items[i]
+        cut = pub[pos] - span
+        acc: dict[int, float] = {}
+        cnt: dict[int, int] = {}
         for t in a.tokens:
-            for j in index[t]:
-                if j > i:
-                    shared_counts[j] += 1
-        for j, shared in shared_counts.items():
-            if shared >= min_shared and items[j].feed_id != a.feed_id:
-                sims[(i, j)] = SIMILARITY(idf, a.tokens, items[j].tokens)
+            postings = index[t]
+            if postings and pub[postings[0]] < cut:              # drop postings older than the span
+                del postings[:bisect.bisect_left(postings, cut, key=lambda q: pub[q])]
+            wt = w2[t]
+            for q in postings:
+                acc[q] = acc.get(q, 0.0) + wt
+                cnt[q] = cnt.get(q, 0) + 1
+            postings.append(pos)
+        if not norm[i]:
+            continue
+        for q, c in cnt.items():
+            j = order[q]
+            if c >= min_shared and items[j].feed_id != a.feed_id and norm[j]:
+                sims[(i, j) if i < j else (j, i)] = acc[q] / (norm[i] * norm[j])
     return sims
 
 
@@ -269,7 +281,7 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
     """
     n = len(items)
     span = None if max_span_hours is None else max_span_hours * 3600
-    if span is not None:
+    if span is not None and any(abs(items[i].published - items[j].published) > span for i, j in sims):
         sims = {(i, j): s for (i, j), s in sims.items() if abs(items[i].published - items[j].published) <= span}
     if linkage == "single":
         uf = _UnionFind(n)
@@ -307,7 +319,7 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
     for a in range(n):
         for b, total in sums[a].items():
             if a < b:
-                avg = average(a, b)
+                avg = total if items[a].feed_id != items[b].feed_id else 0.0   # single items: the pair's similarity
                 if avg >= threshold and fits(a, b):
                     heap.append((-avg, a, b, 0, 0))
     heapq.heapify(heap)
@@ -337,7 +349,9 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
             sums[c].pop(b, None)
         sums[b] = {}
         version[a] += 1
-        for c in sums[a]:
+        for c, total in sums[a].items():
+            if total < threshold:
+                continue                       # average = total / (cross pairs >= 1) can't reach it
             avg = average(a, c)
             if avg >= threshold and fits(a, c):
                 heapq.heappush(heap, (-avg, min(a, c), max(a, c),
@@ -351,10 +365,9 @@ def cluster(items: list[Item], threshold: float = DEFAULT_THRESHOLD, min_shared:
     and a story's headlines are published within max_span_hours of each other."""
     if not items:
         return []
-    return agglomerate(items, lexical_similarities(items, min_shared), threshold, linkage, max_span_hours)
+    return agglomerate(items, lexical_similarities(items, min_shared, max_span_hours), threshold, linkage, max_span_hours)
 
 
-MIN_HEADLINE_WORDS = 4
 # Headlines labelled as a format rather than the news itself ("Opinion |", "WATCH:", "Review:").
 LABELLED = re.compile(r"^\s*(opinion|op-ed|watch|video|videos|listen|podcast|live|live updates|analysis|editorial|"
                       r"explainer|review|reviews|preview|quiz|letters?|photos?|in pictures|the latest|perspective|"
@@ -362,9 +375,8 @@ LABELLED = re.compile(r"^\s*(opinion|op-ed|watch|video|videos|listen|podcast|liv
 
 
 def pick_headline(items: list, title=lambda x: x.title, weight=lambda x: x.weight, published=lambda x: x.published):
-    """The headline to show: the shortest one with at least MIN_HEADLINE_WORDS words that isn't a
-    labelled format piece (each rule dropped when nothing passes it); ties go to the higher-weighted
-    outlet, then the earlier one. Used per outlet (digest.py) and per story (groups.py)."""
-    full = [x for x in items if len(title(x).split()) >= MIN_HEADLINE_WORDS] or items
-    plain = [x for x in full if not LABELLED.match(title(x))] or full
+    """The headline to show: the shortest one that isn't a labelled format piece (any headline when all
+    are); ties go to the higher-weighted outlet, then the earlier one. Used per outlet (digest.py) and
+    per story (groups.py)."""
+    plain = [x for x in items if not LABELLED.match(title(x))] or items
     return min(plain, key=lambda x: (len(title(x)), -weight(x), published(x)))
