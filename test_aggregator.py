@@ -539,6 +539,14 @@ class SettingsApiTests(HttpTestCase):
         self.assertEqual(len(self.call("GET", "/api/games/stories?min_feeds=9")[1]["stories"]), 0)  # query wins
         for bad in ({"min_feeds": 0}, {"min_feeds": "3"}, {"threshold": 2}, {"only_watched": 1}, {"nope": 1}):
             self.assertEqual(self.call("PATCH", "/api/games/settings", bad)[0], 400, bad)
+        # Percent of enabled outlets: 3 enabled, 50% -> 2 needed (rounded up).
+        d = self.call("PATCH", "/api/games/settings", {"min_feeds_mode": "percent", "min_feeds_percent": 50})[1]["settings"]
+        self.assertEqual((d["min_feeds_effective"], d["enabled_outlets"]), (2, 3))
+        self.assertEqual(len(self.call("GET", "/api/games/stories")[1]["stories"]), 1)
+        self.store.update_feed(3, enabled=False)                                # 2 enabled -> 50% = 1
+        self.assertEqual(self.call("GET", "/api/games/settings")[1]["settings"]["min_feeds_effective"], 1)
+        self.assertEqual(self.call("PATCH", "/api/games/settings", {"min_feeds_mode": "share"})[0], 400)
+        self.assertEqual(self.call("GET", "/api/games/stories?min_feeds=9")[1]["settings"]["min_feeds_effective"], 9)
         self.assertEqual(self.call("PATCH", "/api/games/settings", {"reset": True})[1]["settings"]["min_feeds"], 4)
         self.assertEqual(self.store.get_settings(), {})
 

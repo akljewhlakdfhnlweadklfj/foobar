@@ -71,8 +71,9 @@ each story) or a single vertical, and sort by **Top** (score) or **Latest**.
   Watched phrases are highlighted.
 
 **Settings**: one sub-tab per vertical, plus **Scraping**.
-- **Which stories show** (saved on the server, per vertical): reported by at least N outlets, time
-  window, only count outlets weighted at least X (lower-weighted outlets still help group headlines
+- **Which stories show** (saved on the server, per vertical): reported by at least N outlets, or at
+  least a percentage of the vertical's enabled outlets (rounded up, minimum 1; it follows outlets
+  being switched on/off), time window, only count outlets weighted at least X (lower-weighted outlets still help group headlines
   but don't count toward N or the score), minimum score, match strictness, and, when outlets are
   marked required, whether stories need any or all of them. Changes save automatically.
 - **Watched phrases**: add a phrase and a bonus (0–100). Stories mentioning it in any outlet's title
@@ -320,7 +321,7 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 | PATCH | `/api/<v>/phrases/{id}` `{"bonus": 10}` | change its bonus |
 | DELETE | `/api/<v>/phrases/{id}` | stop watching it |
 | GET | `/api/<v>/settings` | the vertical's story settings (and defaults) |
-| PATCH | `/api/<v>/settings` `{"min_feeds": 3, "hours": 72}` / `{"reset": true}` | change / reset them |
+| PATCH | `/api/<v>/settings` `{"min_feeds": 3, "hours": 72}`, `{"min_feeds_mode": "percent", "min_feeds_percent": 10}` / `{"reset": true}` | change / reset them (responses include `min_feeds_effective`) |
 | GET | `/api/<v>/stories` | stories ranked by score, using the saved settings; any of `min_feeds`, `hours`, `threshold`, `min_score`, `min_weight`, `only_watched`, `watched_any`, `require_all` as query parameters override them |
 | | `/api/scrape/...` | see [Scraping](#scraping-api-scheduling-and-resume) |
 

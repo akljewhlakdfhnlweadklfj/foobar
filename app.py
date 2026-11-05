@@ -65,6 +65,8 @@ VERTICALS_BY_KEY = {v.key: v for v in VERTICALS}
 # name: (type, min, max). Stored per vertical (store.settings); query parameters override them.
 SETTING_SPECS = {
     "min_feeds": (int, 1, 100),
+    "min_feeds_mode": (("count", "percent"), None, None),   # absolute count, or % of enabled outlets
+    "min_feeds_percent": (float, 1, 100),
     "hours": (float, 1, 24 * RETENTION_DAYS),
     "threshold": (float, 0.02, 1.0),
     "min_score": (float, 0, 10_000),
@@ -76,7 +78,7 @@ SETTING_SPECS = {
 
 
 def default_settings(v: Vertical) -> dict:
-    return {"min_feeds": v.default_min_feeds, "hours": 48.0, "threshold": matching.DEFAULT_THRESHOLD,
+    return {"min_feeds": v.default_min_feeds, "min_feeds_mode": "count", "min_feeds_percent": 10.0, "hours": 48.0, "threshold": matching.DEFAULT_THRESHOLD,
             "min_score": 0.0, "min_weight": 0.0, "only_watched": False, "watched_any": False, "require_all": False}
 
 
@@ -84,6 +86,10 @@ def coerce_setting(name: str, value, strict: bool = True):
     """Validate one setting. strict=True (JSON bodies) rejects wrong types; strict=False (query
     strings) parses text and clamps numbers into range."""
     typ, lo, hi = SETTING_SPECS[name]
+    if isinstance(typ, tuple):                    # one of a fixed set of values
+        if value in typ:
+            return value
+        raise HTTPError(400, f"{name} must be one of: {', '.join(typ)}")
     if typ is bool:
         if isinstance(value, bool):
             return value
@@ -105,8 +111,18 @@ def coerce_setting(name: str, value, strict: bool = True):
     return int(num) if typ is int else num
 
 
+def min_outlets(cfg: dict, store: Store) -> tuple[int, int]:
+    """(the "reported by at least" number in effect, number of enabled outlets). In percent mode it's
+    that share of the vertical's enabled outlets, rounded up, and at least 1."""
+    enabled = sum(1 for f in store.list_feeds() if f["enabled"])
+    if cfg.get("min_feeds_mode") == "percent":
+        return max(1, math.ceil(cfg["min_feeds_percent"] / 100 * enabled)), enabled
+    return cfg["min_feeds"], enabled
+
+
 def effective_settings(v: Vertical, store: Store, overrides: dict | None = None) -> dict:
-    """Defaults, then the vertical's saved settings, then any query-string overrides."""
+    """Defaults, then the vertical's saved settings, then any query-string overrides.
+    Also reports min_feeds_effective / enabled_outlets (see min_outlets)."""
     out = default_settings(v)
     for k, val in store.get_settings().items():
         if k in SETTING_SPECS:
@@ -117,6 +133,9 @@ def effective_settings(v: Vertical, store: Store, overrides: dict | None = None)
     for k, val in (overrides or {}).items():
         if k in SETTING_SPECS:
             out[k] = coerce_setting(k, val, strict=False)
+    if overrides and "min_feeds" in overrides and "min_feeds_mode" not in overrides:
+        out["min_feeds_mode"] = "count"           # an explicit ?min_feeds= means an absolute number
+    out["min_feeds_effective"], out["enabled_outlets"] = min_outlets(out, store)
     return out
 
 
@@ -882,7 +901,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             elif store and rest == ["stories"]:
                 v = VERTICALS_BY_KEY[self._vertical_key()]
                 cfg = effective_settings(v, store, {k: val for k, val in q.items() if val != ""})
-                res = build_stories(store, cfg["min_feeds"], cfg["hours"], cfg["threshold"], cfg["min_score"],
+                res = build_stories(store, cfg["min_feeds_effective"], cfg["hours"], cfg["threshold"], cfg["min_score"],
                                     only_watched=cfg["only_watched"], watched_any_coverage=cfg["watched_any"],
                                     require_all=cfg["require_all"], min_weight=cfg["min_weight"])
                 self._json({**res, "settings": cfg})

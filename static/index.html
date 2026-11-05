@@ -233,10 +233,17 @@
         <h2>Which stories show <span class="saved" id="saved" hidden>Saved</span></h2>
         <p class="intro">Used by this vertical's Stories tab and by “All”.</p>
         <div class="fields">
-          <label class="field">Reported by at least
-            <input type="number" id="s_min_feeds" min="1" max="100" step="1">
-            <span class="hint">outlets</span>
-          </label>
+          <div class="field">
+            <label for="s_min_feeds">Reported by at least</label>
+            <div style="display:flex;gap:6px">
+              <input type="number" id="s_min_feeds" min="1" max="100" step="1" aria-label="Number of outlets">
+              <input type="number" id="s_min_feeds_percent" min="1" max="100" step="1" aria-label="Percent of enabled outlets" hidden>
+              <select id="s_min_feeds_mode" aria-label="Unit" style="width:auto">
+                <option value="count">outlets</option><option value="percent">% of enabled outlets</option>
+              </select>
+            </div>
+            <span class="hint" id="min_feeds_hint"></span>
+          </div>
           <label class="field">Time window
             <select id="s_hours">
               <option value="6">6 hours</option><option value="12">12 hours</option><option value="24">24 hours</option>
@@ -518,7 +525,11 @@ async function loadStories(force = false) {
   else stories.sort((a, b) => b.score - a.score || b.coverage - a.coverage || b.latest - a.latest);
   summaryBase = sub === "all"
     ? `${stories.length} stories across ${keys.length} verticals · ${scanned} headlines scanned · each vertical uses its own settings`
-    : `${stories.length} stories reported by ≥ ${results[0].settings.min_feeds} outlet${results[0].settings.min_feeds === 1 ? "" : "s"} in the last ${windowText(results[0].settings.hours)} · ${scanned} headlines scanned`;
+    : (() => {
+        const c = results[0].settings, n = c.min_feeds_effective ?? c.min_feeds;
+        const how = c.min_feeds_mode === "percent" ? ` (${fmt(c.min_feeds_percent)}% of ${c.enabled_outlets})` : "";
+        return `${stories.length} stories reported by ≥ ${n} outlet${n === 1 ? "" : "s"}${how} in the last ${windowText(c.hours)} · ${scanned} headlines scanned`;
+      })();
   const json = JSON.stringify(stories);
   if (!force && json === lastStoriesJson) return;
   lastStoriesJson = json;
@@ -584,7 +595,8 @@ function renderStoryList(allStories, sub, force) {
 }
 
 // ---------- Settings: one vertical ----------
-const S_FIELDS = ["min_feeds", "hours", "threshold", "min_score", "min_weight", "only_watched", "watched_any", "require_all"];
+const S_FIELDS = ["min_feeds", "min_feeds_mode", "min_feeds_percent", "hours", "threshold", "min_score", "min_weight",
+                  "only_watched", "watched_any", "require_all"];
 const S_BOOL = new Set(["only_watched", "watched_any"]);
 let V = null, vSeq = 0, lastFeedsJson = "";
 
@@ -594,17 +606,24 @@ function showSettings(cfg) {
     if (el === document.activeElement && k !== "threshold") return;  // don't fight the user's typing
     if (S_BOOL.has(k)) el.checked = !!cfg[k];
     else if (k === "require_all") el.value = String(!!cfg[k]);
+    else if (k === "min_feeds_mode") el.value = cfg[k];
     else if (k === "hours") {
       if (![...el.options].some((o) => Number(o.value) === cfg.hours)) el.add(new Option(`${fmt(cfg.hours)} hours`, cfg.hours));
       el.value = String(cfg.hours);
     } else el.value = fmt(cfg[k]);
   });
   $("threshold_out").textContent = Number(cfg.threshold).toFixed(2);
+  const pct = cfg.min_feeds_mode === "percent";
+  $("s_min_feeds").hidden = pct; $("s_min_feeds_percent").hidden = !pct;
+  $("min_feeds_hint").textContent = pct
+    ? `= ${cfg.min_feeds_effective} of ${cfg.enabled_outlets} enabled outlets (rounded up)`
+    : `of ${cfg.enabled_outlets} enabled outlets`;
 }
 function readSetting(k) {
   const el = $("s_" + k);
   if (S_BOOL.has(k)) return el.checked;
   if (k === "require_all") return el.value === "true";
+  if (k === "min_feeds_mode") return el.value;
   return el.value === "" ? NaN : Number(el.value);
 }
 const pending = {};
@@ -626,6 +645,10 @@ function queueSave(k) {
     } catch (e) { if (v === V) { $("settings_msg").className = "msg err"; $("settings_msg").textContent = e.message; } }
   }, 400);
 }
+$("s_min_feeds_mode").addEventListener("change", (e) => {
+  const pct = e.target.value === "percent";
+  $("s_min_feeds").hidden = pct; $("s_min_feeds_percent").hidden = !pct;
+});
 S_FIELDS.forEach((k) => {
   const el = $("s_" + k);
   el.addEventListener(S_BOOL.has(k) || el.tagName === "SELECT" ? "change" : "input", () => {
@@ -748,10 +771,13 @@ async function loadFeeds(force = false) {
     lastFeedsJson = json; applySearch();
   }
 }
+async function refreshSettingsHint(v) {
+  try { const d = await api(`/api/${v}/settings`); if (v === V) showSettings(d.settings); } catch {}
+}
 async function feedChange(v, id, body, what) {
   try { await patch(`/api/${v}/feeds/${id}`, body); }
   catch (err) { $("add_msg").className = "msg err"; $("add_msg").textContent = `Couldn't change the ${what}: ${err.message}`; }
-  if (v === V) loadFeeds(true);
+  if (v === V) { loadFeeds(true); refreshSettingsHint(v); }
 }
 $("feeds").addEventListener("change", (e) => {
   const t = e.target, { v } = t.dataset; if (!v) return;
@@ -774,7 +800,7 @@ $("feeds").addEventListener("click", async (e) => {
 async function setAll(enabled) {
   const v = V;
   try { await patch(`/api/${v}/feeds`, { enabled }); } catch (err) { $("add_msg").className = "msg err"; $("add_msg").textContent = err.message; }
-  if (v === V) loadFeeds(true);
+  if (v === V) { loadFeeds(true); refreshSettingsHint(v); }
 }
 $("all_on").addEventListener("click", () => setAll(true));
 $("all_off").addEventListener("click", () => setAll(false));

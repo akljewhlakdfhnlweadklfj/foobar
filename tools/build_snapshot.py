@@ -59,7 +59,7 @@ SHIM = r"""
         }
         if (c.only_watched && !s.watched.length) return false;
         if (s.watched.length && c.watched_any) return true;
-        return s.coverage >= c.min_feeds && s.score >= c.min_score;
+        return s.coverage >= (c.min_feeds_effective ?? c.min_feeds) && s.score >= c.min_score;
       });
       return reply({ stories, items_considered: SNAP.items[v], settings: c, terms: SNAP.terms[v] });
     }
@@ -99,9 +99,9 @@ def build(data_dir: Path, out: Path) -> dict:
         snap["settings"][v.key] = cfg
         # Stories the viewer may show (the shim applies the saved filters); single-outlet stories are only
         # kept when they're watched or the vertical's minimum is 1, to keep the page small.
-        res = app.build_stories(st, min(2, cfg["min_feeds"]), cfg["hours"], cfg["threshold"], 0, watched_any_coverage=True)
+        res = app.build_stories(st, min(2, cfg["min_feeds_effective"]), cfg["hours"], cfg["threshold"], 0, watched_any_coverage=True)
         snap["stories"][v.key] = res["stories"]
-        shown = app.build_stories(st, cfg["min_feeds"], cfg["hours"], cfg["threshold"], cfg["min_score"],
+        shown = app.build_stories(st, cfg["min_feeds_effective"], cfg["hours"], cfg["threshold"], cfg["min_score"],
                                   only_watched=cfg["only_watched"], watched_any_coverage=cfg["watched_any"],
                                   require_all=cfg["require_all"], min_weight=cfg["min_weight"])
         snap["terms"][v.key] = shown["terms"]  # word cloud for the stories the viewer shows
