@@ -25,6 +25,27 @@ class MatchingTests(unittest.TestCase):
         stories = matching.cluster(items(rows), **kw)
         return sorted((sorted(i.title for i in s.items) for s in stories), key=len, reverse=True)
 
+    def test_stories_span_at_most_24_hours(self):
+        H = 3600
+        rows = [(1, "Nintendo Direct announced for Thursday", NOW), (2, "Nintendo Direct announced for Thursday morning", NOW + 2 * H),
+                (3, "Nintendo Direct announced for Thursday", NOW + 20 * H),
+                (1, "Nintendo Direct announced for Thursday", NOW + 30 * 24 * H),     # next month's Direct
+                (2, "Nintendo Direct announced for Thursday", NOW + 30 * 24 * H + H)]
+        rows += [(9, t, NOW) for t in ("Valve raises Steam Deck price", "Sony confirms PS6 dev kits", "Ubisoft sells Arkane",
+                                       "Xbox Game Pass adds day one titles", "Capcom hires new chief", "EA layoffs hit studio")]
+        its = [Item(id=i, feed_id=f, title=t, published=p) for i, (f, t, p) in enumerate(rows)]
+        spans = sorted(len(s.items) for s in matching.cluster(its) if "Direct" in s.items[0].title)
+        self.assertEqual(spans, [2, 3])
+        # A chain of headlines 15 hours apart can't stretch one story past 24 hours.
+        chain = [Item(id=i, feed_id=i, title="Steam changes game review process", published=NOW + i * 15 * H) for i in range(4)]
+        chain += [Item(id=10 + i, feed_id=9, title=t, published=NOW) for i, t in enumerate(
+            ("Sony confirms PS6 dev kits", "Ubisoft sells Arkane", "Capcom hires new chief", "EA layoffs hit studio"))]
+        steam = lambda **kw: [st for st in matching.cluster(chain, **kw) if "Steam" in st.items[0].title]
+        self.assertGreater(len(steam()), 1)
+        for st in steam():
+            self.assertLessEqual(max(x.published for x in st.items) - min(x.published for x in st.items), 24 * H)
+        self.assertEqual(len(steam(max_span_hours=None)), 1)
+
     def test_same_story_different_wording(self):
         rows = [
             (1, "Nintendo Switch 2 price revealed: $449 at launch"),

@@ -291,6 +291,12 @@ URLs (sometimes the older `http://` form).
    ≥ the threshold, which stops chaining (A~B and B~C pulling unrelated A and C together). Running
    similarity sums are updated on each merge, so ~9,000 headlines cluster in about 3 seconds.
    Results are cached until new data arrives.
+6. **One news cycle per story**: a story's headlines are published within 24 hours of each other
+   (`MAX_SPAN_HOURS`). Groups only merge while their first and last headline stay within that, so
+   similar headlines further apart (next month's Nintendo Direct, another weekend's box office) are
+   separate stories, and a long time window doesn't chain coverage across days. On the realistic
+   evaluation this costs some recall (F1 0.929 → 0.912), since some labelled stories had follow-ups a
+   day or more later; on the titles-only evaluation F1 rose (0.818 → 0.829).
 
 ### Evaluation
 

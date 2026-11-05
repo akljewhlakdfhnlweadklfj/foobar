@@ -185,6 +185,9 @@ def _weighted_cosine(idf: dict[str, float], a: frozenset[str], b: frozenset[str]
 #   first sentence at 0.12 gave F1 0.93 (precision 1.00) vs 0.87 for titles alone at 0.15.
 SIMILARITY = _weighted_cosine
 DEFAULT_THRESHOLD = 0.12
+# A story covers one news cycle: its first and last headline are at most this far apart. Similar
+# headlines further apart (next month's Nintendo Direct, another weekend's box office) are separate stories.
+MAX_SPAN_HOURS = 24.0
 
 
 def _drop_feed_boilerplate(items: list[Item], min_items: int = 10, share: float = 0.4) -> None:
@@ -256,7 +259,7 @@ def lexical_similarities(items: list[Item], min_shared: int = 2) -> dict[tuple[i
 
 
 def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold: float,
-                linkage: str = "average") -> list[Story]:
+                linkage: str = "average", max_span_hours: float | None = MAX_SPAN_HOURS) -> list[Story]:
     """Merge items into stories.
 
     linkage="average" (UPGMA): repeatedly merge the two groups with the highest *average*
@@ -265,8 +268,13 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
     the cost is proportional to the number of similar pairs, not to group size squared.
     linkage="single": any one pair above threshold links two groups (prone to chaining:
     A~B and B~C pulls unrelated A and C together). Kept for comparison.
+    max_span_hours: groups are only merged while their earliest and latest headline stay within it
+    (None = no limit). Pairs further apart than that are never compared.
     """
     n = len(items)
+    span = None if max_span_hours is None else max_span_hours * 3600
+    if span is not None:
+        sims = {(i, j): s for (i, j), s in sims.items() if abs(items[i].published - items[j].published) <= span}
     if linkage == "single":
         uf = _UnionFind(n)
         for (i, j), s in sims.items():
@@ -287,6 +295,11 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
     alive = [True] * n
     version = [0] * n
     members: list[list[int]] = [[i] for i in range(n)]
+    lo = [it.published for it in items]
+    hi = list(lo)
+
+    def fits(a: int, b: int) -> bool:
+        return span is None or max(hi[a], hi[b]) - min(lo[a], lo[b]) <= span
 
     def average(a: int, b: int) -> float:
         hist_a, hist_b = (feeds_in[a], feeds_in[b]) if len(feeds_in[a]) <= len(feeds_in[b]) else (feeds_in[b], feeds_in[a])
@@ -299,7 +312,7 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
         for b, total in sums[a].items():
             if a < b:
                 avg = average(a, b)
-                if avg >= threshold:
+                if avg >= threshold and fits(a, b):
                     heap.append((-avg, a, b, 0, 0))
     heapq.heapify(heap)
     while heap:
@@ -308,6 +321,8 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
             continue  # stale entry
         if -neg < threshold:
             break
+        if not fits(a, b):
+            continue  # together they would span more than one news cycle (spans only grow: never mergeable)
         if size[a] < size[b]:
             a, b = b, a
         # Merge b into a.
@@ -316,6 +331,7 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
         for f, c in feeds_in[b].items():
             feeds_in[a][f] = feeds_in[a].get(f, 0) + c
         members[a].extend(members[b])
+        lo[a], hi[a] = min(lo[a], lo[b]), max(hi[a], hi[b])
         sums[a].pop(b, None)
         for c, total in sums[b].items():
             if c == a:
@@ -327,18 +343,19 @@ def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold
         version[a] += 1
         for c in sums[a]:
             avg = average(a, c)
-            if avg >= threshold:
+            if avg >= threshold and fits(a, c):
                 heapq.heappush(heap, (-avg, min(a, c), max(a, c),
                                       version[min(a, c)], version[max(a, c)]))
     return [Story(items=[items[i] for i in members[r]]) for r in range(n) if alive[r]]
 
 
 def cluster(items: list[Item], threshold: float = DEFAULT_THRESHOLD, min_shared: int = 2,
-            linkage: str = "average") -> list[Story]:
-    """Cluster items into stories using lexical similarity. Only items from different feeds are linked."""
+            linkage: str = "average", max_span_hours: float | None = MAX_SPAN_HOURS) -> list[Story]:
+    """Cluster items into stories using lexical similarity. Only items from different feeds are linked,
+    and a story's headlines are published within max_span_hours of each other."""
     if not items:
         return []
-    return agglomerate(items, lexical_similarities(items, min_shared), threshold, linkage)
+    return agglomerate(items, lexical_similarities(items, min_shared), threshold, linkage, max_span_hours)
 
 
 def lead_item(story: Story) -> Item:
