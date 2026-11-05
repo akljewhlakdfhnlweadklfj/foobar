@@ -1,4 +1,5 @@
 # Movies feeds - verified via Feedly on 2026-11-05
+# One feed per publisher: two feeds from one newsroom would count the same story twice toward N.
 # --- Trade / industry ---
 http://variety.com/feed/                                                 # Variety | w=5 | trade | ~467/wk
 https://www.hollywoodreporter.com/feed/                                  # The Hollywood Reporter | w=5 | trade | ~303/wk
@@ -20,7 +21,6 @@ http://www.tvline.com/feed/                                              # TVLin
 
 # --- General publications ---
 https://rss.nytimes.com/services/xml/rss/nyt/Movies.xml                  # New York Times (Movies) | w=5 | general | ~34/wk
-https://rss.nytimes.com/services/xml/rss/nyt/Television.xml              # New York Times (Television) | w=5 | general | ~25/wk
 https://www.theguardian.com/film/rss                                     # The Guardian (Film) | w=4 | general | ~48/wk
 https://www.latimes.com/entertainment-arts/rss2.0.xml                    # Los Angeles Times (Entertainment & Arts) | w=4 | general | ~92/wk
 https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml             # BBC News (Entertainment & Arts) | w=4 | general | ~73/wk

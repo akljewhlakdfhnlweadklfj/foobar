@@ -1,7 +1,7 @@
 # News feeds - verified via Feedly on 2026-11-05
+# One feed per publisher: two feeds from one newsroom would count the same story twice toward N.
 # --- Wires / agencies ---
 https://news.google.com/rss/search?q=site%3Areuters.com&hl=en-US&gl=US&ceid=US%3Aen   # Reuters | w=5 | via Google News site: search | wire | ~1441/wk
-http://www.usnews.com/rss/news                                           # U.S. News & World Report | w=2 | mostly AP/Reuters wire copy | wire | ~1169/wk
 http://rss.upi.com/news/top_news.rss                                     # UPI (Top News) | w=2 | wire | ~157/wk
 
 # --- US publications ---

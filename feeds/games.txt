@@ -25,7 +25,7 @@ https://www.theverge.com/rss/games/index.xml                             # The V
 https://www.digitalfoundry.net/feed                                      # Digital Foundry | w=4 | 21 | ~13/wk
 http://techraptor.net/feed/                                              # TechRaptor | w=2 | 16 | ~26/wk
 http://www.gamegrin.com/home/feed                                        # GameGrin | w=1 | 11 | ~50/wk
-http://feeds.arstechnica.com/arstechnica/index/                          # Ars Technica | w=4 | 3 | ~70/wk (general tech)
+http://feeds.arstechnica.com/arstechnica/gaming       # Ars Technica (Gaming) | w=4 | 3 | gaming section only
 
 # --- Industry / business ---
 http://www.gamesindustry.biz/rss/gamesindustry_news_feed.rss             # GamesIndustry.biz | w=5 | 83 | ~35/wk

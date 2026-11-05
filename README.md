@@ -21,8 +21,19 @@ seeds every vertical and backfills 3 days of history on first creation, starts t
 start, and opens the app in a browser tab (or use the **Ports** panel → port 8000). Server log:
 `/tmp/news-aggregator.log`.
 
+The server is already running in the Codespace, so `python3 app.py` there fails with "address already
+in use". To restart it after changing code:
+
+```bash
+pkill -f app.py; nohup python3 app.py --host 0.0.0.0 --port 8000 > /tmp/news-aggregator.log 2>&1 &
+```
+
 Codespaces stop after ~30 minutes idle and count against your free monthly hours. Data persists in
 `data/` until the codespace is deleted.
+
+**Keep the port private.** The app has no login: anyone who can open it can add, remove and re-weight
+feeds, and make the server fetch any URL. A Codespaces port is private (only you, signed in) by default;
+don't switch it to Public unless you trust everyone with the link.
 
 ## Verticals and data
 
@@ -37,7 +48,14 @@ Codespaces stop after ~30 minutes idle and count against your free monthly hours
   To migrate, copy the `.db` file and point `--data` at its folder. Older databases are upgraded
   in place automatically (schema version is stored in `PRAGMA user_version`).
 - **Seed lists** are read when a vertical's database is empty. Format: `URL  # Display name | w=N | notes`.
-  The display name (text before the first `|`) is applied to existing feeds on every start.
+  After the first run, edits to a seed file apply like this:
+  - **Display names** are re-applied on every start.
+  - **New URLs** are not added automatically. Add them with
+    `python3 app.py --import feeds/<vertical>.txt --vertical <vertical> --no-serve` (existing feeds are skipped).
+  - **Removed URLs** stay until you remove them in the UI.
+  - **Weights** only fill feeds that have none, so change an existing feed's weight in the UI.
+- **One feed per publisher** in each vertical. Two feeds from the same newsroom (e.g. NYT Movies and
+  NYT Television) often carry identical headlines and would count one story twice toward N.
 - **Games** sources are the outlets [Overworld](https://www.overworld.vg/) aggregates, extracted
   from its full story archive. The other verticals mix trade publications with section feeds
   of general publications (NYT, WSJ, Guardian, etc.).

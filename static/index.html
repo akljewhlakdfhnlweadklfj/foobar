@@ -8,11 +8,14 @@
   :root {
     --bg: #f6f5f2; --panel: #ffffff; --text: #1c1c1e; --muted: #6b6b70; --border: #e3e1dc;
     --accent: #b4441f; --accent-soft: #f6e6df; --ok: #2f7d4f; --err: #b3261e; --warn: #a56a00;
+    --btn: #b4441f; --btn-text: #ffffff;
+    color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #141416; --panel: #1d1d20; --text: #ececee; --muted: #9a9aa2; --border: #2e2e33;
       --accent: #ee7a50; --accent-soft: #3a241c; --ok: #6cc290; --err: #f2867d; --warn: #e0b04a;
+      --btn: #ee7a50; --btn-text: #1a0d07;
     }
   }
   * { box-sizing: border-box; }
@@ -31,7 +34,17 @@
   .tabbar { background: var(--panel); border-bottom: 1px solid var(--border); }
   .layout { display: grid; grid-template-columns: 340px 1fr; gap: 20px; max-width: 1200px;
             margin: 20px auto; padding: 0 16px; }
-  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } main { order: -1; } }
+  /* Phones: filters, then stories, then the feed list. */
+  @media (max-width: 860px) {
+    .layout { display: flex; flex-direction: column; }
+    aside { display: contents; }
+    #filter_panel { order: 1; } main { order: 2; } #feeds_panel { order: 3; }
+  }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; }
+  .story h3 a { color: inherit; text-decoration: none; }
+  .story h3 a:hover { text-decoration: underline; }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
   .panel h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
   aside { align-self: start; display: flex; flex-direction: column; gap: 20px; }
@@ -39,7 +52,7 @@
   input[type=url], input[type=number], select {
     width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
     background: var(--bg); color: var(--text); font: inherit; }
-  button { padding: 8px 14px; border: 0; border-radius: 6px; background: var(--accent); color: #fff;
+  button { padding: 8px 14px; border: 0; border-radius: 6px; background: var(--btn); color: var(--btn-text);
            font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
   button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); font-weight: 500; }
   button:disabled { opacity: .5; cursor: default; }
@@ -94,11 +107,11 @@
 
 <div class="layout">
   <aside>
-    <section class="panel">
+    <section class="panel" id="filter_panel">
       <h2>Filter</h2>
       <div class="controls">
         <label>Reported by at least
-          <input type="number" id="min_feeds" min="1" value="2">
+          <input type="number" id="min_feeds" min="1" step="1" value="2">
         </label>
         <label>Time window
           <select id="hours">
@@ -121,9 +134,10 @@
       </div>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="feeds_panel">
       <h2><span id="vertical_label"></span> feeds (<span id="feed_count">0</span>)</h2>
       <form class="add" id="add_form">
+        <label for="feed_url" class="sr-only">Feed URL</label>
         <input type="url" id="feed_url" placeholder="https://example.com/rss.xml" required>
         <button type="submit" id="add_btn">Add</button>
       </form>
@@ -156,95 +170,152 @@ function ago(ts) {
 const SETTINGS = ["min_feeds", "hours", "threshold", "min_score"];
 let VERTICALS = [], V = null, DEFAULT_THRESHOLD = 0.15, DEFAULT_WEIGHT = 2;
 const fmt = (n) => Number(n).toFixed(1).replace(/\.0$/, "");
-const settingsKey = (v) => "news-settings-v2-" + v;
+const settingsKey = (v) => "news-settings-v3-" + v;
+const vertical = (v = V) => VERTICALS.find((x) => x.key === v);
+const defaultsFor = (v) => ({ min_feeds: vertical(v).default_min_feeds, hours: 48, threshold: DEFAULT_THRESHOLD, min_score: 0 });
+
 function loadSettings() {
-  const vert = VERTICALS.find((x) => x.key === V);
-  const defaults = { min_feeds: vert.default_min_feeds, hours: 48, threshold: DEFAULT_THRESHOLD, min_score: 0 };
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(settingsKey(V)) || "{}"); } catch {}
-  SETTINGS.forEach((k) => { $(k).value = saved[k] ?? defaults[k]; });
+  const d = defaultsFor(V);
+  SETTINGS.forEach((k) => { $(k).value = saved[k] ?? d[k]; });
 }
+// Only user-changed values are stored, so retuned defaults still reach returning users.
 function saveSettings() {
-  try { localStorage.setItem(settingsKey(V), JSON.stringify(Object.fromEntries(SETTINGS.map((k) => [k, $(k).value])))); } catch {}
+  const d = defaultsFor(V), cur = currentSettings(), diff = {};
+  SETTINGS.forEach((k) => { if (String(cur[k]) !== String(d[k])) diff[k] = cur[k]; });
+  try { localStorage.setItem(settingsKey(V), JSON.stringify(diff)); } catch {}
 }
+// Validated filter values (blank/invalid inputs fall back to the tab's defaults).
+function currentSettings() {
+  const d = defaultsFor(V);
+  const n = parseInt($("min_feeds").value, 10);
+  const score = parseFloat($("min_score").value);
+  const t = parseFloat($("threshold").value);
+  return {
+    min_feeds: Number.isFinite(n) && n >= 1 ? n : d.min_feeds,
+    hours: $("hours").value || d.hours,
+    threshold: Number.isFinite(t) ? t : d.threshold,
+    min_score: Number.isFinite(score) && score >= 0 ? score : 0,
+  };
+}
+
+let feedsSeq = 0, storiesSeq = 0, lastFeedsJson = "", lastStoriesJson = "";
 function selectVertical(key) {
   V = VERTICALS.some((x) => x.key === key) ? key : VERTICALS[0].key;
-  document.querySelectorAll("#tabs a").forEach((a) => a.classList.toggle("active", a.dataset.v === V));
-  const label = VERTICALS.find((x) => x.key === V).label;
-  $("vertical_label").textContent = label;
-  document.title = label + " · Consensus News";
-  $("stories").innerHTML = ""; $("summary").textContent = "Loading…"; $("add_msg").textContent = "";
+  document.querySelectorAll("#tabs a").forEach((a) => {
+    const on = a.dataset.v === V;
+    a.classList.toggle("active", on);
+    on ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current");
+  });
+  $("vertical_label").textContent = vertical().label;
+  document.title = vertical().label + " · Consensus News";
+  // Clear the previous tab's content so nothing stale can be clicked.
+  $("stories").innerHTML = ""; $("feeds").innerHTML = ""; $("feed_count").textContent = "…";
+  $("summary").textContent = "Loading…"; $("add_msg").textContent = "";
+  lastFeedsJson = lastStoriesJson = "";
   loadSettings();
-  loadFeeds().then(loadStories);
+  loadFeeds(true).then(() => loadStories(true));
 }
 window.addEventListener("hashchange", () => selectVertical(location.hash.slice(1)));
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) throw new Error(data.error || res.statusText || "Request failed");
   return data;
 }
 
 let feedCount = 0;
 let wasRefreshing = false;
 
-async function loadFeeds() {
-  const { feeds, refreshing, last_run } = await api(`/api/${V}/feeds`);
+function feedRow(f, v) {
+  const viaFeedly = f.via === "feedly";
+  const failed = f.last_error && !viaFeedly;
+  const state = failed ? "err" : (viaFeedly ? "warn" : (f.last_fetched ? "" : "pending"));
+  const via = viaFeedly ? ` · <span class="warn" title="${esc(f.last_error || "")}">via Feedly</span>` : "";
+  const sub = failed
+    ? `<div class="sub err">${esc(f.last_error)}</div>`
+    : `<div class="sub">${f.item_count} items · fetched ${ago(f.last_fetched)}${via}</div>`;
+  const name = f.name || f.title || f.url;
+  const w = Number(f.weight ?? DEFAULT_WEIGHT);
+  const options = [1, 2, 3, 4, 5].includes(w) ? [1, 2, 3, 4, 5] : [1, 2, 3, 4, 5, w].sort((a, b) => a - b);
+  return `<li>
+    <span class="dot ${state}"></span>
+    <div class="info"><div class="name">${esc(name)}</div>
+      <div class="sub">${esc(f.url)}</div>${sub}</div>
+    <select class="weight" aria-label="Prestige weight for ${esc(name)}" title="Prestige weight (1 = small blog, 5 = paper of record)"
+            data-weight="${f.id}" data-v="${v}">
+      ${options.map((o) => `<option value="${o}" ${o === w ? "selected" : ""}>★${fmt(o)}</option>`).join("")}
+    </select>
+    <button class="ghost" aria-label="Remove ${esc(name)}" title="Remove feed" data-del="${f.id}" data-v="${v}">×</button>
+  </li>`;
+}
+
+async function loadFeeds(force = false) {
+  const v = V, seq = ++feedsSeq;
+  let data;
+  try { data = await api(`/api/${v}/feeds`); }
+  catch (e) {
+    if (v === V && seq === feedsSeq) $("status").textContent = "Can't reach the server: " + e.message;
+    return;
+  }
+  if (v !== V || seq !== feedsSeq) return; // a newer request or another tab took over
+  const { feeds, refreshing, last_run } = data;
   feedCount = feeds.length;
   $("feed_count").textContent = feeds.length;
   $("status").textContent = refreshing ? "Refreshing…" : (last_run ? "Updated " + ago(last_run) : "");
   $("refresh").disabled = refreshing;
-  $("feeds").innerHTML = feeds.map((f) => {
-    const viaFeedly = f.via === "feedly";
-    const failed = f.last_error && !viaFeedly;
-    const state = failed ? "err" : (viaFeedly ? "warn" : (f.last_fetched ? "" : "pending"));
-    const via = viaFeedly ? ` · <span class="warn" title="${esc(f.last_error || "")}">via Feedly</span>` : "";
-    const sub = failed
-      ? `<div class="sub err">${esc(f.last_error)}</div>`
-      : `<div class="sub">${f.item_count} items · fetched ${ago(f.last_fetched)}${via}</div>`;
-    return `<li>
-      <span class="dot ${state}"></span>
-      <div class="info"><div class="name">${esc(f.name || f.title || f.url)}</div>
-        <div class="sub">${esc(f.url)}</div>${sub}</div>
-      <select class="weight" title="Prestige weight (1 = small blog, 5 = paper of record)" data-weight="${f.id}">
-        ${[1, 2, 3, 4, 5].map((w) => `<option value="${w}" ${Number(f.weight ?? DEFAULT_WEIGHT) === w ? "selected" : ""}>★${w}</option>`).join("")}
-      </select>
-      <button class="ghost" title="Remove feed" data-del="${f.id}">×</button>
-    </li>`;
-  }).join("") || `<li class="sub">No feeds yet — add a few RSS/Atom URLs above.</li>`;
+  // Don't rebuild the list under the user's hands (open ★ menu, focused button), or when nothing changed.
+  const json = JSON.stringify(feeds);
+  const busy = $("feeds").contains(document.activeElement);
+  if (force || (!busy && json !== lastFeedsJson)) {
+    $("feeds").innerHTML = feeds.map((f) => feedRow(f, v)).join("") || `<li class="sub">No feeds yet. Add an RSS or Atom URL above.</li>`;
+    lastFeedsJson = json;
+  }
   if (wasRefreshing && !refreshing) loadStories();
   wasRefreshing = refreshing;
 }
 
-async function loadStories() {
-  saveSettings();
-  $("threshold_out").textContent = Number($("threshold").value).toFixed(2);
-  const params = new URLSearchParams(Object.fromEntries(SETTINGS.map((k) => [k, $(k).value])));
+const storyKey = (s) => s.lead.link || s.title;
+
+async function loadStories(force = false) {
+  const v = V, seq = ++storiesSeq, cfg = currentSettings();
+  $("threshold_out").textContent = Number(cfg.threshold).toFixed(2);
   let data;
-  try { data = await api(`/api/${V}/stories?` + params); }
-  catch (e) { $("summary").textContent = "Error: " + e.message; return; }
-  const n = $("min_feeds").value;
-  $("summary").textContent = `${data.stories.length} stories reported by ≥ ${n} feed${n == 1 ? "" : "s"} · ${data.items_considered} headlines scanned`;
+  try { data = await api(`/api/${v}/stories?` + new URLSearchParams(cfg)); }
+  catch (e) {
+    if (v !== V || seq !== storiesSeq) return;
+    $("summary").textContent = "Couldn't load stories: " + e.message;
+    $("stories").innerHTML = ""; lastStoriesJson = "";
+    return;
+  }
+  if (v !== V || seq !== storiesSeq) return;
+  const n = cfg.min_feeds;
+  $("summary").textContent = `${data.stories.length} stories reported by ≥ ${n} feed${n === 1 ? "" : "s"} · ${data.items_considered} headlines scanned`;
+  const json = JSON.stringify(data.stories);
+  if (!force && json === lastStoriesJson) return; // unchanged: keep scroll and expanded lists as they are
+  lastStoriesJson = json;
   if (!data.stories.length) {
     $("stories").innerHTML = `<div class="empty">${
-      feedCount < Number(n)
-        ? `You have ${feedCount} feed${feedCount == 1 ? "" : "s"}; add at least ${n} to see stories reported by ${n} sources.`
-        : "No stories meet the threshold yet. Try lowering “reported by”, widening the time window, or loosening match strictness."
+      feedCount < n
+        ? `This tab has ${feedCount} feed${feedCount === 1 ? "" : "s"}. Add at least ${n} to see stories reported by ${n} sources.`
+        : "No stories meet the filters yet. Try lowering “reported by”, widening the time window, or loosening match strictness."
     }</div>`;
     return;
   }
+  const open = new Set([...document.querySelectorAll("#stories details[open]")].map((d) => d.dataset.key));
   $("stories").innerHTML = data.stories.map((s) => `
     <article class="story">
       <div class="story-head">
         <div class="badge" title="${s.coverage} outlets, prestige score ${fmt(s.score)}">${s.coverage}<small>feeds</small><span class="score">★ ${fmt(s.score)}</span></div>
         <div>
-          <h3>${esc(s.title)}</h3>
+          <h3>${s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title)}</h3>
           <div class="lead">${esc(s.lead.feed)}</div>
           <div class="when">First seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</div>
         </div>
       </div>
-      <details>
+      <details data-key="${esc(storyKey(s))}" ${open.has(storyKey(s)) ? "open" : ""}>
         <summary>${s.sources.slice(0, 6).map((x) => esc(x.feed)).join(" · ")}${s.sources.length > 6 ? ` · +${s.sources.length - 6} more` : ""}</summary>
         <ul class="sources">${s.sources.map((x) => `
           <li><div class="src"><span class="w" title="prestige weight">${fmt(x.weight)}</span> ${esc(x.feed)} · ${ago(x.published)}</div>
@@ -256,47 +327,60 @@ async function loadStories() {
 
 $("add_form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const v = V, label = vertical(v).label;
   const url = $("feed_url").value.trim();
   $("add_btn").disabled = true;
-  $("add_msg").className = "msg"; $("add_msg").textContent = "Checking feed…";
+  $("add_msg").className = "msg"; $("add_msg").textContent = `Checking feed for ${label}…`;
   try {
-    const { feed } = await api(`/api/${V}/feeds`, { method: "POST", body: JSON.stringify({ url }) });
+    const { feed } = await api(`/api/${v}/feeds`, { method: "POST", body: JSON.stringify({ url }) });
+    if (v !== V) return; // user moved to another tab; the feed is still added to its own tab
     $("add_msg").className = "msg ok";
-    $("add_msg").textContent = `Added “${feed.name || feed.title || feed.url}” (${feed.item_count} items).`;
+    $("add_msg").textContent = `Added “${feed.name || feed.title || feed.url}” to ${label} (${feed.item_count} items).`;
     $("feed_url").value = "";
-    await loadFeeds(); await loadStories();
+    await loadFeeds(true); await loadStories(true);
   } catch (err) {
+    if (v !== V) return;
     $("add_msg").className = "msg err"; $("add_msg").textContent = err.message;
   } finally { $("add_btn").disabled = false; }
 });
 
+// Feed actions use the row's own vertical, never whichever tab happens to be open.
 $("feeds").addEventListener("click", async (e) => {
-  const id = e.target.dataset.del;
-  if (!id || !confirm("Remove this feed and its stored headlines?")) return;
-  await api(`/api/${V}/feeds/` + id, { method: "DELETE" });
-  await loadFeeds(); await loadStories();
+  const { del: id, v } = e.target.dataset;
+  if (!id || !v || !confirm("Remove this feed and its stored headlines?")) return;
+  try {
+    await api(`/api/${v}/feeds/` + id, { method: "DELETE" });
+  } catch (err) { $("status").textContent = "Couldn't remove the feed: " + err.message; return; }
+  if (v === V) { await loadFeeds(true); await loadStories(true); }
 });
 
 $("feeds").addEventListener("change", async (e) => {
-  const id = e.target.dataset.weight;
-  if (!id) return;
-  await api(`/api/${V}/feeds/` + id, { method: "PATCH", body: JSON.stringify({ weight: Number(e.target.value) }) });
-  await loadStories();
+  const { weight: id, v } = e.target.dataset;
+  if (!id || !v) return;
+  try {
+    await api(`/api/${v}/feeds/` + id, { method: "PATCH", body: JSON.stringify({ weight: Number(e.target.value) }) });
+  } catch (err) { $("status").textContent = "Couldn't change the weight: " + err.message; return; }
+  e.target.blur();
+  if (v === V) { await loadFeeds(true); await loadStories(true); }
 });
 
 $("refresh").addEventListener("click", async () => {
-  await api("/api/refresh", { method: "POST" });
+  try { await api("/api/refresh", { method: "POST" }); }
+  catch (err) { $("status").textContent = "Couldn't start a refresh: " + err.message; return; }
   wasRefreshing = true; $("refresh").disabled = true; $("status").textContent = "Refreshing…";
 });
 
 let debounce;
-SETTINGS.forEach((k) => $(k).addEventListener("input", () => { clearTimeout(debounce); debounce = setTimeout(loadStories, 200); }));
+SETTINGS.forEach((k) => $(k).addEventListener("input", () => {
+  clearTimeout(debounce);
+  debounce = setTimeout(() => { saveSettings(); loadStories(true); }, 200);
+}));
 
 api("/api/verticals").then((d) => {
   VERTICALS = d.verticals; DEFAULT_THRESHOLD = d.default_threshold; DEFAULT_WEIGHT = d.default_weight;
   $("tabs").innerHTML = VERTICALS.map((v) => `<a href="#${v.key}" data-v="${v.key}">${esc(v.label)}</a>`).join("");
   selectVertical(location.hash.slice(1));
-});
+}).catch((e) => { $("summary").textContent = "Can't reach the server: " + e.message; });
 setInterval(() => V && loadFeeds(), 5000);
 setInterval(() => V && loadStories(), 60000);
 </script>
