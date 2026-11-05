@@ -53,12 +53,16 @@ The app has two sections (top left):
 **Stories**: the reader. Pick **All** (every vertical, each using its own settings, with a label on
 each story) or a single vertical, and sort by **Top** (score) or **Latest**.
 - The list is compact: one line per story, **`Key term: Headline`**.
-  - **Key term**: the story's most prominent noun or name, kept whole when it's a name with small
-    connecting words ("God of War Laufey", "South of Midnight", "Xbox Series X"). Terms count when
-    they're in at least 40% of the story's headlines; they're ranked by that share x how distinctive
-    they are in the list, with names and phrases preferred. Verbs and adjectives ("delayed", "Black")
-    are skipped, using a word list and word endings (there's no part-of-speech tagger). It's shown in
-    the accent colour; click it to show only stories mentioning it.
+  - **Key term**: the story's most prominent proper noun (a person, title, brand or place: "Suda51",
+    "God of War Laufey", "China Miéville"), kept whole when it's a name with small connecting words.
+    A term must be in at least 40% of the story's headlines. Its prominence is:
+    `(share of headlines x position + 0.3 x share of descriptions) x distinctiveness`, where
+    *position* weighs a term 2x at the start of a headline down to 1x at the end, and
+    *distinctiveness* favours terms specific to this story. Names get a 1.5x boost. The lead is the
+    top proper noun if it scores at least 35% of the top term; otherwise the top noun-like term
+    (verbs and adjectives like "delayed", "Black" are skipped via a word list and word endings,
+    since there's no part-of-speech tagger). Shown in the accent colour; click it to show only
+    stories mentioning it.
   - **Headline**: the shortest one among the story's outlets (4+ words; labelled pieces like
     "Opinion |" or "WATCH:" are skipped when possible).
 - Click a story (or its arrow) to expand it: outlets and score, outlet and times, description,

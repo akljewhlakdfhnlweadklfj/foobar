@@ -645,6 +645,29 @@ class KeywordTests(unittest.TestCase):
         self.assertEqual(sorted(app._name_candidates("Dragon’s Dogma 2 Drops Surprise Collab").values(), key=len)[-1],
                          "Dragon’s Dogma 2")
 
+    def test_proper_noun_at_headline_start_leads(self):
+        def story(title_list):
+            return {"title": title_list[0], "score": 10, "sources": [{"title": t} for t in title_list]}
+        suda = story([
+            "‘Travis Touchdown will definitely be back’: Suda51 is planning something for No More Heroes’ 20th anniversary",
+            "Suda51 Wants A Now-Independent Grasshopper To Bring Back No More Heroes (And One Of His Earliest Games)",
+            "Travis Touchdown 'Will Definitely Be Back' for No More Heroes 20th Anniversary",
+            "Suda51 teases “something special” for No More Heroes’ 20th anniversary",
+            "Suda51 says No More Heroes' Travis Touchdown \"is definitely coming back\" to celebrate the franchise's 20th anniversary"])
+        mieville = story(["China Miéville has won the 2026 Goldsmiths Prize", "Goldsmiths Prize goes to China Miéville",
+                          "China Miéville wins Goldsmiths Prize with longest novel in its history"])
+        app.story_terms([suda, mieville])
+        self.assertEqual(suda["keywords"][0]["term"], "Suda51")
+        self.assertIn("No More Heroes", [k["term"] for k in suda["keywords"]])
+        self.assertEqual(mieville["keywords"][0]["term"], "China Miéville")
+
+    def test_description_mentions_break_ties(self):
+        def story(titles):
+            return {"title": titles[0], "score": 10, "sources": [{"title": t} for t in titles]}
+        a = story(["Valve and Nintendo team up", "Nintendo and Valve team up"])
+        app.story_terms([a], bodies=[["Valve's hardware chief explained the deal.", "Valve said more soon."]])
+        self.assertEqual(a["keywords"][0]["term"], "Valve")
+
     def test_names_with_connectors_are_kept_whole(self):
         def story(title_list):
             return {"title": title_list[0], "score": 10, "sources": [{"title": t} for t in title_list]}

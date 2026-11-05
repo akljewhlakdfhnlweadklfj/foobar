@@ -189,7 +189,7 @@ def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, 
     stories, considered = _clusters(store, hours, threshold)
     phrases = [(p, phrase_regex(p["phrase"])) for p in store.list_phrases()]
     required = store.required_feed_ids()
-    out = []
+    out, body_by_key = [], {}
     for s in stories:
         if required:
             have = s.feed_ids & required
@@ -221,12 +221,14 @@ def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, 
         per_feed: dict[int, matching.Item] = {}
         for it in sorted(s.items, key=lambda i: i.published):
             per_feed[it.feed_id] = it
+        body_by_key[id(s)] = list({i.description for i in s.items if i.description})
         lead = headline_item(s, min_weight)
         per_feed[lead.feed_id] = lead  # show the chosen headline for its outlet, not that outlet's newest item
         best = sorted(s.items, key=lambda i: (-i.weight, -i.published))
         description = lead.description or next((i.description for i in best if i.description), "")
         image = lead.image or next((i.image for i in best if i.image), "")
         out.append({
+            "_key": id(s),
             "title": lead.title,
             "lead": {"feed": lead.feed_title, "link": lead.link, "weight": lead.weight,
                      "description": description[:400], "image": image},
@@ -247,7 +249,10 @@ def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, 
             ],
         })
     out.sort(key=lambda s: (-s["score"], -s["coverage"], -s["latest"]))
-    return {"stories": out, "items_considered": considered, "terms": story_terms(out)}
+    bodies = [body_by_key[x["_key"]] for x in out]
+    for x in out:
+        x.pop("_key")
+    return {"stories": out, "items_considered": considered, "terms": story_terms(out, bodies=bodies)}
 
 
 # --- prominent terms (word cloud) ---------------------------------------------------------------
@@ -272,6 +277,9 @@ MIN_SHARE = 0.4
 MAX_RUN_WORDS = 4
 STORY_KEYWORDS = 6
 NAME_BOOST, RUN_BOOST = 1.5, 1.25   # ranking boost for names / multi-word runs over single words
+PROPER_LEAD_MIN = 0.35              # a proper noun leads if it scores at least this share of the top term
+START_WEIGHT = 2.0                  # a term at the start of a headline counts this much vs 1 at the end
+BODY_WEIGHT = 0.3                   # a description mention counts this much vs a headline mention
 
 # Headline verbs and adjectives that shouldn't lead a story ("delayed", "blames", "Black", "record").
 # No part-of-speech tagger in the standard library, so: this list plus verb/adjective endings.
@@ -302,7 +310,7 @@ def _noun_like(key: tuple, display: str, proper_evidence: bool) -> bool:
     if proper_evidence or display.isupper() or any(c.isdigit() for c in display):
         return True                                # a capitalised name, acronym or model ("Ubisoft", "PS5")
     return not word.endswith(_NOT_NOUN_ENDINGS)
-_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’+\-]*")
+_WORD_RE = re.compile(r"[^\W_][\w'’+\-]*")   # Unicode letters/digits: "Miéville", "Pokémon"
 
 
 def _term_key(word: str) -> str | None:
@@ -323,7 +331,7 @@ def _term_key(word: str) -> str | None:
 NAME_CONNECTORS = frozenset({"of", "the", "&", "de", "la", "le", "du", "del", "von", "van", "vs"})
 # Punctuation that ends a name: phrases never span "Zelda: Ocarina" or "Switch 2, PS5".
 _SEGMENT_RE = re.compile(r"[:|;,!?()\[\]{}\"“”«»]|\s[-–—]\s|\.\s|(?<!\w)[‘’']|[‘’'](?!\w)")
-_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’+\-.]*[A-Za-z0-9+]|[A-Za-z0-9]|&")
+_TOKEN_RE = re.compile(r"[^\W_][\w'’+\-.]*[^\W_+]|[^\W_]|&")
 MAX_NAME_WORDS = 6
 
 
@@ -349,15 +357,18 @@ def _name_candidates(title: str) -> dict[tuple, str]:
     caps_all = sum(w[0].isupper() for w in words_all)
     title_case = len(words_all) > 3 and caps_all / len(words_all) >= 0.6
     out = {}
+    at_title_start = True
     for segment in _SEGMENT_RE.split(title):
         raw = _TOKEN_RE.findall(segment)
         words = [_strip_possessive(w) for w in raw]
         n = len(words)
         for i in range(n):
             first = words[i]
-            if not _is_cap(first) or first.lower() in NAME_CONNECTORS or first.lower() in matching.STOPWORDS \
-                    or first.isdigit():
+            mid_sentence = not title_case and not (at_title_start and i == 0)
+            if not _is_cap(first) or first.lower() in NAME_CONNECTORS or first.isdigit():
                 continue
+            if first.lower() in matching.STOPWORDS and not (mid_sentence and first[:1].isupper()):
+                continue                          # "No More Heroes" only when "No" is capitalised mid-sentence
             for j in range(i + 1, min(n, i + MAX_NAME_WORDS)):
                 w = words[j]
                 if w.lower() in NAME_CONNECTORS:
@@ -373,7 +384,8 @@ def _name_candidates(title: str) -> dict[tuple, str]:
                     continue
                 if not (_term_key(last) or any(c.isdigit() for c in last) or last.isupper() or has_conn):
                     continue                      # don't end on filler ("Switch Official"), unless clearly a name ("Ocarina of Time")
-                if not (_term_key(first) or has_conn or special or first.isupper()):
+                if not (_term_key(first) or has_conn or special or first.isupper()
+                        or (mid_sentence and first.lower() in matching.STOPWORDS)):
                     continue                      # don't start on filler, unless it's clearly a name ("Call of Duty")
                 if not any(_term_key(x) or any(c.isdigit() for c in x) or x.isupper() for x in names):
                     continue
@@ -387,6 +399,8 @@ def _name_candidates(title: str) -> dict[tuple, str]:
                 # possessive ("Dragon's Dogma 2") but drops a trailing one ("Nintendo's" -> "Nintendo").
                 shown = raw[i:j] + [words[j]]
                 out[tuple(x.lower() for x in span)] = " ".join(shown)
+        if raw:
+            at_title_start = False
     return out
 
 
@@ -401,7 +415,28 @@ def _contains(longer: tuple, shorter: tuple) -> bool:
     return any(longer[i:i + n] == shorter for i in range(len(longer) - n + 1))
 
 
-def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
+def _position_weight(rel: float) -> float:
+    """Weight of a term by where it first appears in a headline: START_WEIGHT at the start, 1 at the end."""
+    return 1 + (START_WEIGHT - 1) * (1 - min(1.0, max(0.0, rel)))
+
+
+def _body_terms(text: str) -> set:
+    """Keys of the single words, word runs and names in a description (for the body bonus)."""
+    keys = set()
+    for seg in _SEGMENT_RE.split(text):
+        seg_keys = [_term_key(w) for w in _WORD_RE.findall(seg)]
+        keys.update(k for k in seg_keys if k)
+        for i in range(len(seg_keys)):
+            for j in range(i + 2, min(len(seg_keys), i + MAX_RUN_WORDS) + 1):
+                run = seg_keys[i:j]
+                if None in run:
+                    break
+                keys.add(("pair",) + tuple(run))
+    keys.update(("name",) + k for k in _name_candidates(text))
+    return keys
+
+
+def story_terms(stories: list[dict], limit: int = 40, bodies: list[list[str]] | None = None) -> list[dict]:
     """The most prominent names, phrases and words in these stories' headlines.
 
     Three kinds of term:
@@ -421,13 +456,15 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
     name_best_share: dict = defaultdict(float)    # multi-word key -> highest share in any one story
     proper: dict = defaultdict(int)               # key -> capitalised mid-headline in sentence-case headlines
     plain: dict = defaultdict(int)                # key -> lowercase mid-headline in sentence-case headlines
-    per_story = []                                # (story, {key: share}, {multi key: share})
+    per_story = []                                # (story, {key: share}, {multi key: share}, position, body)
 
-    for s in stories:
+    for si, s in enumerate(stories):
         titles = {x["title"] for x in s["sources"]} | {s["title"]}
         cnt_u, cnt_m = Counter(), Counter()
+        pos_sum: dict = defaultdict(float)        # key -> summed position weight over the headlines with it
         for title in titles:
             seen_u, seen_m = set(), {}
+            low = title.lower()
             words = _WORD_RE.findall(title)
             caps = sum(w[0].isupper() for w in words)
             sentence_case = len(words) > 3 and caps / len(words) < 0.6
@@ -441,6 +478,8 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
                 if sentence_case and i > 0:
                     proper[k] += 1 if w[0].isupper() else 0
                     plain[k] += 0 if w[0].isupper() else 1
+                if k not in seen_u:
+                    pos_sum[k] += _position_weight(i / max(1, len(words) - 1))
                 seen_u.add(k)
             # Runs of 2-4 adjacent content words inside one punctuation segment ("box office",
             # "Grand Theft Auto", "Otaku Vampire Love Bite").
@@ -457,10 +496,16 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
                             break
                         if len(set(run)) == len(run):
                             key = ("pair",) + tuple(run)
-                            seen_m.setdefault(key, None)
                             surface = seg_words[i:j - 1] + [_strip_possessive(seg_words[j - 1])]
+                            if key not in seen_m:
+                                at = low.find(seg_words[i].lower())
+                                pos_sum[key] += _position_weight(at / max(1, len(title)))
+                            seen_m.setdefault(key, None)
                             multi_forms[key][" ".join(x.strip("-") for x in surface)] += 1
             for key, text in _name_candidates(title).items():
+                if ("name",) + key not in seen_m:
+                    at = low.find(text.split()[0].lower())
+                    pos_sum[("name",) + key] += _position_weight(at / max(1, len(title)))
                 seen_m[("name",) + key] = text
                 multi_forms[("name",) + key][text] += 1
             cnt_u.update(seen_u)
@@ -480,7 +525,13 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
         for k, share in own_m.items():
             multi_w[k] += s["score"] * share; multi_n[k] += 1
             name_best_share[k] = max(name_best_share[k], share)
-        per_story.append((s, own_u, own_m))
+        position = {k: pos_sum[k] / c for k, c in (cnt_u + cnt_m).items() if c}
+        descs = [d for d in (bodies[si] if bodies else []) if d]
+        body = Counter()
+        for d in descs:
+            body.update(_body_terms(d))
+        body_share = {k: c / len(descs) for k, c in body.items()} if descs else {}
+        per_story.append((s, own_u, own_m, position, body_share))
 
     def display(k: str) -> str:
         """Names, acronyms and model names keep their capitals; ordinary words are lowercased.
@@ -543,7 +594,13 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
 
     # --- per-story keywords ---
     n_stories = max(1, len(stories))
-    for s, own_u, own_m in per_story:
+    for s, own_u, own_m, position, body_share in per_story:
+
+        def prominence(k, share, df, boost):
+            """Headline share x position (start counts more) + a smaller body share, x distinctiveness."""
+            return boost * (share * position.get(k, 1.0) + BODY_WEIGHT * body_share.get(k, 0.0)) \
+                * math.log(1 + n_stories / max(1, df))
+
         cands, used = [], set()
         chosen: list[tuple] = []                  # (wks, share, cand index, is_name)
         for k, share in sorted(own_m.items(), key=lambda kv: (-kv[1], -(len(kv[0]) - 1))):
@@ -562,15 +619,36 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
                 cands[c[2]] = None
             chosen.append((wks, share, len(cands), k[0] == "name"))
             boost = NAME_BOOST if k[0] == "name" else RUN_BOOST    # what a story is about is usually a name
-            cands.append((boost * share * math.log(1 + n_stories / max(1, multi_n[k])), multi_display(k), multi_forms_list(k), k))
+            cands.append((prominence(k, share, multi_n[k], boost), multi_display(k), multi_forms_list(k), k))
             used |= wks                           # "Johnson" is covered by "Mike Johnson"
         cands = [c for c in cands if c is not None]
         for k, share in own_u.items():
             if k not in used:
-                cands.append((share * math.log(1 + n_stories / max(1, uni_n[k])), display(k), sorted(forms[k])[:6], (k,)))
+                shown = display(k)
+                single_proper = proper[k] > plain[k] or (shown.isupper() and len(shown) > 1) or (
+                    any(ch.isdigit() for ch in shown) and any(ch.isalpha() for ch in shown) and not shown[:1].isdigit())
+                cands.append((prominence(k, share, uni_n[k], NAME_BOOST if single_proper and k not in NOT_NOUNS else 1.0),
+                              shown, sorted(forms[k])[:6], (k,)))
         cands.sort(key=lambda c: -c[0])
-        # The lead keyword is the most prominent noun-like term; the rest keep their order.
-        lead = next((c for c in cands if _noun_like(c[3], c[1], c[3][0] not in ("name", "pair") and proper[c[3][0]] > plain[c[3][0]])), None)
+        # The lead keyword is the most prominent proper noun (a name, title, acronym, "Suda51") when one
+        # scores at least PROPER_LEAD_MIN of the top term; otherwise the most prominent noun-like term.
+        # The rest keep their order.
+        def is_proper(c):
+            k, text = c[3], c[1]
+            if k[0] == "name":
+                return True
+            words = text.split()
+            if any(w[:1].isdigit() for w in words[:1]):
+                return False                       # "20th anniversary", "8 million copies"
+            if k[0] == "pair":
+                return all(w[:1].isupper() for w in words)
+            return (proper[k[0]] > plain[k[0]] or text.isupper() and len(text) > 1
+                    or (any(ch.isdigit() for ch in text) and any(ch.isalpha() for ch in text))) \
+                and k[0] not in NOT_NOUNS
+        top_score = cands[0][0] if cands else 0
+        lead = next((c for c in cands if is_proper(c) and c[0] >= PROPER_LEAD_MIN * top_score), None)
+        if lead is None:
+            lead = next((c for c in cands if _noun_like(c[3], c[1], c[3][0] not in ("name", "pair") and proper[c[3][0]] > plain[c[3][0]])), None)
         if lead is not None:
             cands.remove(lead)
             cands.insert(0, lead)
