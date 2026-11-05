@@ -462,6 +462,22 @@ class GroupTests(unittest.TestCase):
         self.assertEqual(len(s["h"]), len(s["s"]))
         self.assertTrue(all(len(k) == 10 for k in s["h"]))
 
+    def test_new_vertical_gets_one_group_once(self):
+        import sqlite3 as _sql
+        db = self.tmp / "old_groups.db"                         # a groups.db from before seeding was tracked
+        c = _sql.connect(db)
+        c.execute("CREATE TABLE groups (id INTEGER PRIMARY KEY, config TEXT NOT NULL, updated_at REAL NOT NULL)")
+        c.execute("INSERT INTO groups (config, updated_at) VALUES (?, 0)",
+                  (json.dumps(self.groups.clean({"name": "Mine", "verticals": ["games"], "position": 0}, None, ["games"])),))
+        c.commit(); c.close()
+        gs = self.groups.GroupStore(db)
+        stores = {"games": self.store, "tech": app.Store(self.tmp / "tech.db")}
+        self.assertEqual(app.seed_groups(gs, stores), 1)                       # only the new vertical
+        self.assertEqual([(g["name"], g["verticals"]) for g in gs.list()], [("Mine", ["games"]), ("Consumer Tech", ["tech"])])
+        self.assertEqual(app.seed_groups(gs, stores), 0)
+        gs.delete(gs.list()[1]["id"])                                          # deleting it doesn't bring it back
+        self.assertEqual(app.seed_groups(gs, stores), 0)
+
     def test_seed_and_api(self):
         self.assertEqual(app.seed_groups(self.gs, self.stores), 1)
         self.assertEqual(app.seed_groups(self.gs, self.stores), 0)

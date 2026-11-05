@@ -1,6 +1,6 @@
 """News aggregator: shows only stories reported by at least N of your feeds.
 
-Stories are split into verticals (Games, Movies & TV, Books, General News, Anime, Manga). Each vertical has
+Stories are split into verticals (Games, Movies & TV, Books, General News, Consumer Tech, Anime, Manga). Each vertical has
 its own seed list (feeds/<vertical>.txt) and its own self-contained SQLite file
 (data/<vertical>.db), so a vertical can be moved by copying one file.
 
@@ -56,6 +56,7 @@ VERTICALS = [
     Vertical("movies", "Movies & TV", 3),
     Vertical("books", "Books", 2),
     Vertical("news", "General News", 4),
+    Vertical("tech", "Consumer Tech", 4),
     Vertical("anime", "Anime", 3),
     Vertical("manga", "Manga", 2),
 ]
@@ -153,16 +154,20 @@ def make_digests(stores: dict[str, Store], out_dir: Path | None = None, log=None
 
 
 def seed_groups(group_store: groups_mod.GroupStore, stores: dict[str, Store]) -> int:
-    """First start: one filter group per vertical, from that vertical's saved story settings."""
-    if not group_store.is_empty():
-        return 0
-    for pos, v in enumerate(v for v in VERTICALS if v.key in stores):
+    """One filter group per vertical, the first time the vertical exists (on a first start, or when a
+    vertical is added later), from that vertical's earlier story settings. Returns how many were made."""
+    made = 0
+    for v in VERTICALS:
+        if v.key not in stores or group_store.was_seeded(v.key):
+            continue
         settings = earlier_settings(v, stores[v.key])
         # Outlets marked "required" in the earlier design become this group's own setting.
         required = {str(f["id"]): {"req": True} for f in stores[v.key].list_feeds() if f.get("required")}
-        group_store.create(groups_mod.clean({"name": v.label, "verticals": [v.key], "position": pos, "settings": settings,
+        group_store.create(groups_mod.clean({"name": v.label, "verticals": [v.key], "settings": settings,
                                              "outlets": {v.key: required} if required else {}}, None, list(stores)))
-    return len(stores)
+        group_store.mark_seeded(v.key)
+        made += 1
+    return made
 
 
 def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security | None = None,
@@ -587,8 +592,8 @@ def main():
     security = Security(api_token=args.api_token, allowed_hosts=tuple(h.lower() for h in args.allow_host)
                         + ((args.host.lower(),) if args.host not in ("0.0.0.0", "::") else ()))
     group_store = groups_mod.GroupStore(data_dir / "groups.db")
-    if seed_groups(group_store, stores):
-        print("Created one filter group per vertical (edit them under Settings › Groups)")
+    if n := seed_groups(group_store, stores):
+        print(f"Created {n} filter group(s), one per new vertical (edit them under Settings › Groups)")
     summarizer = ai_mod.Summarizer(data_dir / "ai.db", model=args.ai_model, log=print, enabled=not args.no_ai)
     st_ai = summarizer.status()
     print(f"AI headlines: {'available (' + st_ai['model'] + ')' if st_ai['available'] else 'off: ' + st_ai['reason']}")

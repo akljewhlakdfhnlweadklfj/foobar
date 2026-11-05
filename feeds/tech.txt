@@ -1,0 +1,50 @@
+# Consumer tech feeds - fetched and checked on 2026-11-05 (rates are approximate)
+# One feed per publisher: two feeds from one newsroom would count the same story twice toward N.
+# Tech desks of general publications, plus the tech press. Weights: 5 = paper of record, 1 = small blog.
+
+# --- Tech desks of general publications ---
+https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml              # New York Times (Technology) | w=5 | general
+https://feeds.content.dowjones.io/public/rss/RSSWSJD                     # Wall Street Journal (Tech) | w=5 | general
+https://feeds.bloomberg.com/technology/news.rss                          # Bloomberg (Technology) | w=5 | general | ~180/wk
+https://www.ft.com/technology?format=rss                                 # Financial Times (Technology) | w=5 | general | ~170/wk
+https://news.google.com/rss/search?q=site%3Areuters.com%2Ftechnology&hl=en-US&gl=US&ceid=US%3Aen   # Reuters (Technology) | w=5 | via Google News site: search | wire
+https://www.washingtonpost.com/arcio/rss/category/technology/            # Washington Post (Technology) | w=4 | general
+https://feeds.bbci.co.uk/news/technology/rss.xml                         # BBC News (Technology) | w=4 | general
+https://www.theguardian.com/technology/rss                               # The Guardian (Technology) | w=4 | general
+https://www.cnbc.com/id/19854910/device/rss/rss.html                     # CNBC (Technology) | w=4 | general | ~80/wk
+https://www.fastcompany.com/technology/rss                               # Fast Company (Tech) | w=3 | general | ~30/wk
+
+# --- Tech press ---
+https://www.theverge.com/rss/index.xml                                   # The Verge | w=5 | tech | ~200/wk
+https://www.theinformation.com/feed                                      # The Information | w=4 | tech | ~150/wk
+https://techcrunch.com/feed/                                             # TechCrunch | w=4 | tech | ~250/wk
+https://feeds.arstechnica.com/arstechnica/index                          # Ars Technica | w=4 | tech | ~110/wk
+https://www.wired.com/feed/category/gear/latest/rss                      # Wired (Gear) | w=4 | tech | ~140/wk
+https://www.engadget.com/rss.xml                                         # Engadget | w=4 | tech | ~140/wk
+https://www.cnet.com/rss/news/                                           # CNET (News) | w=4 | tech | ~150/wk
+https://www.zdnet.com/news/rss.xml                                       # ZDNET | w=3 | tech
+https://www.pcmag.com/feeds/rss/latest                                   # PCMag | w=3 | tech | ~325/wk
+https://www.tomsguide.com/feeds/all                                      # Tom's Guide | w=3 | tech | ~250/wk
+https://www.tomshardware.com/feeds/all                                   # Tom's Hardware | w=3 | tech | ~160/wk
+https://www.techradar.com/rss                                            # TechRadar | w=3 | tech | ~550/wk
+https://gizmodo.com/rss                                                  # Gizmodo | w=3 | tech | ~360/wk
+https://www.digitaltrends.com/feed/                                      # Digital Trends | w=3 | tech | ~310/wk
+https://mashable.com/feeds/rss/tech                                      # Mashable (Tech) | w=3 | tech | ~150/wk
+https://venturebeat.com/feed/                                            # VentureBeat | w=3 | tech
+https://www.theregister.com/headlines.atom                               # The Register | w=3 | tech | ~160/wk
+
+# --- Apple, Android and devices ---
+https://9to5mac.com/feed/                                                # 9to5Mac | w=4 | apple | ~135/wk
+https://feeds.macrumors.com/MacRumors-All                                # MacRumors | w=4 | apple | ~290/wk
+https://appleinsider.com/rss/news/                                       # AppleInsider | w=3 | apple
+https://sixcolors.com/feed/                                              # Six Colors | w=3 | apple
+https://www.macstories.net/feed/                                         # MacStories | w=3 | apple
+https://9to5google.com/feed/                                             # 9to5Google | w=3 | android | ~100/wk
+https://www.androidauthority.com/feed/                                   # Android Authority | w=3 | android | ~300/wk
+https://www.androidpolice.com/feed/                                      # Android Police | w=3 | android | ~160/wk
+https://www.xda-developers.com/feed/                                     # XDA Developers | w=3 | android | ~370/wk
+https://www.gsmarena.com/rss-news-reviews.php3                           # GSMArena | w=3 | phones | ~130/wk
+https://www.phonearena.com/feed/news                                     # PhoneArena | w=2 | phones | ~200/wk
+https://www.sammobile.com/feed/                                          # SamMobile | w=2 | phones | ~60/wk
+https://www.neowin.net/news/rss/                                         # Neowin | w=2 | windows | ~160/wk
+https://www.notebookcheck.net/News.152.100.html                          # Notebookcheck | w=2 | devices | ~450/wk

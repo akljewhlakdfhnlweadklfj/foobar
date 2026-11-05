@@ -1,10 +1,10 @@
 # Consensus News
 
 An RSS/Atom aggregator that only shows stories reported by **at least N** of your feeds, ranked by the
-prestige of the outlets covering them, for six verticals: **Games**, **Movies & TV**, **Books**,
-**General News**, **Anime** and **Manga**. You can watch for key phrases, which are highlighted and add bonus points.
+prestige of the outlets covering them, for seven verticals: **Games**, **Movies & TV**, **Books**,
+**General News**, **Consumer Tech**, **Anime** and **Manga**. You can watch for key phrases, which are highlighted and add bonus points.
 
-No dependencies: Python 3.10+ standard library only.
+No required dependencies: Python 3.10+ standard library only (`pip install anthropic` only for the optional AI summary).
 
 ```bash
 python3 app.py --backfill 3     # first run: seed every tab and load 3 days of history
@@ -150,6 +150,7 @@ outlet headline.
 | Movies & TV | `feeds/movies.txt` | `data/movies.db` |
 | Books | `feeds/books.txt` | `data/books.db` |
 | General News | `feeds/news.txt` | `data/news.db` |
+| Consumer Tech | `feeds/tech.txt` | `data/tech.db` |
 | Anime | `feeds/anime.txt` | `data/anime.db` |
 | Manga | `feeds/manga.txt` | `data/manga.db` |
 
@@ -167,6 +168,10 @@ outlet headline.
     the seeds back.
   - **Weights** only fill feeds that have none, so change an existing feed's weight in the UI.
 - **Retention**: headlines are kept for 30 days (`RETENTION_DAYS` in `store.py`), the longest time window.
+- **YouTube and TikTok**: every YouTube channel has a feed of its 15 latest videos
+  (`https://www.youtube.com/feeds/videos.xml?channel_id=<id>`; add it like any feed). Video titles
+  rarely read like headlines ("I tried…"), so they seldom match news stories; none are in the seed
+  lists. TikTok has no feeds.
 - **One feed per publisher** in each vertical. Two feeds from the same newsroom (e.g. NYT Movies and
   NYT Television) often carry identical headlines and would count one story twice toward N.
 - **Cached history** (`seed_cache/<vertical>.jsonl.gz`, currently Anime and Manga): 14 days of
@@ -243,6 +248,15 @@ Movies & TV). The weights are editorial judgment calls assigned by Claude, not m
 | 4 | ABC News (Top Stories), Al Jazeera English, Axios, CBC News (World), CBS News (Latest), Deutsche Welle (English), Los Angeles Times (World & Nation), NBC News (Top Stories), NPR (News), PBS NewsHour (Latest), Politico (Top Stories), The Guardian (World) |
 | 3 | Christian Science Monitor (World), Euronews, Fox News (Politics), France 24 (English), RFI (English), Semafor, Sky News (World), South China Morning Post (News), The Hill (Just In), The Independent (World), The Japan Times, TIME |
 | 2 | UPI (Top News) |
+
+**Consumer Tech** (41 feeds)
+
+| Weight | Outlets |
+|---|---|
+| 5 | Bloomberg (Technology), Financial Times (Technology), New York Times (Technology), Reuters (Technology), The Verge, Wall Street Journal (Tech) |
+| 4 | 9to5Mac, Ars Technica, BBC News (Technology), CNBC (Technology), CNET (News), Engadget, MacRumors, TechCrunch, The Guardian (Technology), The Information, Washington Post (Technology), Wired (Gear) |
+| 3 | 9to5Google, Android Authority, Android Police, AppleInsider, Digital Trends, Fast Company (Tech), Gizmodo, GSMArena, MacStories, Mashable (Tech), PCMag, Six Colors, TechRadar, The Register, Tom's Guide, Tom's Hardware, VentureBeat, XDA Developers, ZDNET |
+| 2 | Neowin, Notebookcheck, PhoneArena, SamMobile |
 
 **Anime** (14 feeds)
 

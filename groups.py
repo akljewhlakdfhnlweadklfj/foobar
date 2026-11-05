@@ -168,6 +168,11 @@ class GroupStore:
         with self._conn() as c:
             c.execute("CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY, config TEXT NOT NULL, "
                       "updated_at REAL NOT NULL)")
+            have_seeded = c.execute("SELECT 1 FROM sqlite_master WHERE name = 'seeded'").fetchone()
+            c.execute("CREATE TABLE IF NOT EXISTS seeded (vertical TEXT PRIMARY KEY)")
+            if not have_seeded:   # groups.db from before this table: verticals already in a group were seeded
+                verticals = {v for (cfg,) in c.execute("SELECT config FROM groups") for v in json.loads(cfg)["verticals"]}
+                c.executemany("INSERT OR IGNORE INTO seeded (vertical) VALUES (?)", [(v,) for v in verticals])
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -250,6 +255,14 @@ class GroupStore:
             n = c.execute("DELETE FROM groups WHERE id = ?", (gid,)).rowcount
             self.version += 1
             return n > 0
+
+    def was_seeded(self, vertical: str) -> bool:
+        with self._conn() as c:
+            return c.execute("SELECT 1 FROM seeded WHERE vertical = ?", (vertical,)).fetchone() is not None
+
+    def mark_seeded(self, vertical: str) -> None:
+        with self._conn() as c:
+            c.execute("INSERT OR IGNORE INTO seeded (vertical) VALUES (?)", (vertical,))
 
     def is_empty(self) -> bool:
         with self._conn() as c:
