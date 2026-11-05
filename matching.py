@@ -38,6 +38,10 @@ STOPWORDS = frozenset(
     says said say saying new news live update updates latest breaking report
     reports reported watch video photos analysis opinion exclusive amid via
     after over us vs
+    january february march april may june july august september october november december
+    jan feb mar apr jun jul aug sep sept oct nov dec
+    monday tuesday wednesday thursday friday saturday sunday today tonight yesterday tomorrow
+    daily weekly week weeks month monthly
     """.split()
 )
 
@@ -156,9 +160,28 @@ def _weighted_cosine(idf: dict[str, float], a: frozenset[str], b: frozenset[str]
 
 
 # Chosen with eval_matching.py against Overworld's curated story groups (1,171 stories):
-# cosine + average linkage @ 0.15 gave F1 0.83 vs 0.36 for the original jaccard + single link @ 0.40.
+# cosine + average linkage @ 0.15 gave F1 0.82 vs 0.36 for the original jaccard + single link @ 0.40.
 SIMILARITY = _weighted_cosine
 DEFAULT_THRESHOLD = 0.15
+
+
+def _drop_feed_boilerplate(items: list[Item], min_items: int = 10, share: float = 0.4) -> None:
+    """Remove tokens that appear in a large share of one feed's titles, such as the
+    " - Reuters" suffix Google News adds or a "Review:" prefix. They describe the feed, not the story."""
+    by_feed: dict[int, list[Item]] = defaultdict(list)
+    for it in items:
+        by_feed[it.feed_id].append(it)
+    for its in by_feed.values():
+        if len(its) < min_items:
+            continue
+        counts: dict[str, int] = defaultdict(int)
+        for it in its:
+            for t in it.tokens:
+                counts[t] += 1
+        boiler = {t for t, c in counts.items() if c >= share * len(its)}
+        if boiler:
+            for it in its:
+                it.tokens = it.tokens - boiler
 
 
 def lexical_similarities(items: list[Item], min_shared: int = 2) -> dict[tuple[int, int], float]:
@@ -166,6 +189,7 @@ def lexical_similarities(items: list[Item], min_shared: int = 2) -> dict[tuple[i
     for it in items:
         if not it.tokens:
             it.tokens = tokenize(it.title)
+    _drop_feed_boilerplate(items)
     n = len(items)
 
     # IDF over the window. Smoothed so a token in every doc still has weight > 0.

@@ -76,7 +76,7 @@ and 3,513 outlet headlines, May–Nov 2026, downloaded from Feedly and cached in
 | Version | Precision | Recall | F1 | Stories fully grouped |
 |---|---|---|---|---|
 | Original (weighted Jaccard, single link, 0.40) | 0.93 | 0.23 | 0.36 | 14% |
-| Current (weighted cosine, average link, 0.15) | 0.83 | 0.83 | 0.83 | 76% |
+| Current (weighted cosine, average link, 0.15) | 0.82 | 0.82 | 0.82 | 75% |
 | Tested, not adopted: + sentence embeddings (bge-small) | 0.86 | 0.85 | 0.86 | 79% |
 
 Embeddings added about 3 F1 points but need a ~220 MB install and a model download, so the default

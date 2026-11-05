@@ -1,0 +1,34 @@
+# Movies feeds - verified via Feedly on 2026-11-05
+# --- Trade / industry ---
+http://variety.com/feed/                                                 # Variety | trade | ~467/wk
+https://www.hollywoodreporter.com/feed/                                  # The Hollywood Reporter | trade | ~303/wk
+http://www.deadline.com/feed/                                            # Deadline | trade | ~383/wk
+https://www.indiewire.com/feed/                                          # IndieWire | trade | ~61/wk
+http://www.thewrap.com/feed/                                             # TheWrap | trade | ~248/wk
+https://www.screendaily.com/45187.rss                                    # Screen Daily (Latest) | trade | ~75/wk
+http://feeds.feedburner.com/nymag/vulture                                # Vulture | trade | ~99/wk
+https://collider.com/feed/                                               # Collider | trade | ~622/wk
+http://www.slashfilm.com/feed/                                           # /Film | trade | ~124/wk
+https://rss.onebauer.media/api/feed-aggregator?hostname=https://www.empireonline.com # Empire | trade | ~27/wk
+https://www.comingsoon.net/feed                                          # ComingSoon.net | trade | ~528/wk
+https://www.joblo.com/feed/                                              # JoBlo | trade | ~112/wk
+https://www.worldofreel.com/blog?format=RSS                              # World of Reel | trade | ~52/wk
+https://theplaylist.net/feed/                                            # The Playlist | trade | ~85/wk
+https://www.goldderby.com/feed/                                          # Gold Derby | trade | ~74/wk
+https://www.boxofficepro.com/feed/                                       # Boxoffice Pro | trade | ~12/wk
+http://www.tvline.com/feed/                                              # TVLine | trade | ~173/wk
+
+# --- General publications ---
+https://rss.nytimes.com/services/xml/rss/nyt/Movies.xml                  # New York Times (Movies) | general | ~34/wk
+https://rss.nytimes.com/services/xml/rss/nyt/Television.xml              # New York Times (Television) | general | ~25/wk
+https://www.theguardian.com/film/rss                                     # The Guardian (Film) | general | ~48/wk
+https://www.latimes.com/entertainment-arts/rss2.0.xml                    # Los Angeles Times (Entertainment & Arts) | general | ~92/wk
+https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml             # BBC News (Entertainment & Arts) | general | ~73/wk
+https://feeds.npr.org/1045/rss.xml                                       # NPR (Movies) | general | ~10/wk
+https://www.cbsnews.com/latest/rss/entertainment                         # CBS News (Entertainment) | general | ~34/wk
+https://abcnews.go.com/abcnews/entertainmentheadlines                    # ABC News (Entertainment) | general | ~18/wk
+http://www.independent.co.uk/arts-entertainment/films/rss                # The Independent (Film) | general | ~48/wk
+https://moxie.foxnews.com/google-publisher/entertainment.xml             # Fox News (Entertainment) | general | ~57/wk
+https://www.rollingstone.com/tv-movies/feed/                             # Rolling Stone (TV & Movies) | general | ~26/wk
+https://www.avclub.com/rss                                               # The A.V. Club | general | ~148/wk
+https://www.cbc.ca/webfeed/rss/rss-arts                                  # CBC (Arts) | general | ~21/wk
