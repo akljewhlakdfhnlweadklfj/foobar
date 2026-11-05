@@ -15,7 +15,7 @@ Options: `--port 8000`, `--host 127.0.0.1`, `--db news.db`, `--interval 15` (min
 ## Using it
 
 - **Seed feeds**: `feeds.txt` lists the publications Overworld (overworld.vg) aggregates. Import it with `--import`.
-- **Add/remove feeds** in the left panel. A feed is fetched and validated before it's saved, so a bad URL is reported immediately. A red dot means the last fetch failed; hover the text to see why.
+- **Add/remove feeds** in the left panel. A feed is fetched and validated before it's saved, so a bad URL is reported immediately. A red dot means the last fetch failed, and the error is shown under the feed.
 - **Reported by at least N**: the core filter. Stories are sorted by how many feeds carry them, then by recency.
 - **Time window**: only headlines published in this window are compared. Headlines are stored for 14 days.
 - **Match strictness**: the similarity threshold for treating two headlines as the same story (default 0.40).
