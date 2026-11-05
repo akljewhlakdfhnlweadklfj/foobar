@@ -12,6 +12,15 @@ python3 app.py                        # afterwards
 
 Options: `--port 8000`, `--host 127.0.0.1`, `--db news.db`, `--interval 15` (minutes between refreshes).
 
+## Run in GitHub Codespaces
+
+On the repo page, click **Code → Codespaces → Create codespace on main**. The dev container loads
+`feeds.txt` on first creation, starts the server on every start, and opens the app in a browser tab
+(or use the **Ports** panel → port 8000). Server log: `/tmp/news-aggregator.log`.
+
+Codespaces stop after ~30 minutes idle (configurable in your GitHub settings) and count against
+your free monthly hours. Your feeds and headlines persist in `news.db` until the codespace is deleted.
+
 ## Using it
 
 - **Seed feeds**: `feeds.txt` lists the publications Overworld (overworld.vg) aggregates. Import it with `--import`.

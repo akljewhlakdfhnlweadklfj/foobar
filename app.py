@@ -266,6 +266,7 @@ def main():
     ap.add_argument("--interval", type=float, default=15, help="minutes between automatic refreshes")
     ap.add_argument("--import", dest="import_file", metavar="FILE",
                     help="add feed URLs from a text file (one per line, # comments allowed) before starting")
+    ap.add_argument("--import-only", action="store_true", help="exit after --import instead of starting the server")
     args = ap.parse_args()
 
     store = Store(args.db)
@@ -280,6 +281,8 @@ def main():
                 except sqlite3.IntegrityError:
                     pass
         print(f"Imported {added} new feed(s) from {args.import_file}")
+    if args.import_only:
+        return
 
     fetcher = Fetcher(store, args.interval)
     threading.Thread(target=fetcher.loop, daemon=True).start()
