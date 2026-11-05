@@ -631,6 +631,20 @@ class KeywordTests(unittest.TestCase):
         self.assertEqual(stories[0]["keywords"][0]["weight"], 1.0)
         self.assertTrue(all(a["weight"] >= b["weight"] for a, b in zip(stories[0]["keywords"], stories[0]["keywords"][1:])))
 
+    def test_lead_keyword_is_noun_like(self):
+        def story(title_list):
+            return {"title": title_list[0], "score": 10, "sources": [{"title": t} for t in title_list]}
+        gov = story(["Record number of female governors elected", "Female governors elected in record numbers",
+                     "Record number of women elected governor"])
+        app.story_terms([gov])
+        self.assertNotIn(gov["keywords"][0]["term"].lower(), ("record", "female", "elected"))
+        self.assertTrue(app._noun_like(("ubisoft",), "Ubisoft", True))
+        self.assertFalse(app._noun_like(("black",), "Black", True))           # capitalised adjective
+        self.assertFalse(app._noun_like(("delay",), "delayed", False))
+        self.assertTrue(app._noun_like(("name", "god", "of", "war"), "God of War", False))
+        self.assertEqual(sorted(app._name_candidates("Dragon’s Dogma 2 Drops Surprise Collab").values(), key=len)[-1],
+                         "Dragon’s Dogma 2")
+
     def test_names_with_connectors_are_kept_whole(self):
         def story(title_list):
             return {"title": title_list[0], "score": 10, "sources": [{"title": t} for t in title_list]}

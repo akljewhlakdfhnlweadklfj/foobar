@@ -52,19 +52,16 @@ The app has two sections (top left):
 
 **Stories**: the reader. Pick **All** (every vertical, each using its own settings, with a label on
 each story) or a single vertical, and sort by **Top** (score) or **Latest**.
-- A **word cloud** at the top shows the most prominent names, phrases and words in the stories listed:
-  a term counts for a story when it's in at least 40% of that story's headlines, and is sized by the
-  scores of the stories using it. Generic headline words (trailer, review, season…) are left out.
-  Names are kept whole, including small connecting words ("God of War Laufey", "South of Midnight",
-  "Call of Duty", "Xbox Series X", "Grand Theft Auto 6"), and a longer name or phrase replaces the
-  shorter terms inside it when it covers most of their uses. In Title Case headlines, where every
-  word is capitalised, a run of words only counts as a name if it has a connector, number or acronym
-  in it, or recurs as a phrase across outlets.
-  Click a term to show only stories mentioning it; click again (or "Show all") to clear.
-- The list is compact: each story shows only its **key terms** (a small word cloud of up to 6 terms,
-  most prominent first, left to right: share of its headlines x how distinctive the term is) and its
-  **headline**, the shortest one among its outlets (4+ words; labelled pieces like "Opinion |" or
-  "WATCH:" are skipped when possible). Click a key term to filter by it.
+- The list is compact: one line per story, **`Key term: Headline`**.
+  - **Key term**: the story's most prominent noun or name, kept whole when it's a name with small
+    connecting words ("God of War Laufey", "South of Midnight", "Xbox Series X"). Terms count when
+    they're in at least 40% of the story's headlines; they're ranked by that share x how distinctive
+    they are in the list, with names and phrases preferred. Verbs and adjectives ("delayed", "Black")
+    are skipped, using a word list and word endings (there's no part-of-speech tagger). The term is
+    highlighted by the story's prominence in the list being viewed: solid for the top 15% by score,
+    tinted for the next 35%. Click it to show only stories mentioning it.
+  - **Headline**: the shortest one among the story's outlets (4+ words; labelled pieces like
+    "Opinion |" or "WATCH:" are skipped when possible).
 - Click a story (or its arrow) to expand it: outlets and score, outlet and times, description,
   image (when the feeds have one; loaded only when expanded), watched-phrase chips, and every outlet's
   headline. Description and image fall back to the highest-weighted outlet that has them.

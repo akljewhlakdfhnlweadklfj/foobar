@@ -81,8 +81,8 @@
   .story:first-child { border-top: 0; }
   .story.watched { box-shadow: inset 3px 0 0 var(--accent); }
   .story .row { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; }
-  .story .expand { flex: none; background: none; border: 0; color: var(--muted); font-size: 14px; padding: 4px 6px;
-                   border-radius: 4px; transition: transform .15s; margin-top: 2px; }
+  .story .expand { flex: none; background: none; border: 0; color: var(--muted); font-size: 14px; padding: 2px 6px;
+                   border-radius: 4px; transition: transform .15s; margin-top: 0; }
   .story.open .expand { transform: rotate(180deg); }
   .story .expand:hover { background: var(--accent-soft); color: var(--accent); }
   @media (prefers-reduced-motion: reduce) { .story .expand { transition: none; } }
@@ -96,11 +96,13 @@
   .badge .score { display: block; margin-top: 3px; padding-top: 3px; border-top: 1px solid currentColor; font-size: 11px; opacity: .85; }
   .story h3 { margin: 0; font-size: 16px; line-height: 1.35; font-weight: 600; }
   .story-text { flex: 1; min-width: 0; }
-  .kws { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 0 0 3px; }
-  .kws button { background: none; border: 0; padding: 0; font-weight: 700; color: var(--muted); cursor: pointer;
-                letter-spacing: -0.01em; white-space: nowrap; }
-  .kws button:first-child { color: var(--accent); }
-  .kws button:hover, .kws button[aria-pressed="true"] { color: var(--accent); text-decoration: underline; }
+  /* Lead keyword, highlighted by the story's prominence in the list being viewed. */
+  .story h3 .kw { border: 0; font: inherit; font-weight: 700; cursor: pointer; border-radius: 4px;
+                  padding: 0 5px; margin-left: -5px; color: var(--accent); background: none; }
+  .story h3 .kw.p1 { background: var(--accent); color: var(--btn-text); margin-left: 0; }
+  .story h3 .kw.p2 { background: var(--accent-soft); color: var(--accent); margin-left: 0; }
+  .story h3 .kw:hover, .story h3 .kw[aria-pressed="true"] { text-decoration: underline; }
+  .story h3 .kw-sep { color: var(--muted); font-weight: 600; margin-left: 1px; }
   .thumb { flex: none; width: 168px; height: 104px; border-radius: 8px; overflow: hidden; background: var(--bg);
            border: 1px solid var(--border); display: block; }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -428,6 +430,7 @@ const storyKey = (s) => s.vertical + "|" + (s.lead.link || s.title);
 // ---------- Word cloud of prominent terms ----------
 let activeTerm = null, lastTerms = [], lastStories = [], shownStories = [];   // activeTerm: {term, forms}
 const openStories = new Set();   // keys of expanded stories (kept across refreshes)
+let prominenceClass = () => "p3";
 function mergeTerms(results) {
   const by = new Map();
   for (const r of results) for (const t of r.terms || []) {
@@ -445,9 +448,11 @@ function termRe(t) {
   return new RegExp(`(?<![\\p{L}\\p{N}_])(?:${parts.join("|")})(?![\\p{L}\\p{N}_])`, "iu");
 }
 const mentions = (s, re) => re.test(s.title) || re.test(s.lead.description || "") || s.sources.some((x) => re.test(x.title));
+const SHOW_GLOBAL_CLOUD = false;   // the per-story keyword is shown inline instead
 function renderCloud(terms) {
   lastTerms = terms;
   const el = $("cloud");
+  if (!SHOW_GLOBAL_CLOUD) { el.hidden = true; el.innerHTML = ""; return; }
   el.hidden = !terms.length;
   if (!terms.length) { el.innerHTML = ""; return; }
   const max = terms[0].weight, ordered = [];
@@ -545,6 +550,10 @@ function renderStoryList(allStories, sub, force) {
     return;
   }
   shownStories = stories;
+  // Prominence = rank by score among the stories shown (whatever the sort order).
+  const byScore = [...stories].sort((a, b) => b.score - a.score);
+  const rank = new Map(byScore.map((st, i) => [st, i / Math.max(1, byScore.length)]));
+  prominenceClass = (st) => { const r = rank.get(st); return r < 0.15 ? "p1" : r < 0.5 ? "p2" : "p3"; };
   $("stories").innerHTML = stories.map((s, idx) => {
     const re = phraseRe(s.watched.map((w) => w.phrase));
     const key = storyKey(s), isOpen = openStories.has(key);
@@ -553,10 +562,9 @@ function renderStoryList(allStories, sub, force) {
     <article class="story${s.watched.length ? " watched" : ""}${isOpen ? " open" : ""}" data-idx="${idx}" data-key="${esc(key)}">
       <div class="row">
         <div class="story-text">
-          ${(s.keywords || []).length ? `<div class="kws" aria-label="Key terms">${s.keywords.map((k, i) =>
-            `<button type="button" data-kw="${i}" style="font-size:${(11 + 5 * k.weight).toFixed(1)}px;opacity:${(0.6 + 0.4 * k.weight).toFixed(2)}"
-               aria-pressed="${pressed(k.term)}" title="Show stories mentioning ${esc(k.term)}">${esc(k.term)}</button>`).join("")}</div>` : ""}
-          <h3>${s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${hl(s.title, re)}</a>` : hl(s.title, re)}</h3>
+          <h3>${(s.keywords || []).length ? `<button type="button" class="kw ${prominenceClass(s, idx)}" data-kw="0" aria-pressed="${pressed(s.keywords[0].term)}"
+                title="Show stories mentioning ${esc(s.keywords[0].term)}">${esc(s.keywords[0].term)}</button><span class="kw-sep">:</span> ` : ""}${
+            s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${hl(s.title, re)}</a>` : hl(s.title, re)}</h3>
         </div>
         <button type="button" class="expand" aria-expanded="${isOpen}" aria-label="${isOpen ? "Hide" : "Show"} details">▾</button>
       </div>

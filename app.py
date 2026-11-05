@@ -271,6 +271,37 @@ _GENERIC_STEMS = frozenset(matching._stem(w) for w in GENERIC_TERMS)
 MIN_SHARE = 0.4
 MAX_RUN_WORDS = 4
 STORY_KEYWORDS = 6
+NAME_BOOST, RUN_BOOST = 1.5, 1.25   # ranking boost for names / multi-word runs over single words
+
+# Headline verbs and adjectives that shouldn't lead a story ("delayed", "blames", "Black", "record").
+# No part-of-speech tagger in the standard library, so: this list plus verb/adjective endings.
+NOT_NOUNS = frozenset(matching._stem(w) for w in """
+    blame blames win wins won lose loses lost beat beats join joins reunite reunites slam slams sue sues hit
+    cut cuts raise raises quit quits fire fires fired claim claims warn warns vow vows urge urges push pushes
+    plan plans seek seeks eye eyes pull pulls drop drops add adds ban bans block blocks kill kills die dies
+    sign signs buy buys sell sells lead leads name names return returns leave leaves face faces take takes
+    make makes give gives help helps hire hires lay lays boost boosts slash slashes hike hikes flip flips
+    sweep sweeps defeat defeats oust ousts elect elects pass passes reject rejects approve approves stop stops
+    exit exits break breaks hold holds keep keeps miss misses rise rises fall falls soar soars sink sinks
+    jump jumps climb climbs top tops tease teases debut debuts premiere premieres stream streams air airs drop
+    black white red blue green new old big small first last final major minor record female male young
+    former latest early late dark bright huge massive key main real true false full free live dead open close
+    official top best worst little great high low long short fresh rare global local national federal
+    possible likely unlikely second third
+""".split())
+_NOT_NOUN_ENDINGS = ("ed", "ing", "ly", "ous", "ive", "able", "ible", "ful", "less", "ish")
+
+
+def _noun_like(key: tuple, display: str, proper_evidence: bool) -> bool:
+    """Rough noun test for a keyword (see NOT_NOUNS)."""
+    if key[0] in ("name", "pair"):
+        return True                                # names and multi-word phrases
+    word = display.lower()
+    if key[0] in NOT_NOUNS or matching._stem(word) in NOT_NOUNS:
+        return False                               # checked first: "Black women" capitalises an adjective
+    if proper_evidence or display.isupper() or any(c.isdigit() for c in display):
+        return True                                # a capitalised name, acronym or model ("Ubisoft", "PS5")
+    return not word.endswith(_NOT_NOUN_ENDINGS)
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’+\-]*")
 
 
@@ -319,7 +350,8 @@ def _name_candidates(title: str) -> dict[tuple, str]:
     title_case = len(words_all) > 3 and caps_all / len(words_all) >= 0.6
     out = {}
     for segment in _SEGMENT_RE.split(title):
-        words = [_strip_possessive(w) for w in _TOKEN_RE.findall(segment)]
+        raw = _TOKEN_RE.findall(segment)
+        words = [_strip_possessive(w) for w in raw]
         n = len(words)
         for i in range(n):
             first = words[i]
@@ -345,9 +377,16 @@ def _name_candidates(title: str) -> dict[tuple, str]:
                     continue                      # don't start on filler, unless it's clearly a name ("Call of Duty")
                 if not any(_term_key(x) or any(c.isdigit() for c in x) or x.isupper() for x in names):
                     continue
-                if title_case and not (has_conn or special):
-                    continue
-                out[tuple(x.lower() for x in span)] = " ".join(span)
+                if title_case and not has_conn:
+                    # Every word is capitalised here, so only trust runs anchored by a number/acronym
+                    # at an end ("GTA 6", "Xbox Series X"), not whole headlines ("Presses Back AI Service").
+                    is_special = lambda x: any(c.isdigit() for c in x) or (x.isupper() and x not in ("A", "I"))
+                    if not (is_special(names[0]) or is_special(names[-1])) or len(span) > 4:
+                        continue
+                # Key without possessives (so "Dragon's Dogma" = "Dragon Dogma"); display keeps an inner
+                # possessive ("Dragon's Dogma 2") but drops a trailing one ("Nintendo's" -> "Nintendo").
+                shown = raw[i:j] + [words[j]]
+                out[tuple(x.lower() for x in span)] = " ".join(shown)
     return out
 
 
@@ -511,15 +550,22 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
                 chosen.remove(c)
                 cands[c[2]] = None
             chosen.append((wks, share, len(cands), k[0] == "name"))
-            cands.append((share * math.log(1 + n_stories / max(1, multi_n[k])), multi_display(k), multi_forms_list(k), k))
+            boost = NAME_BOOST if k[0] == "name" else RUN_BOOST    # what a story is about is usually a name
+            cands.append((boost * share * math.log(1 + n_stories / max(1, multi_n[k])), multi_display(k), multi_forms_list(k), k))
             used |= wks                           # "Johnson" is covered by "Mike Johnson"
         cands = [c for c in cands if c is not None]
         for k, share in own_u.items():
             if k not in used:
                 cands.append((share * math.log(1 + n_stories / max(1, uni_n[k])), display(k), sorted(forms[k])[:6], (k,)))
         cands.sort(key=lambda c: -c[0])
+        # The lead keyword is the most prominent noun-like term; the rest keep their order.
+        lead = next((c for c in cands if _noun_like(c[3], c[1], c[3][0] not in ("name", "pair") and proper[c[3][0]] > plain[c[3][0]])), None)
+        if lead is not None:
+            cands.remove(lead)
+            cands.insert(0, lead)
         top = cands[:STORY_KEYWORDS]
-        s["keywords"] = [{"term": t, "weight": round(w / top[0][0], 3), "forms": f} for w, t, f, _ in top] if top else []
+        best = max((c[0] for c in top), default=1) or 1
+        s["keywords"] = [{"term": t, "weight": round(w / best, 3), "forms": f} for w, t, f, _ in top] if top else []
 
     out = sorted(terms.values(), key=lambda t: -t["weight"])[:limit]
     for t in out:
