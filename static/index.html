@@ -96,13 +96,10 @@
   .badge .score { display: block; margin-top: 3px; padding-top: 3px; border-top: 1px solid currentColor; font-size: 11px; opacity: .85; }
   .story h3 { margin: 0; font-size: 16px; line-height: 1.35; font-weight: 600; }
   .story-text { flex: 1; min-width: 0; }
-  /* Lead keyword, highlighted by the story's prominence in the list being viewed. */
-  .story h3 .kw { border: 0; font: inherit; font-weight: 700; cursor: pointer; border-radius: 4px;
-                  padding: 0 5px; margin-left: -5px; color: var(--accent); background: none; }
-  .story h3 .kw.p1 { background: var(--accent); color: var(--btn-text); margin-left: 0; }
-  .story h3 .kw.p2 { background: var(--accent-soft); color: var(--accent); margin-left: 0; }
+  /* Lead keyword: plain accent-coloured text. */
+  .story h3 .kw { border: 0; padding: 0; font: inherit; font-weight: inherit; cursor: pointer; color: var(--accent); background: none; }
   .story h3 .kw:hover, .story h3 .kw[aria-pressed="true"] { text-decoration: underline; }
-  .story h3 .kw-sep { color: var(--muted); font-weight: 600; margin-left: 1px; }
+  .story h3 .kw-sep { color: var(--accent); }
   .thumb { flex: none; width: 168px; height: 104px; border-radius: 8px; overflow: hidden; background: var(--bg);
            border: 1px solid var(--border); display: block; }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -430,7 +427,6 @@ const storyKey = (s) => s.vertical + "|" + (s.lead.link || s.title);
 // ---------- Word cloud of prominent terms ----------
 let activeTerm = null, lastTerms = [], lastStories = [], shownStories = [];   // activeTerm: {term, forms}
 const openStories = new Set();   // keys of expanded stories (kept across refreshes)
-let prominenceClass = () => "p3";
 function mergeTerms(results) {
   const by = new Map();
   for (const r of results) for (const t of r.terms || []) {
@@ -550,10 +546,6 @@ function renderStoryList(allStories, sub, force) {
     return;
   }
   shownStories = stories;
-  // Prominence = rank by score among the stories shown (whatever the sort order).
-  const byScore = [...stories].sort((a, b) => b.score - a.score);
-  const rank = new Map(byScore.map((st, i) => [st, i / Math.max(1, byScore.length)]));
-  prominenceClass = (st) => { const r = rank.get(st); return r < 0.15 ? "p1" : r < 0.5 ? "p2" : "p3"; };
   $("stories").innerHTML = stories.map((s, idx) => {
     const re = phraseRe(s.watched.map((w) => w.phrase));
     const key = storyKey(s), isOpen = openStories.has(key);
@@ -562,7 +554,7 @@ function renderStoryList(allStories, sub, force) {
     <article class="story${s.watched.length ? " watched" : ""}${isOpen ? " open" : ""}" data-idx="${idx}" data-key="${esc(key)}">
       <div class="row">
         <div class="story-text">
-          <h3>${(s.keywords || []).length ? `<button type="button" class="kw ${prominenceClass(s, idx)}" data-kw="0" aria-pressed="${pressed(s.keywords[0].term)}"
+          <h3>${(s.keywords || []).length ? `<button type="button" class="kw" data-kw="0" aria-pressed="${pressed(s.keywords[0].term)}"
                 title="Show stories mentioning ${esc(s.keywords[0].term)}">${esc(s.keywords[0].term)}</button><span class="kw-sep">:</span> ` : ""}${
             s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${hl(s.title, re)}</a>` : hl(s.title, re)}</h3>
         </div>

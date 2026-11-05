@@ -57,9 +57,8 @@ each story) or a single vertical, and sort by **Top** (score) or **Latest**.
     connecting words ("God of War Laufey", "South of Midnight", "Xbox Series X"). Terms count when
     they're in at least 40% of the story's headlines; they're ranked by that share x how distinctive
     they are in the list, with names and phrases preferred. Verbs and adjectives ("delayed", "Black")
-    are skipped, using a word list and word endings (there's no part-of-speech tagger). The term is
-    highlighted by the story's prominence in the list being viewed: solid for the top 15% by score,
-    tinted for the next 35%. Click it to show only stories mentioning it.
+    are skipped, using a word list and word endings (there's no part-of-speech tagger). It's shown in
+    the accent colour; click it to show only stories mentioning it.
   - **Headline**: the shortest one among the story's outlets (4+ words; labelled pieces like
     "Opinion |" or "WATCH:" are skipped when possible).
 - Click a story (or its arrow) to expand it: outlets and score, outlet and times, description,

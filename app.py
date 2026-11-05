@@ -456,7 +456,10 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
                         if None in run:
                             break
                         if len(set(run)) == len(run):
-                            seen_m.setdefault(("pair",) + tuple(run), None)
+                            key = ("pair",) + tuple(run)
+                            seen_m.setdefault(key, None)
+                            surface = seg_words[i:j - 1] + [_strip_possessive(seg_words[j - 1])]
+                            multi_forms[key][" ".join(x.strip("-") for x in surface)] += 1
             for key, text in _name_candidates(title).items():
                 seen_m[("name",) + key] = text
                 multi_forms[("name",) + key][text] += 1
@@ -494,7 +497,15 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
         return caps_.most_common(1)[0][0] if caps_ and proper[k] >= plain[k] else form.lower()
 
     def multi_display(k: tuple) -> str:
-        return _display_name(multi_forms[k]) if k[0] == "name" else " ".join(display(w) for w in k[1:])
+        if k[0] == "name":
+            return _display_name(multi_forms[k])
+        # A run keeps its headline spelling ("Dragon's Dogma"), with ordinary words lowercased.
+        if multi_forms[k]:
+            words = multi_forms[k].most_common(1)[0][0].split()
+            if len(words) == len(k) - 1:
+                return " ".join(w if display(key)[:1].isupper() or w.isupper() else w.lower()
+                                for w, key in zip(words, k[1:]))
+        return " ".join(display(w) for w in k[1:])
 
     def word_keys(k: tuple) -> set:
         """Single-word keys inside a multi-word term."""
