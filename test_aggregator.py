@@ -626,11 +626,34 @@ class KeywordTests(unittest.TestCase):
         ]
         app.story_terms(stories)
         kw = [k["term"] for k in stories[0]["keywords"]]
-        self.assertEqual(kw[0], "Sentinel")          # in every headline and only in this story
-        self.assertIn("Elder Scrolls", kw)           # phrase replaces its words
+        self.assertEqual(set(kw[:2]), {"Sentinel", "Elder Scrolls"})   # in every headline; phrase replaces its words
         self.assertNotIn("Elder", kw)
         self.assertEqual(stories[0]["keywords"][0]["weight"], 1.0)
         self.assertTrue(all(a["weight"] >= b["weight"] for a, b in zip(stories[0]["keywords"], stories[0]["keywords"][1:])))
+
+    def test_names_with_connectors_are_kept_whole(self):
+        def story(title_list):
+            return {"title": title_list[0], "score": 10, "sources": [{"title": t} for t in title_list]}
+        laufey = story(["God of War Laufey delayed to May 20, 2027", "God Of War Laufey Delayed To May",
+                        "God of War Laufey has officially been delayed", "God Of War Laufey Delayed"])
+        midnight = story(["South of Midnight director says he wouldn't have funded it",
+                          "South Of Midnight Director Says He Would Not Have Funded The Game",
+                          "South of Midnight creative director would have turned off Xbox money tap"])
+        cod = story(["Call of Duty: Modern Warfare 4 DMZ patch nerfs UAV towers",
+                     "Review: Call Of Duty: Modern Warfare 4", "Call of Duty: Modern Warfare 4 DMZ Season 1 trailer"])
+        app.story_terms([laufey, midnight, cod])
+        terms = lambda s: [k["term"] for k in s["keywords"]]
+        self.assertIn("God of War Laufey", terms(laufey))
+        self.assertNotIn("War Laufey", terms(laufey))
+        self.assertIn("South of Midnight", terms(midnight))
+        self.assertFalse(any(t in terms(midnight) for t in ("South", "Midnight", "Midnight director")))
+        self.assertIn("Call of Duty", terms(cod))
+        self.assertIn("Modern Warfare 4", terms(cod))
+        self.assertEqual(sorted(app._name_candidates("New Xbox Series X Revealed").values(), key=len)[-1], "Xbox Series X")
+        quoted = story(["South of Midnight director says he wouldn’t have funded it ‘Rome burns’",
+                        "‘There’s always a night when Rome burns’: South of Midnight director speaks"])
+        app.story_terms([quoted])                                    # curly quotes and contractions: no crash
+        self.assertIn("South of Midnight", [k["term"] for k in quoted["keywords"]])
 
 
 class ParserAndPagingTests(unittest.TestCase):

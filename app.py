@@ -267,7 +267,9 @@ GENERIC_TERMS = frozenset("""
     major huge massive including includes include available live early late latest today tonight
     against during off long short high low good great bad better worse every many much more most
 """.split())
+_GENERIC_STEMS = frozenset(matching._stem(w) for w in GENERIC_TERMS)
 MIN_SHARE = 0.4
+MAX_RUN_WORDS = 4
 STORY_KEYWORDS = 6
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’+\-]*")
 
@@ -279,32 +281,114 @@ def _term_key(word: str) -> str | None:
     w = w.strip("'-")
     if len(w) < 3 or w.isdigit() or w in matching.STOPWORDS or w in GENERIC_TERMS:
         return None
-    key = matching._stem(matching.SYNONYMS.get(w, w))
-    return None if key in GENERIC_TERMS or key in matching.STOPWORDS else key
+    mapped = matching.SYNONYMS.get(w, w)
+    if mapped in GENERIC_TERMS:                   # "unveils" -> "announce"
+        return None
+    key = matching._stem(mapped)
+    return None if key in GENERIC_TERMS or key in matching.STOPWORDS or key in _GENERIC_STEMS else key
+
+
+# Small words allowed inside a name ("God of War", "Lord of the Rings", "Dungeons & Dragons").
+NAME_CONNECTORS = frozenset({"of", "the", "&", "de", "la", "le", "du", "del", "von", "van", "vs"})
+# Punctuation that ends a name: phrases never span "Zelda: Ocarina" or "Switch 2, PS5".
+_SEGMENT_RE = re.compile(r"[:|;,!?()\[\]{}\"“”«»]|\s[-–—]\s|\.\s|(?<!\w)[‘’']|[‘’'](?!\w)")
+_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’+\-.]*[A-Za-z0-9+]|[A-Za-z0-9]|&")
+MAX_NAME_WORDS = 6
+
+
+def _strip_possessive(w: str) -> str:
+    return w[:-2] if w.lower().endswith(("'s", "’s")) else w
+
+
+def _is_cap(w: str) -> bool:
+    """Looks like part of a name: Capitalised, ALLCAPS, or contains a digit ("6", "PS5", "VI")."""
+    return w[:1].isupper() or any(c.isdigit() for c in w)
+
+
+def _name_candidates(title: str) -> dict[tuple, str]:
+    """Proper-noun phrases in a headline: runs of capitalised words/numbers, possibly with connectors
+    inside ("God of War Laufey", "South of Midnight", "Grand Theft Auto 6", "Xbox Series X").
+    Returns {lowercased word tuple: surface text}.
+
+    In Title Case headlines every word is capitalised, so a run only counts there if it has a
+    connector, a number or an acronym in it; plain capitalised pairs ("File Size") need a
+    sentence-case headline, where capitals actually mark names. Pairs like "Elder Scrolls" are also
+    found by the adjacent-pair stage."""
+    words_all = _WORD_RE.findall(title)
+    caps_all = sum(w[0].isupper() for w in words_all)
+    title_case = len(words_all) > 3 and caps_all / len(words_all) >= 0.6
+    out = {}
+    for segment in _SEGMENT_RE.split(title):
+        words = [_strip_possessive(w) for w in _TOKEN_RE.findall(segment)]
+        n = len(words)
+        for i in range(n):
+            first = words[i]
+            if not _is_cap(first) or first.lower() in NAME_CONNECTORS or first.lower() in matching.STOPWORDS \
+                    or first.isdigit():
+                continue
+            for j in range(i + 1, min(n, i + MAX_NAME_WORDS)):
+                w = words[j]
+                if w.lower() in NAME_CONNECTORS:
+                    continue                      # connector: allowed inside, never at the end
+                if not _is_cap(w):
+                    break                         # an ordinary lowercase word ends the name
+                span = words[i:j + 1]
+                names = [x for x in span if x.lower() not in NAME_CONNECTORS]
+                has_conn = len(names) < len(span)
+                special = any(any(c.isdigit() for c in x) or (x.isupper() and x not in ("A", "I")) for x in names)
+                last = span[-1]
+                if len(names) < 2:
+                    continue
+                if not (_term_key(last) or any(c.isdigit() for c in last) or last.isupper() or has_conn):
+                    continue                      # don't end on filler ("Switch Official"), unless clearly a name ("Ocarina of Time")
+                if not (_term_key(first) or has_conn or special or first.isupper()):
+                    continue                      # don't start on filler, unless it's clearly a name ("Call of Duty")
+                if not any(_term_key(x) or any(c.isdigit() for c in x) or x.isupper() for x in names):
+                    continue
+                if title_case and not (has_conn or special):
+                    continue
+                out[tuple(x.lower() for x in span)] = " ".join(span)
+    return out
+
+
+def _display_name(forms: Counter) -> str:
+    """Most common surface form, with connectors lowercased after the first word."""
+    words = forms.most_common(1)[0][0].split()
+    return " ".join(w if i == 0 or w.lower() not in NAME_CONNECTORS else w.lower() for i, w in enumerate(words))
+
+
+def _contains(longer: tuple, shorter: tuple) -> bool:
+    n = len(shorter)
+    return any(longer[i:i + n] == shorter for i in range(len(longer) - n + 1))
 
 
 def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
-    """The most prominent words and two-word phrases in these stories' headlines.
+    """The most prominent names, phrases and words in these stories' headlines.
 
+    Three kinds of term:
+      - names: proper-noun phrases with connectors ("God of War Laufey", "Grand Theft Auto 6");
+      - pairs: two adjacent words that recur together ("box office", "Elder Scrolls");
+      - single words.
     A term counts for a story only if it's in at least MIN_SHARE of that story's headlines (what the
-    story is about, not one outlet's wording), and adds score x share. So terms from widely covered,
-    prestigious stories are biggest. Word variants
-    ("layoff"/"layoffs") are merged; a phrase ("Elder Scrolls") replaces its words when they mostly
-    occur together. Returns [{"term", "weight", "stories", "forms"}], heaviest first.
-
-    Also sets each story's "keywords": up to STORY_KEYWORDS of its own defining terms, most
-    prominent first, ranked by share of its headlines x how distinctive the term is in this list.
+    story is about, not one outlet's wording), and adds score x share. Longer terms replace the
+    shorter ones they contain when they account for most of their uses. Returns
+    [{"term", "weight", "stories", "forms"}], heaviest first, and sets each story's "keywords":
+    up to STORY_KEYWORDS of its own terms, most prominent first (share x distinctiveness).
     """
-    uni_w, uni_n, bi_w, bi_n = defaultdict(float), defaultdict(int), defaultdict(float), defaultdict(int)
-    forms: dict = defaultdict(Counter)            # key -> surface forms seen
-    proper: dict = defaultdict(int)               # key -> times capitalised inside a sentence-case headline
-    plain: dict = defaultdict(int)                # key -> times lowercase inside a sentence-case headline
-    per_story = []                                # (story, {key: share}, {(a, b): share})
+    uni_w, uni_n = defaultdict(float), defaultdict(int)
+    multi_w, multi_n = defaultdict(float), defaultdict(int)   # names and pairs, keyed by tuple
+    forms: dict = defaultdict(Counter)            # single-word key -> surface forms
+    multi_forms: dict = defaultdict(Counter)      # multi-word key -> surface forms
+    name_best_share: dict = defaultdict(float)    # multi-word key -> highest share in any one story
+    proper: dict = defaultdict(int)               # key -> capitalised mid-headline in sentence-case headlines
+    plain: dict = defaultdict(int)                # key -> lowercase mid-headline in sentence-case headlines
+    per_story = []                                # (story, {key: share}, {multi key: share})
+
     for s in stories:
         titles = {x["title"] for x in s["sources"]} | {s["title"]}
-        cnt_u, cnt_b = Counter(), Counter()
+        cnt_u, cnt_m = Counter(), Counter()
         for title in titles:
-            seen_u, seen_b = set(), set()
+            seen_u, seen_m = set(), {}
             words = _WORD_RE.findall(title)
             caps = sum(w[0].isupper() for w in words)
             sentence_case = len(words) > 3 and caps / len(words) < 0.6
@@ -314,75 +398,131 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
                 keys.append(k)
                 if not k:
                     continue
-                form = (w[:-2] if w.lower().endswith(("'s", "’s")) else w).strip("'’-")
-                forms[k][form] += 1
+                forms[k][_strip_possessive(w).strip("'’-")] += 1
                 if sentence_case and i > 0:
-                    if w[0].isupper():
-                        proper[k] += 1
-                    else:
-                        plain[k] += 1
+                    proper[k] += 1 if w[0].isupper() else 0
+                    plain[k] += 0 if w[0].isupper() else 1
                 seen_u.add(k)
-            for a, b in zip(keys, keys[1:]):
-                if a and b and a != b:
-                    seen_b.add((a, b))
+            # Runs of 2-4 adjacent content words inside one punctuation segment ("box office",
+            # "Grand Theft Auto", "Otaku Vampire Love Bite").
+            for seg in _SEGMENT_RE.split(title):
+                seg_words = _WORD_RE.findall(seg)
+                seg_keys = [_term_key(w) for w in seg_words]
+                for w, k in zip(seg_words, seg_keys):
+                    if k and not forms[k]:
+                        forms[k][_strip_possessive(w).strip("'’-")] += 1
+                for i in range(len(seg_keys)):
+                    for j in range(i + 2, min(len(seg_keys), i + MAX_RUN_WORDS) + 1):
+                        run = seg_keys[i:j]
+                        if None in run:
+                            break
+                        if len(set(run)) == len(run):
+                            seen_m.setdefault(("pair",) + tuple(run), None)
+            for key, text in _name_candidates(title).items():
+                seen_m[("name",) + key] = text
+                multi_forms[("name",) + key][text] += 1
             cnt_u.update(seen_u)
-            cnt_b.update(seen_b)
+            cnt_m.update(seen_m.keys())
         need = max(1, MIN_SHARE * len(titles))
         own_u = {k: c / len(titles) for k, c in cnt_u.items() if c >= need}
-        own_b = {k: c / len(titles) for k, c in cnt_b.items() if c >= need}
+        own_m = {k: c / len(titles) for k, c in cnt_m.items() if c >= need}
+        # Within the story: drop a name contained in a longer name that has most of its uses.
+        for kind in ("name", "pair"):
+            group = sorted((k for k in own_m if k[0] == kind), key=len, reverse=True)
+            for short in group:
+                if any(len(long) > len(short) and _contains(long[1:], short[1:]) and own_m[long] >= 0.8 * own_m[short]
+                       for long in group if long in own_m):
+                    own_m.pop(short, None)
         for k, share in own_u.items():
             uni_w[k] += s["score"] * share; uni_n[k] += 1
-        for k, share in own_b.items():
-            bi_w[k] += s["score"] * share; bi_n[k] += 1
-        per_story.append((s, own_u, own_b))
+        for k, share in own_m.items():
+            multi_w[k] += s["score"] * share; multi_n[k] += 1
+            name_best_share[k] = max(name_best_share[k], share)
+        per_story.append((s, own_u, own_m))
 
     def display(k: str) -> str:
         """Names, acronyms and model names keep their capitals; ordinary words are lowercased.
         A word is a name when it's mostly capitalised mid-headline in sentence-case headlines; with no
         such headlines to go by, it keeps its most common form."""
+        if not forms[k]:
+            return k
         form = forms[k].most_common(1)[0][0]
-        caps = Counter({f: c for f, c in forms[k].items() if f[:1].isupper()})
+        caps_ = Counter({f: c for f, c in forms[k].items() if f[:1].isupper()})
         if (len(form) > 1 and form.isupper()) or any(c.isdigit() for c in form):
             return form
         if proper[k] + plain[k] == 0:
-            return caps.most_common(1)[0][0] if caps else form
-        return caps.most_common(1)[0][0] if caps and proper[k] >= plain[k] else form.lower()
+            return caps_.most_common(1)[0][0] if caps_ else form
+        return caps_.most_common(1)[0][0] if caps_ and proper[k] >= plain[k] else form.lower()
 
+    def multi_display(k: tuple) -> str:
+        return _display_name(multi_forms[k]) if k[0] == "name" else " ".join(display(w) for w in k[1:])
+
+    def word_keys(k: tuple) -> set:
+        """Single-word keys inside a multi-word term."""
+        return {wk for w in k[1:] for wk in [_term_key(w) if k[0] == "name" else w] if wk}
+
+    def multi_forms_list(k: tuple) -> list:
+        if k[0] == "name":
+            return sorted(multi_forms[k])[:6]
+        return sorted({f for w in k[1:] for f in forms[w]})[:6]
+
+    # --- the cloud: multi-word terms first, then single words they don't absorb ---
     terms = {}
-    for (a, b), n in bi_n.items():
-        if n >= 2 and n >= 0.6 * min(uni_n[a], uni_n[b]):
-            terms[(a, b)] = {"term": f"{display(a)} {display(b)}", "weight": bi_w[(a, b)], "stories": n,
-                             "forms": sorted({f for f in forms[a]} | {f for f in forms[b]})[:6], "parts": (a, b)}
+    # Names may come from a single story when they define it (in at least half its headlines);
+    # other multi-word runs need 2+ stories.
+    multi = [k for k, n in multi_n.items()
+             if (k[0] == "name" and (n >= 2 or name_best_share[k] >= 0.5))
+             or (k[0] == "pair" and n >= 2 and n >= 0.6 * min(uni_n[w] for w in k[1:]))]
+    multi.sort(key=lambda k: (-(len(k) - 1), -multi_w[k]))          # longest first
+    kept = []
+    for k in multi:
+        if any(_contains(o[1:], k[1:]) and multi_n[o] >= 0.8 * multi_n[k] for o in kept if o[0] == "name" or k[0] == "pair"):
+            continue
+        # A pair inside a kept name ("war laufey" in "god of war laufey") is redundant.
+        if k[0] == "pair" and any(word_keys(k) <= word_keys(o) and multi_n[o] >= 0.8 * multi_n[k] for o in kept):
+            continue
+        kept.append(k)
+        terms[k] = {"term": multi_display(k), "weight": multi_w[k], "stories": multi_n[k], "forms": multi_forms_list(k)}
     absorbed = Counter()
-    for t in terms.values():
-        for part in t["parts"]:
-            absorbed[part] = max(absorbed[part], t["stories"])
+    for k in kept:
+        for wk in word_keys(k):
+            absorbed[wk] += multi_n[k]            # "War" counted inside "God of War Laufey", "Call of Duty: ...War..."
     for k, n in uni_n.items():
         if n >= 2 and n > 1.25 * absorbed.get(k, 0):
             terms[k] = {"term": display(k), "weight": uni_w[k], "stories": n, "forms": sorted(forms[k])[:6]}
-    # Per-story keywords. A phrase replaces its words when it covers (nearly) all their uses here.
+
+    # --- per-story keywords ---
     n_stories = max(1, len(stories))
-    for s, own_u, own_b in per_story:
-        cands = []
-        used = set()
-        for (a, b), share in sorted(own_b.items(), key=lambda kv: -kv[1]):
-            if a in used or b in used:
+    for s, own_u, own_m in per_story:
+        cands, used = [], set()
+        chosen: list[tuple] = []                  # (wks, share, cand index, is_name)
+        for k, share in sorted(own_m.items(), key=lambda kv: (-kv[1], -(len(kv[0]) - 1))):
+            wks = word_keys(k)
+            if not wks or any(wks <= c[0] for c in chosen):
+                continue                          # "Elder Scrolls VI" after "Elder Scrolls 6"; "GTA" after "GTA 6"
+            if k[0] == "pair" and share < 0.8 * max(own_u.get(w, 0) for w in wks):
                 continue
-            if share >= 0.8 * max(own_u.get(a, 0), own_u.get(b, 0)):
-                df = max(1, bi_n[(a, b)])
-                cands.append((share * math.log(1 + n_stories / df), f"{display(a)} {display(b)}",
-                              sorted(set(forms[a]) | set(forms[b]))[:6]))
-                used.update((a, b))
+            if k[0] == "pair" and any(c[3] and wks & c[0] for c in chosen):
+                continue                          # "Midnight director" overlaps the name "South of Midnight"
+            # A longer name replaces shorter chosen terms it contains ("War Laufey" -> "God of War Laufey")
+            # when it covers most of their headlines.
+            replaced = [c for c in chosen if c[0] < wks and share >= 0.75 * c[1]]
+            for c in replaced:
+                chosen.remove(c)
+                cands[c[2]] = None
+            chosen.append((wks, share, len(cands), k[0] == "name"))
+            cands.append((share * math.log(1 + n_stories / max(1, multi_n[k])), multi_display(k), multi_forms_list(k), k))
+            used |= wks                           # "Johnson" is covered by "Mike Johnson"
+        cands = [c for c in cands if c is not None]
         for k, share in own_u.items():
             if k not in used:
-                cands.append((share * math.log(1 + n_stories / max(1, uni_n[k])), display(k), sorted(forms[k])[:6]))
+                cands.append((share * math.log(1 + n_stories / max(1, uni_n[k])), display(k), sorted(forms[k])[:6], (k,)))
         cands.sort(key=lambda c: -c[0])
         top = cands[:STORY_KEYWORDS]
-        s["keywords"] = [{"term": t, "weight": round(w / top[0][0], 3), "forms": f} for w, t, f in top] if top else []
+        s["keywords"] = [{"term": t, "weight": round(w / top[0][0], 3), "forms": f} for w, t, f, _ in top] if top else []
 
     out = sorted(terms.values(), key=lambda t: -t["weight"])[:limit]
     for t in out:
-        t.pop("parts", None)
         t["weight"] = round(t["weight"], 2)
     return out
 

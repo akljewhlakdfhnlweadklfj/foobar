@@ -52,9 +52,14 @@ The app has two sections (top left):
 
 **Stories**: the reader. Pick **All** (every vertical, each using its own settings, with a label on
 each story) or a single vertical, and sort by **Top** (score) or **Latest**.
-- A **word cloud** at the top shows the most prominent words and phrases in the stories listed:
+- A **word cloud** at the top shows the most prominent names, phrases and words in the stories listed:
   a term counts for a story when it's in at least 40% of that story's headlines, and is sized by the
   scores of the stories using it. Generic headline words (trailer, review, season…) are left out.
+  Names are kept whole, including small connecting words ("God of War Laufey", "South of Midnight",
+  "Call of Duty", "Xbox Series X", "Grand Theft Auto 6"), and a longer name or phrase replaces the
+  shorter terms inside it when it covers most of their uses. In Title Case headlines, where every
+  word is capitalised, a run of words only counts as a name if it has a connector, number or acronym
+  in it, or recurs as a phrase across outlets.
   Click a term to show only stories mentioning it; click again (or "Show all") to clear.
 - The list is compact: each story shows only its **key terms** (a small word cloud of up to 6 terms,
   most prominent first, left to right: share of its headlines x how distinctive the term is) and its
