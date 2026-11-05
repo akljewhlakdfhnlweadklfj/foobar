@@ -1,8 +1,13 @@
 """Tests: python3 -m unittest -v"""
 
+import sqlite3
+import tempfile
 import time
 import unittest
+from pathlib import Path
+from unittest import mock
 
+import app
 import feeds
 import matching
 from matching import Item
@@ -51,6 +56,17 @@ class MatchingTests(unittest.TestCase):
         stories = matching.cluster(items(rows))
         self.assertEqual(max(s.coverage for s in stories), 3)
 
+    def test_average_linkage_prevents_chaining(self):
+        # B bridges A and C lexically, but A and C are unrelated stories.
+        its = items([
+            (1, "Capcom announces Resident Evil Requiem DLC"),
+            (2, "Capcom announces Resident Evil Requiem DLC and Monster Hunter Wilds expansion"),
+            (3, "Monster Hunter Wilds expansion announced by Capcom"),
+        ])
+        sims = {(0, 1): 0.5, (1, 2): 0.5, (0, 2): 0.0}
+        self.assertEqual(len(matching.agglomerate(its, sims, 0.4, linkage="single")), 1)
+        self.assertEqual(len(matching.agglomerate(its, sims, 0.4, linkage="average")), 2)
+
     def test_tokenize(self):
         self.assertEqual(matching.tokenize("Sony's PlayStation raises prices!"),
                          matching.tokenize("Sony hikes the price of PlayStation"))
@@ -95,6 +111,41 @@ class ParserTests(unittest.TestCase):
     def test_garbage(self):
         with self.assertRaises(feeds.FeedError):
             feeds.parse(b"<html><body>not a feed</body></html>")
+
+
+class AppTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_v1_database_is_migrated(self):
+        db = self.tmp / "old.db"
+        with sqlite3.connect(db) as c:  # schema from the first release, without feeds.via
+            c.executescript("""CREATE TABLE feeds (id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '', added_at REAL NOT NULL, last_fetched REAL, last_error TEXT,
+                item_count INTEGER NOT NULL DEFAULT 0);""")
+            c.execute("INSERT INTO feeds (url, added_at) VALUES ('https://a.example/rss', 0)")
+        store = app.Store(db)
+        self.assertEqual(store.list_feeds()[0]["via"], None)
+        store.save_fetch(1, feeds.parse(RSS), None, "direct")
+        self.assertEqual(store.list_feeds()[0]["via"], "direct")
+
+    def test_feedly_fallback_when_direct_fetch_fails(self):
+        entry = {"id": "x", "originId": "g1", "title": "Hello &amp; welcome", "published": 1762250400000,
+                 "alternate": [{"href": "https://a.example/1"}]}
+        with mock.patch.object(feeds, "fetch", side_effect=feeds.FeedError("blocked")), \
+             mock.patch("feedly.recent", return_value=("Feed A", [entry])):
+            parsed, via, note = app.fetch_with_fallback("https://a.example/rss")
+        self.assertEqual((via, parsed.title, parsed.entries[0].title), ("feedly", "Feed A", "Hello & welcome"))
+        self.assertIn("blocked", note)
+
+    def test_verticals_get_separate_seeded_databases(self):
+        stores = app.open_stores(self.tmp)
+        self.assertEqual(set(stores), {v.key for v in app.VERTICALS})
+        for v in app.VERTICALS:
+            self.assertTrue((self.tmp / f"{v.key}.db").exists())
+        self.assertGreater(len(stores["games"].list_feeds()), 40)
+        names = {f["url"]: f["name"] for f in stores["games"].list_feeds()}
+        self.assertEqual(names["http://feeds.ign.com/ign/all"], "IGN")
 
 
 if __name__ == "__main__":

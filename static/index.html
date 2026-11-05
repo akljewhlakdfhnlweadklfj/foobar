@@ -7,12 +7,12 @@
 <style>
   :root {
     --bg: #f6f5f2; --panel: #ffffff; --text: #1c1c1e; --muted: #6b6b70; --border: #e3e1dc;
-    --accent: #b4441f; --accent-soft: #f6e6df; --ok: #2f7d4f; --err: #b3261e;
+    --accent: #b4441f; --accent-soft: #f6e6df; --ok: #2f7d4f; --err: #b3261e; --warn: #a56a00;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #141416; --panel: #1d1d20; --text: #ececee; --muted: #9a9aa2; --border: #2e2e33;
-      --accent: #ee7a50; --accent-soft: #3a241c; --ok: #6cc290; --err: #f2867d;
+      --accent: #ee7a50; --accent-soft: #3a241c; --ok: #6cc290; --err: #f2867d; --warn: #e0b04a;
     }
   }
   * { box-sizing: border-box; }
@@ -23,6 +23,12 @@
            position: sticky; top: 0; z-index: 2; }
   header h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
   header h1 span { color: var(--accent); }
+  nav.tabs { display: flex; gap: 4px; max-width: 1200px; margin: 0 auto; padding: 0 16px; overflow-x: auto;
+              border-bottom: 1px solid var(--border); background: var(--panel); }
+  nav.tabs a { padding: 10px 14px; color: var(--muted); text-decoration: none; font-weight: 600; white-space: nowrap;
+               border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  nav.tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tabbar { background: var(--panel); border-bottom: 1px solid var(--border); }
   .layout { display: grid; grid-template-columns: 340px 1fr; gap: 20px; max-width: 1200px;
             margin: 20px auto; padding: 0 16px; }
   @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } main { order: -1; } }
@@ -39,14 +45,14 @@
   button:disabled { opacity: .5; cursor: default; }
   .msg { font-size: 13px; margin-top: 8px; min-height: 1em; }
   .msg.err { color: var(--err); } .msg.ok { color: var(--ok); }
-  ul.feeds { list-style: none; margin: 12px 0 0; padding: 0; }
+  ul.feeds { list-style: none; margin: 12px 0 0; padding: 0; max-height: 60vh; overflow-y: auto; }
   ul.feeds li { display: flex; align-items: flex-start; gap: 8px; padding: 9px 0; border-top: 1px solid var(--border); }
   ul.feeds .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 7px; flex: none; background: var(--ok); }
-  ul.feeds .dot.err { background: var(--err); } ul.feeds .dot.pending { background: var(--muted); }
+  ul.feeds .dot.err { background: var(--err); } ul.feeds .dot.warn { background: var(--warn); } ul.feeds .dot.pending { background: var(--muted); }
   ul.feeds .info { flex: 1; min-width: 0; }
   ul.feeds .name { font-weight: 600; overflow-wrap: anywhere; }
   ul.feeds .sub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-  ul.feeds .sub.err { color: var(--err); }
+  ul.feeds .sub.err { color: var(--err); } ul.feeds .sub .warn { color: var(--warn); cursor: help; }
   ul.feeds button { padding: 2px 8px; font-size: 18px; line-height: 1; }
   .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .controls label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
@@ -79,6 +85,7 @@
     <button id="refresh" class="ghost">Refresh feeds</button>
   </div>
 </header>
+<div class="tabbar"><nav class="tabs" id="tabs"></nav></div>
 
 <div class="layout">
   <aside>
@@ -99,14 +106,14 @@
           </select>
         </label>
         <label class="full">Title match strictness: <output id="threshold_out"></output>
-          <input type="range" id="threshold" min="0.15" max="0.9" step="0.05" value="0.4">
+          <input type="range" id="threshold" min="0.05" max="0.5" step="0.01" value="0.15">
           <span style="font-size:11px">Lower = groups loosely-related headlines; higher = near-identical only.</span>
         </label>
       </div>
     </section>
 
     <section class="panel">
-      <h2>Feeds (<span id="feed_count">0</span>)</h2>
+      <h2><span id="vertical_label"></span> feeds (<span id="feed_count">0</span>)</h2>
       <form class="add" id="add_form">
         <input type="url" id="feed_url" placeholder="https://example.com/rss.xml" required>
         <button type="submit" id="add_btn">Add</button>
@@ -136,15 +143,31 @@ function ago(ts) {
   return Math.floor(s / 86400) + "d ago";
 }
 
-// Persist filter settings.
+// Verticals (tabs) and per-vertical filter settings.
 const SETTINGS = ["min_feeds", "hours", "threshold"];
-try {
-  const saved = JSON.parse(localStorage.getItem("news-settings") || "{}");
-  SETTINGS.forEach((k) => { if (saved[k] != null) $(k).value = saved[k]; });
-} catch {}
-function saveSettings() {
-  try { localStorage.setItem("news-settings", JSON.stringify(Object.fromEntries(SETTINGS.map((k) => [k, $(k).value])))); } catch {}
+let VERTICALS = [], V = null, DEFAULT_THRESHOLD = 0.15;
+const settingsKey = (v) => "news-settings-v2-" + v;
+function loadSettings() {
+  const vert = VERTICALS.find((x) => x.key === V);
+  const defaults = { min_feeds: vert.default_min_feeds, hours: 48, threshold: DEFAULT_THRESHOLD };
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(settingsKey(V)) || "{}"); } catch {}
+  SETTINGS.forEach((k) => { $(k).value = saved[k] ?? defaults[k]; });
 }
+function saveSettings() {
+  try { localStorage.setItem(settingsKey(V), JSON.stringify(Object.fromEntries(SETTINGS.map((k) => [k, $(k).value])))); } catch {}
+}
+function selectVertical(key) {
+  V = VERTICALS.some((x) => x.key === key) ? key : VERTICALS[0].key;
+  document.querySelectorAll("#tabs a").forEach((a) => a.classList.toggle("active", a.dataset.v === V));
+  const label = VERTICALS.find((x) => x.key === V).label;
+  $("vertical_label").textContent = label;
+  document.title = label + " · Consensus News";
+  $("stories").innerHTML = ""; $("summary").textContent = "Loading…"; $("add_msg").textContent = "";
+  loadSettings();
+  loadFeeds().then(loadStories);
+}
+window.addEventListener("hashchange", () => selectVertical(location.hash.slice(1)));
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -157,19 +180,22 @@ let feedCount = 0;
 let wasRefreshing = false;
 
 async function loadFeeds() {
-  const { feeds, refreshing, last_run } = await api("/api/feeds");
+  const { feeds, refreshing, last_run } = await api(`/api/${V}/feeds`);
   feedCount = feeds.length;
   $("feed_count").textContent = feeds.length;
   $("status").textContent = refreshing ? "Refreshing…" : (last_run ? "Updated " + ago(last_run) : "");
   $("refresh").disabled = refreshing;
   $("feeds").innerHTML = feeds.map((f) => {
-    const state = f.last_error ? "err" : (f.last_fetched ? "" : "pending");
-    const sub = f.last_error
+    const viaFeedly = f.via === "feedly";
+    const failed = f.last_error && !viaFeedly;
+    const state = failed ? "err" : (viaFeedly ? "warn" : (f.last_fetched ? "" : "pending"));
+    const via = viaFeedly ? ` · <span class="warn" title="${esc(f.last_error || "")}">via Feedly</span>` : "";
+    const sub = failed
       ? `<div class="sub err">${esc(f.last_error)}</div>`
-      : `<div class="sub">${f.item_count} items · fetched ${ago(f.last_fetched)}</div>`;
+      : `<div class="sub">${f.item_count} items · fetched ${ago(f.last_fetched)}${via}</div>`;
     return `<li>
       <span class="dot ${state}"></span>
-      <div class="info"><div class="name">${esc(f.title || f.url)}</div>
+      <div class="info"><div class="name">${esc(f.name || f.title || f.url)}</div>
         <div class="sub">${esc(f.url)}</div>${sub}</div>
       <button class="ghost" title="Remove feed" data-del="${f.id}">×</button>
     </li>`;
@@ -183,7 +209,7 @@ async function loadStories() {
   $("threshold_out").textContent = Number($("threshold").value).toFixed(2);
   const params = new URLSearchParams(Object.fromEntries(SETTINGS.map((k) => [k, $(k).value])));
   let data;
-  try { data = await api("/api/stories?" + params); }
+  try { data = await api(`/api/${V}/stories?` + params); }
   catch (e) { $("summary").textContent = "Error: " + e.message; return; }
   const n = $("min_feeds").value;
   $("summary").textContent = `${data.stories.length} stories reported by ≥ ${n} feed${n == 1 ? "" : "s"} · ${data.items_considered} headlines scanned`;
@@ -205,7 +231,7 @@ async function loadStories() {
         </div>
       </div>
       <details>
-        <summary>${s.sources.map((x) => esc(x.feed)).join(" · ")}</summary>
+        <summary>${s.sources.slice(0, 6).map((x) => esc(x.feed)).join(" · ")}${s.sources.length > 6 ? ` · +${s.sources.length - 6} more` : ""}</summary>
         <ul class="sources">${s.sources.map((x) => `
           <li><div class="src">${esc(x.feed)} · ${ago(x.published)}</div>
             <a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener noreferrer">${esc(x.title)}</a></li>`).join("")}
@@ -220,9 +246,9 @@ $("add_form").addEventListener("submit", async (e) => {
   $("add_btn").disabled = true;
   $("add_msg").className = "msg"; $("add_msg").textContent = "Checking feed…";
   try {
-    const { feed } = await api("/api/feeds", { method: "POST", body: JSON.stringify({ url }) });
+    const { feed } = await api(`/api/${V}/feeds`, { method: "POST", body: JSON.stringify({ url }) });
     $("add_msg").className = "msg ok";
-    $("add_msg").textContent = `Added “${feed.title || feed.url}” (${feed.item_count} items).`;
+    $("add_msg").textContent = `Added “${feed.name || feed.title || feed.url}” (${feed.item_count} items).`;
     $("feed_url").value = "";
     await loadFeeds(); await loadStories();
   } catch (err) {
@@ -233,7 +259,7 @@ $("add_form").addEventListener("submit", async (e) => {
 $("feeds").addEventListener("click", async (e) => {
   const id = e.target.dataset.del;
   if (!id || !confirm("Remove this feed and its stored headlines?")) return;
-  await api("/api/feeds/" + id, { method: "DELETE" });
+  await api(`/api/${V}/feeds/` + id, { method: "DELETE" });
   await loadFeeds(); await loadStories();
 });
 
@@ -245,9 +271,13 @@ $("refresh").addEventListener("click", async () => {
 let debounce;
 SETTINGS.forEach((k) => $(k).addEventListener("input", () => { clearTimeout(debounce); debounce = setTimeout(loadStories, 200); }));
 
-loadFeeds().then(loadStories);
-setInterval(loadFeeds, 5000);
-setInterval(loadStories, 60000);
+api("/api/verticals").then((d) => {
+  VERTICALS = d.verticals; DEFAULT_THRESHOLD = d.default_threshold;
+  $("tabs").innerHTML = VERTICALS.map((v) => `<a href="#${v.key}" data-v="${v.key}">${esc(v.label)}</a>`).join("");
+  selectVertical(location.hash.slice(1));
+});
+setInterval(() => V && loadFeeds(), 5000);
+setInterval(() => V && loadStories(), 60000);
 </script>
 </body>
 </html>

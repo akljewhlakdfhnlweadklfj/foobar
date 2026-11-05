@@ -1,0 +1,79 @@
+# Games feeds: the outlets https://www.overworld.vg/ aggregates, derived from its full story
+# archive (1,171 stories, May 21 - Nov 4 2026, read via Feedly). The number after each name is how
+# many Overworld stories cited that outlet. Every URL below was verified as live in Feedly on
+# 2026-11-05 (velocity = posts/week).
+#
+# Omitted: VG247 and Checkpoint Gaming (feeds stale for months); Game Sandwich, Game Observer,
+# Bulbagarden, Hanafuda Report, Seasoned Gaming, Player2, This Week in Video Games (no feed found);
+# YouTube channels / podcasts (SkillUp, GVG, MinnMax...); Bloomberg (general, no public feed).
+
+# --- Major outlets ---
+http://feeds.ign.com/ign/all                          # IGN | 453 | ~300/wk
+http://www.gamesradar.com/all-platforms/news/rss/     # GamesRadar+ | 464 | ~270/wk
+http://www.polygon.com/rss/index.xml                  # Polygon | 420 | ~280/wk
+http://kotaku.com/index.xml                           # Kotaku | 399 | ~110/wk
+http://www.gamespot.com/feeds/news/                   # GameSpot | 363 | ~70/wk
+http://www.eurogamer.net/?format=rss                  # Eurogamer | 388 | ~70/wk
+https://www.videogameschronicle.com/category/news/feed/  # Video Games Chronicle | 419 | ~60/wk
+https://insider-gaming.com/feed/                      # Insider Gaming | 493 | ~180/wk
+https://www.pcgamer.com/rss/                          # PC Gamer | 268 | ~140/wk
+https://www.rockpapershotgun.com/feed/news            # Rock Paper Shotgun | 168 | ~55/wk
+http://www.gameinformer.com/b/mainfeed.aspx?Tags=news  # Game Informer | 169 | ~11/wk
+https://www.shacknews.com/feed/rss                    # Shacknews | 301 | ~80/wk
+http://dualshockers.com/feed                          # DualShockers | 199 | ~95/wk
+https://www.theverge.com/rss/games/index.xml          # The Verge (Gaming) | 110 | ~18/wk
+https://www.digitalfoundry.net/feed                   # Digital Foundry | 21 | ~13/wk
+http://techraptor.net/feed/                           # TechRaptor | 16 | ~26/wk
+http://www.gamegrin.com/home/feed                     # GameGrin | 11 | ~50/wk
+http://feeds.arstechnica.com/arstechnica/index/       # Ars Technica | 3 | ~70/wk (general tech)
+
+# --- Industry / business ---
+http://www.gamesindustry.biz/rss/gamesindustry_news_feed.rss  # GamesIndustry.biz | 83 | ~35/wk
+https://www.gamedeveloper.com/rss.xml                 # Game Developer | 50 | ~13/wk
+https://gamesbeat.com/feed/                           # GamesBeat | 41 | ~48/wk
+https://www.gamefile.news/feed                        # Game File | 15 | ~4/wk
+https://www.thegamebusiness.com/feed                  # The Game Business | 8 | ~3/wk
+https://aftermath.site/feed                           # Aftermath | 23 | ~20/wk
+https://www.rogue.site/rss/                           # Rogue | 12 | ~7/wk
+https://www.jank.cool/rss/                            # Jank | 2 | ~9/wk
+
+# --- Platform holders ---
+http://feeds.feedburner.com/PSBlog                    # PlayStation Blog | 62 | ~12/wk
+https://news.xbox.com/en-us/feed/                     # Xbox Wire | 50 | ~21/wk
+
+# --- Nintendo ---
+http://www.nintendolife.com/feeds/latest              # Nintendo Life | 235 | ~68/wk
+http://www.nintendoeverything.com/?feed=rss2          # Nintendo Everything | 317 | ~100/wk
+http://gonintendo.com/?feed=rss2                      # GoNintendo | 215 | ~250/wk
+http://mynintendonews.com/feed/                       # My Nintendo News | 181 | ~28/wk
+http://www.nintendoworldreport.com/rss.cfm            # Nintendo World Report | 67 | ~10/wk
+http://www.vooks.net/feed/                            # Vooks | 15 | ~14/wk
+
+# --- PlayStation / Xbox ---
+http://www.pushsquare.com/feeds/news                  # Push Square | 364 | ~80/wk
+https://www.purexbox.com/feeds/latest                 # Pure Xbox | 124 | ~50/wk
+
+# --- Japanese / RPG / niche ---
+http://gematsu.com/feed                               # Gematsu | 363 | ~80/wk
+http://www.siliconera.com/feed/                       # Siliconera | 129 | ~53/wk
+https://noisypixel.net/feed/                          # Noisy Pixel | 279 | ~135/wk
+http://rpgsite.net/feed                               # RPG Site | 213 | ~39/wk
+http://www.rpgamer.com/index.xml                      # RPGamer | 92 | ~40/wk
+http://feeds2.feedburner.com/mmorpg/news                # MMORPG.com | 33 | ~44/wk
+http://massivelyop.net/feed/                          # Massively Overpowered | 35 | ~110/wk
+http://feeds.feedburner.com/PocketTactics-MobileStrategyGameReviewsForAndroidIpadAndIphone  # Pocket Tactics | 36 | ~31/wk
+https://www.timeextension.com/feeds/latest            # Time Extension | 23 | ~41/wk
+http://www.gamingonlinux.com/article_rss.php          # GamingOnLinux | 20 | ~52/wk
+https://main.retro-handhelds.com/blog/rss/            # Retro Handhelds | 4 | ~16/wk
+
+# --- Smaller sites ---
+https://www.consolecreatures.com/feed/                # Console Creatures | 161 | ~34/wk
+https://monstervine.com/feed/                         # MonsterVine | 82 | ~50/wk
+http://cogconnected.com/feed/                         # COGConnected | 63 | ~75/wk
+https://lootlevelchill.com/feed/                      # Loot Level Chill | 69 | ~19/wk
+https://pixelbytegaming.com/feed/                     # PixelByte | 43
+https://covergeek.com/feed/                           # covergeek | 39
+http://www.heypoorplayer.com/feed/                    # Hey Poor Player | 31 | ~19/wk
+https://report.wand.com/feed                          # The Wand Report | 11 | ~8/wk
+https://www.crossplay.news/feed                       # Crossplay | - | ~2/wk
+https://somanygames.co.uk/feed/                       # So Many Games | 1 | ~5/wk

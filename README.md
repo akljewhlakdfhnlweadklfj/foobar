@@ -1,55 +1,103 @@
 # Consensus News
 
-An RSS/Atom aggregator that only shows stories reported by **at least N** of your feeds.
+An RSS/Atom aggregator that only shows stories reported by **at least N** of your feeds, split
+into tabs: **Games**, **Movies & TV**, **Books** and **General News**.
 
-No dependencies: Python 3.10+ standard library only (SQLite, `http.server`, `xml.etree`).
+No dependencies: Python 3.10+ standard library only.
 
 ```bash
-python3 app.py --import feeds.txt     # first run: load the seed feeds
-python3 app.py                        # afterwards
+python3 app.py --backfill 3     # first run: seed all verticals + load 3 days of history
+python3 app.py                  # afterwards
 # open http://localhost:8000
 ```
 
-Options: `--port 8000`, `--host 127.0.0.1`, `--db news.db`, `--interval 15` (minutes between refreshes).
+Options: `--port 8000`, `--host 127.0.0.1`, `--data data/`, `--interval 15` (minutes between
+refreshes), `--backfill DAYS` (max 14), `--import FILE --vertical games`, `--no-serve`.
 
 ## Run in GitHub Codespaces
 
-On the repo page, click **Code → Codespaces → Create codespace on main**. The dev container loads
-`feeds.txt` on first creation, starts the server on every start, and opens the app in a browser tab
-(or use the **Ports** panel → port 8000). Server log: `/tmp/news-aggregator.log`.
+On the repo page, click **Code → Codespaces → Create codespace** on this branch. The dev container
+seeds every vertical and backfills 3 days of history on first creation, starts the server on every
+start, and opens the app in a browser tab (or use the **Ports** panel → port 8000). Server log:
+`/tmp/news-aggregator.log`.
 
-Codespaces stop after ~30 minutes idle (configurable in your GitHub settings) and count against
-your free monthly hours. Your feeds and headlines persist in `news.db` until the codespace is deleted.
+Codespaces stop after ~30 minutes idle and count against your free monthly hours. Data persists in
+`data/` until the codespace is deleted.
 
-## Using it
+## Verticals and data
 
-- **Seed feeds**: `feeds.txt` lists the publications Overworld (overworld.vg) aggregates. Import it with `--import`.
-- **Add/remove feeds** in the left panel. A feed is fetched and validated before it's saved, so a bad URL is reported immediately. A red dot means the last fetch failed, and the error is shown under the feed.
-- **Reported by at least N**: the core filter. Stories are sorted by how many feeds carry them, then by recency.
-- **Time window**: only headlines published in this window are compared. Headlines are stored for 14 days.
-- **Match strictness**: the similarity threshold for treating two headlines as the same story (default 0.40).
-- Click a story's source list to see each outlet's original headline and link.
+| Vertical | Seed list | Database |
+|---|---|---|
+| Games | `feeds/games.txt` | `data/games.db` |
+| Movies & TV | `feeds/movies.txt` | `data/movies.db` |
+| Books | `feeds/books.txt` | `data/books.db` |
+| General News | `feeds/news.txt` | `data/news.db` |
+
+- **Separate databases**: each vertical is one self-contained SQLite file with the same schema.
+  To migrate, copy the `.db` file and point `--data` at its folder. Older databases are upgraded
+  in place automatically (schema version is stored in `PRAGMA user_version`).
+- **Seed lists** are read when a vertical's database is empty. Format: `URL  # Display name | notes`.
+  The display name (text before the first `|`) is applied to existing feeds on every start.
+- **Games** sources are the outlets [Overworld](https://www.overworld.vg/) aggregates, extracted
+  from its full story archive. The other verticals mix trade publications with section feeds
+  of general publications (NYT, WSJ, Guardian, etc.).
+- Adding a vertical: add a `Vertical(...)` entry to `VERTICALS` in `app.py` and a `feeds/<key>.txt`.
+
+## Feedly: history and fallback
+
+Most feeds only expose their latest few dozen items. [Feedly](https://feedly.com)'s public API keeps
+the full history of any feed its users subscribe to, with no account needed (`feedly.py`):
+
+- `--backfill DAYS` loads recent history for every feed, so a new install has data immediately.
+- If a feed can't be fetched directly (blocked, down, rate-limited), the app uses Feedly's copy.
+  These feeds show an amber dot and "via Feedly".
+- Backfill works best with the exact feed URL Feedly's subscribers use, so the seed lists prefer
+  those URLs (sometimes the older `http://` form).
 
 ## How headlines are matched
 
-Outlets word the same story differently, so exact matching doesn't work. `matching.py` does the following:
+`matching.py`:
 
-1. Tokenizes each title: lowercases it, strips punctuation, drops stopwords and headline filler ("says", "report", "watch"), applies light stemming, and maps synonyms (reveals/confirms/unveils → announce, hikes → raise, lays off → layoff…).
-2. Weights tokens by **IDF** across the current window, so distinctive words ("Silksong", "Ubisoft") count much more than common ones ("Nintendo" when every feed mentions it).
-3. Links two headlines **from different feeds** when their IDF-weighted Jaccard similarity is ≥ the threshold and they share at least 2 tokens.
-4. Treats connected groups as stories. A story's coverage is the number of *distinct* feeds in its group.
+1. Tokenizes each title: lowercases it, strips punctuation, drops stopwords and headline filler,
+   applies light stemming, and maps synonyms (reveals/confirms/unveils → announce, lays off → layoff…).
+2. Weights tokens by **IDF** across the time window, so distinctive names ("Silksong", "ZeniMax")
+   count much more than common words.
+3. Scores pairs from *different* feeds that share ≥ 2 tokens by **IDF-weighted cosine similarity**.
+4. **Average-linkage clustering**: strongest pairs merge first, and two groups merge only if their
+   average cross-pair similarity is ≥ the threshold. This stops chaining, where A~B and B~C pull
+   unrelated A and C into one cluster.
+5. A story's coverage is the number of *distinct* feeds in its cluster.
 
-This is a simple lexical approach. It handles reworded headlines well, but it will miss pairs that share almost no words ("Switch 2 costs $449" vs "Nintendo's new console priced at $449"). If that matters, the place to upgrade is the similarity function in `matching.cluster`, e.g. sentence embeddings.
+### Evaluation
+
+`eval_matching.py` scores the matcher against Overworld's human-curated story groups: 1,171 stories
+and 3,513 outlet headlines, May–Nov 2026, downloaded from Feedly and cached in `data/`.
+
+| Version | Precision | Recall | F1 | Stories fully grouped |
+|---|---|---|---|---|
+| Original (weighted Jaccard, single link, 0.40) | 0.93 | 0.23 | 0.36 | 14% |
+| Current (weighted cosine, average link, 0.15) | 0.83 | 0.83 | 0.83 | 76% |
+| Tested, not adopted: + sentence embeddings (bge-small) | 0.86 | 0.85 | 0.86 | 79% |
+
+Embeddings added about 3 F1 points but need a ~220 MB install and a model download, so the default
+stays dependency-free.
+
+```bash
+python3 eval_matching.py --sweep
+```
 
 ## API
 
+All per-vertical endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `news`).
+
 | Method | Path | |
 |---|---|---|
-| GET | `/api/feeds` | list feeds + status |
-| POST | `/api/feeds` `{"url": ...}` | add (validated) |
-| DELETE | `/api/feeds/{id}` | remove feed and its items |
-| POST | `/api/refresh` | trigger an immediate refresh |
-| GET | `/api/stories?min_feeds=2&hours=48&threshold=0.4` | aggregated stories |
+| GET | `/api/verticals` | tab list and defaults |
+| GET | `/api/<v>/feeds` | feeds and their status |
+| POST | `/api/<v>/feeds` `{"url": ...}` | add a feed (validated first) |
+| DELETE | `/api/<v>/feeds/{id}` | remove a feed and its items |
+| POST | `/api/refresh` | refresh every vertical now |
+| GET | `/api/<v>/stories?min_feeds=4&hours=48&threshold=0.15` | aggregated stories |
 
 ## Tests
 

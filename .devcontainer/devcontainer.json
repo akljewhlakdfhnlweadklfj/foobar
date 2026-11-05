@@ -1,8 +1,8 @@
 {
   "name": "Consensus News",
   "image": "mcr.microsoft.com/devcontainers/python:3.12",
-  // First creation only: load the seed feeds into news.db (kept in the workspace across restarts).
-  "postCreateCommand": "python3 app.py --import feeds.txt --import-only",
+  // First creation only: seed every vertical from feeds/*.txt and load 3 days of history from Feedly.
+  "postCreateCommand": "python3 app.py --backfill 3 --no-serve",
   // Every start (including after the Codespace wakes from being stopped): run the server.
   "postStartCommand": "nohup python3 app.py --host 0.0.0.0 --port 8000 > /tmp/news-aggregator.log 2>&1 &",
   "forwardPorts": [8000],

@@ -8,10 +8,14 @@ is useless. Instead:
    punctuation, drop stopwords, crude stemming).
 2. Weight tokens by IDF over the current window, so rare words ("Zelensky",
    "Boeing") count for much more than common ones ("says", "new").
-3. Similarity = weighted Jaccard of the two token sets.
-4. Link items from *different* feeds whose similarity >= threshold, and take
-   connected components (union-find) as story clusters.
+3. Similarity = cosine of the IDF-weighted token sets, for pairs from *different* feeds that
+   share at least 2 tokens.
+4. Agglomerative clustering with average linkage: strongest pairs first, and two groups merge
+   only if their average cross-pair similarity clears the threshold. (Single linkage chained
+   unrelated stories into one giant cluster on real data.)
 5. A cluster's "coverage" is the number of distinct feeds in it.
+
+Tuned with eval_matching.py against Overworld's human-curated story groups.
 """
 
 from __future__ import annotations
@@ -142,15 +146,27 @@ class _UnionFind:
             self.parent[rb] = ra
 
 
-def cluster(items: list[Item], threshold: float = 0.4, min_shared: int = 2) -> list[Story]:
-    """Cluster items into stories. Only items from different feeds are linked."""
+def _weighted_jaccard(idf: dict[str, float], a: frozenset[str], b: frozenset[str]) -> float:
+    return sum(idf[t] for t in a & b) / sum(idf[t] for t in a | b)
+
+
+def _weighted_cosine(idf: dict[str, float], a: frozenset[str], b: frozenset[str]) -> float:
+    """Cosine similarity of IDF-weighted binary token vectors."""
+    return sum(idf[t] ** 2 for t in a & b) / math.sqrt(sum(idf[t] ** 2 for t in a) * sum(idf[t] ** 2 for t in b))
+
+
+# Chosen with eval_matching.py against Overworld's curated story groups (1,171 stories):
+# cosine + average linkage @ 0.15 gave F1 0.83 vs 0.36 for the original jaccard + single link @ 0.40.
+SIMILARITY = _weighted_cosine
+DEFAULT_THRESHOLD = 0.15
+
+
+def lexical_similarities(items: list[Item], min_shared: int = 2) -> dict[tuple[int, int], float]:
+    """Sparse pairwise similarity {(i, j): sim} (i < j) for items sharing >= min_shared tokens."""
     for it in items:
         if not it.tokens:
             it.tokens = tokenize(it.title)
-
     n = len(items)
-    if n == 0:
-        return []
 
     # IDF over the window. Smoothed so a token in every doc still has weight > 0.
     df: dict[str, int] = defaultdict(int)
@@ -165,7 +181,7 @@ def cluster(items: list[Item], threshold: float = 0.4, min_shared: int = 2) -> l
         for t in it.tokens:
             index[t].append(i)
 
-    uf = _UnionFind(n)
+    sims: dict[tuple[int, int], float] = {}
     for i, a in enumerate(items):
         shared_counts: dict[int, int] = defaultdict(int)
         for t in a.tokens:
@@ -173,19 +189,52 @@ def cluster(items: list[Item], threshold: float = 0.4, min_shared: int = 2) -> l
                 if j > i:
                     shared_counts[j] += 1
         for j, shared in shared_counts.items():
-            b = items[j]
-            if shared < min_shared or b.feed_id == a.feed_id:
-                continue
-            inter = a.tokens & b.tokens
-            union = a.tokens | b.tokens
-            sim = sum(idf[t] for t in inter) / sum(idf[t] for t in union)
-            if sim >= threshold:
-                uf.union(i, j)
+            if shared >= min_shared and items[j].feed_id != a.feed_id:
+                sims[(i, j)] = SIMILARITY(idf, a.tokens, items[j].tokens)
+    return sims
 
+
+def agglomerate(items: list[Item], sims: dict[tuple[int, int], float], threshold: float,
+                linkage: str = "average") -> list[Story]:
+    """Merge items into stories, strongest pairs first.
+
+    linkage="single": any one pair above threshold links two groups (prone to chaining:
+    A~B and B~C pulls unrelated A and C together). linkage="average": two groups merge only if
+    the mean similarity over all their cross-feed pairs is >= threshold (missing pairs count as 0).
+    """
+    n = len(items)
+    uf = _UnionFind(n)
+    members = {i: [i] for i in range(n)}
+    for (i, j), s in sorted(sims.items(), key=lambda kv: -kv[1]):
+        if s < threshold:
+            break
+        ri, rj = uf.find(i), uf.find(j)
+        if ri == rj:
+            continue
+        if linkage == "average":
+            total = count = 0
+            for a in members[ri]:
+                for b in members[rj]:
+                    if items[a].feed_id == items[b].feed_id:
+                        continue
+                    count += 1
+                    total += sims.get((a, b) if a < b else (b, a), 0.0)
+            if not count or total / count < threshold:
+                continue
+        uf.union(ri, rj)  # parent becomes ri
+        members[ri].extend(members.pop(rj))
     groups: dict[int, list[Item]] = defaultdict(list)
     for i, it in enumerate(items):
         groups[uf.find(i)].append(it)
     return [Story(items=g) for g in groups.values()]
+
+
+def cluster(items: list[Item], threshold: float = DEFAULT_THRESHOLD, min_shared: int = 2,
+            linkage: str = "average") -> list[Story]:
+    """Cluster items into stories using lexical similarity. Only items from different feeds are linked."""
+    if not items:
+        return []
+    return agglomerate(items, lexical_similarities(items, min_shared), threshold, linkage)
 
 
 def representative_title(story: Story) -> str:

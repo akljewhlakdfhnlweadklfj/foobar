@@ -67,12 +67,14 @@ def _child(el: ET.Element, *names: str) -> ET.Element | None:
     return None
 
 
-def _text(el: ET.Element | None) -> str:
-    if el is None:
-        return ""
-    raw = "".join(el.itertext())
-    raw = html.unescape(_TAG_RE.sub("", html.unescape(raw)))
+def clean_text(raw: str) -> str:
+    """Decode entities (also double-encoded ones), strip HTML tags, collapse whitespace."""
+    raw = html.unescape(_TAG_RE.sub("", html.unescape(raw or "")))
     return _WS_RE.sub(" ", raw).strip()
+
+
+def _text(el: ET.Element | None) -> str:
+    return "" if el is None else clean_text("".join(el.itertext()))
 
 
 def _parse_date(s: str) -> float | None:
