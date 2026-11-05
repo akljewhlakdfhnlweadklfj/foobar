@@ -1,28 +1,28 @@
 # Books feeds - verified via Feedly on 2026-11-05
 # --- Trade / industry ---
-http://www.publishersweekly.com/pw/feeds/recent/index.xml                # Publishers Weekly (All recent) | trade | ~56/wk
-https://www.thebookseller.com/Syndication/DF.cfm?f=7&ft=10               # The Bookseller (News) | trade | ~35/wk
-http://lunch.publishersmarketplace.com/feed/                             # Publishers Lunch | trade | ~15/wk
-https://publishingperspectives.com/feed/                                 # Publishing Perspectives | trade | ~14/wk
-https://lithub.com/feed/                                                 # Literary Hub | trade | ~57/wk
-http://bookriot.com/feed/                                                # Book Riot | trade | ~47/wk
-http://electricliterature.com/feed/                                      # Electric Literature | trade | ~7/wk
-http://www.complete-review.com/saloon/rss.xml                            # The Literary Saloon (Complete Review) | trade | ~24/wk
-https://reactormag.com/feed/                                             # Reactor (formerly Tor.com) | trade | ~36/wk
-https://locusmag.com/feed/                                               # Locus | trade | ~11/wk
-http://crimereads.com/feed/                                              # CrimeReads | trade | ~23/wk
-http://janefriedman.com/feed/                                            # Jane Friedman | trade | ~10/wk
-http://goodereader.com/blog/feed/                                        # Good e-Reader | trade | ~12/wk
-http://infodocket.com/feed/                                              # Library Journal infoDOCKET | trade | ~5/wk
-https://pen.org/feed/                                                    # PEN America | trade | ~7/wk
+http://www.publishersweekly.com/pw/feeds/recent/index.xml                # Publishers Weekly (All recent) | w=5 | trade | ~56/wk
+https://www.thebookseller.com/Syndication/DF.cfm?f=7&ft=10               # The Bookseller (News) | w=5 | trade | ~35/wk
+http://lunch.publishersmarketplace.com/feed/                             # Publishers Lunch | w=4 | trade | ~15/wk
+https://publishingperspectives.com/feed/                                 # Publishing Perspectives | w=3 | trade | ~14/wk
+https://lithub.com/feed/                                                 # Literary Hub | w=4 | trade | ~57/wk
+http://bookriot.com/feed/                                                # Book Riot | w=2 | trade | ~47/wk
+http://electricliterature.com/feed/                                      # Electric Literature | w=3 | trade | ~7/wk
+http://www.complete-review.com/saloon/rss.xml                            # The Literary Saloon (Complete Review) | w=2 | trade | ~24/wk
+https://reactormag.com/feed/                                             # Reactor (formerly Tor.com) | w=3 | trade | ~36/wk
+https://locusmag.com/feed/                                               # Locus | w=3 | trade | ~11/wk
+http://crimereads.com/feed/                                              # CrimeReads | w=3 | trade | ~23/wk
+http://janefriedman.com/feed/                                            # Jane Friedman | w=2 | trade | ~10/wk
+http://goodereader.com/blog/feed/                                        # Good e-Reader | w=1 | trade | ~12/wk
+http://infodocket.com/feed/                                              # Library Journal infoDOCKET | w=2 | trade | ~5/wk
+https://pen.org/feed/                                                    # PEN America | w=3 | trade | ~7/wk
 
 # --- General publications ---
-https://rss.nytimes.com/services/xml/rss/nyt/Books.xml                   # New York Times (Books) | general | ~34/wk
-https://www.theguardian.com/books/rss                                    # The Guardian (Books) | general | ~21/wk
-https://feeds.npr.org/1032/rss.xml                                       # NPR (Books) | general | ~8/wk
-https://www.latimes.com/entertainment-arts/books/rss2.0.xml              # Los Angeles Times (Books) | general | ~6/wk
-http://www.independent.co.uk/arts-entertainment/books/rss                # The Independent (Books) | general | ~6/wk
-http://www.independent.ie/entertainment/books/rss                        # Irish Independent (Books) | general | ~19/wk
-https://www.ft.com/books?format=rss                                      # Financial Times (Books) | general | ~12/wk
-https://www.theatlantic.com/feed/channel/books/                          # The Atlantic (Books) | general | ~7/wk
-http://www.csmonitor.com/rss/books.rss                                   # Christian Science Monitor (Books) | general | ~2/wk
+https://rss.nytimes.com/services/xml/rss/nyt/Books.xml                   # New York Times (Books) | w=5 | general | ~34/wk
+https://www.theguardian.com/books/rss                                    # The Guardian (Books) | w=4 | general | ~21/wk
+https://feeds.npr.org/1032/rss.xml                                       # NPR (Books) | w=4 | general | ~8/wk
+https://www.latimes.com/entertainment-arts/books/rss2.0.xml              # Los Angeles Times (Books) | w=3 | general | ~6/wk
+http://www.independent.co.uk/arts-entertainment/books/rss                # The Independent (Books) | w=3 | general | ~6/wk
+http://www.independent.ie/entertainment/books/rss                        # Irish Independent (Books) | w=2 | general | ~19/wk
+https://www.ft.com/books?format=rss                                      # Financial Times (Books) | w=4 | general | ~12/wk
+https://www.theatlantic.com/feed/channel/books/                          # The Atlantic (Books) | w=4 | general | ~7/wk
+http://www.csmonitor.com/rss/books.rss                                   # Christian Science Monitor (Books) | w=3 | general | ~2/wk

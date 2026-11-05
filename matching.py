@@ -102,6 +102,9 @@ def tokenize(title: str) -> frozenset[str]:
     return frozenset(out)
 
 
+DEFAULT_WEIGHT = 2.0
+
+
 @dataclass
 class Item:
     id: int
@@ -110,6 +113,7 @@ class Item:
     link: str = ""
     published: float = 0.0  # unix timestamp
     feed_title: str = ""
+    weight: float = DEFAULT_WEIGHT  # outlet prestige, 1 (small blog) .. 5 (paper of record)
     tokens: frozenset[str] = field(default_factory=frozenset)
 
 
@@ -124,6 +128,11 @@ class Story:
     @property
     def coverage(self) -> int:
         return len(self.feed_ids)
+
+    @property
+    def score(self) -> float:
+        """Prestige-weighted coverage: the sum of each distinct outlet's weight."""
+        return sum({i.feed_id: i.weight for i in self.items}.values())
 
     @property
     def latest(self) -> float:
@@ -261,15 +270,20 @@ def cluster(items: list[Item], threshold: float = DEFAULT_THRESHOLD, min_shared:
     return agglomerate(items, lexical_similarities(items, min_shared), threshold, linkage)
 
 
-def representative_title(story: Story) -> str:
-    """Pick the headline that shares the most tokens with the rest of the cluster."""
+def lead_item(story: Story) -> Item:
+    """The story's lead headline: from the most prestigious outlet; among equally weighted
+    outlets, the headline sharing the most tokens with the rest of the cluster (most typical)."""
     if len(story.items) == 1:
-        return story.items[0].title
-    best, best_score = story.items[0], -1.0
-    for a in story.items:
+        return story.items[0]
+    top = max(i.weight for i in story.items)
+    best, best_score = story.items[0], float("-inf")
+    for a in (i for i in story.items if i.weight == top):
         score = sum(len(a.tokens & b.tokens) for b in story.items if b is not a)
-        # Prefer shorter headlines on ties (less fluff).
-        score -= len(a.title) / 10000
+        score -= len(a.title) / 10000  # prefer shorter headlines on ties (less fluff)
         if score > best_score:
             best, best_score = a, score
-    return best.title
+    return best
+
+
+def representative_title(story: Story) -> str:
+    return lead_item(story).title

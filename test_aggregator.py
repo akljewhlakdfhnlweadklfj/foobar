@@ -113,6 +113,37 @@ class ParserTests(unittest.TestCase):
             feeds.parse(b"<html><body>not a feed</body></html>")
 
 
+class WeightTests(unittest.TestCase):
+    def test_score_and_lead_use_weights(self):
+        story = matching.Story(items=[
+            Item(id=1, feed_id=1, title="Small blog: Studio X shuts down", weight=1),
+            Item(id=2, feed_id=2, title="Studio X closes after 20 years", weight=5),
+            Item(id=3, feed_id=2, title="Studio X closes (update)", weight=5),  # same outlet counts once
+            Item(id=4, feed_id=3, title="Studio X is closing", weight=3),
+        ])
+        self.assertEqual(story.score, 9)
+        self.assertEqual(matching.lead_item(story).feed_id, 2)
+
+    def test_seed_weights_parsed_and_ui_edits_kept(self):
+        tmp = Path(tempfile.mkdtemp())
+        seed = tmp / "seed.txt"
+        seed.write_text("https://a.example/rss  # Outlet A | w=5 | notes\nhttps://b.example/rss # Outlet B\n")
+        feeds_ = app.read_feed_list(seed)
+        self.assertEqual((feeds_["https://a.example/rss"].name, feeds_["https://a.example/rss"].weight), ("Outlet A", 5.0))
+        self.assertIsNone(feeds_["https://b.example/rss"].weight)
+        store = app.Store(tmp / "x.db")
+        store.add_feeds(feeds_)
+        fa = next(f for f in store.list_feeds() if f["name"] == "Outlet A")
+        store.set_weight(fa["id"], 2)
+        store.sync_seed(feeds_)  # restart: the seed must not overwrite the UI edit
+        self.assertEqual(store.get_feed(fa["id"])["weight"], 2)
+
+    def test_every_seed_feed_has_a_weight(self):
+        for v in app.VERTICALS:
+            missing = [u for u, s in app.read_feed_list(app.FEEDS_DIR / f"{v.key}.txt").items() if s.weight is None]
+            self.assertEqual(missing, [], v.key)
+
+
 class AppTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

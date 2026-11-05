@@ -1,39 +1,39 @@
 # News feeds - verified via Feedly on 2026-11-05
 # --- Wires / agencies ---
-https://news.google.com/rss/search?q=site%3Areuters.com&hl=en-US&gl=US&ceid=US%3Aen # Reuters (via Google News site: search) | wire | ~1441/wk
-http://www.usnews.com/rss/news                                           # U.S. News & World Report (mostly AP/Reuters wire copy) | wire | ~1169/wk
-http://rss.upi.com/news/top_news.rss                                     # UPI (Top News) | wire | ~157/wk
+https://news.google.com/rss/search?q=site%3Areuters.com&hl=en-US&gl=US&ceid=US%3Aen   # Reuters | w=5 | via Google News site: search | wire | ~1441/wk
+http://www.usnews.com/rss/news                                           # U.S. News & World Report | w=2 | mostly AP/Reuters wire copy | wire | ~1169/wk
+http://rss.upi.com/news/top_news.rss                                     # UPI (Top News) | w=2 | wire | ~157/wk
 
 # --- US publications ---
-https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml                # New York Times (Top Stories) | general | ~342/wk
-https://feeds.content.dowjones.io/public/rss/RSSWorldNews                # Wall Street Journal (World News) | general | ~115/wk
-https://www.washingtonpost.com/arcio/rss/category/politics/              # Washington Post (Politics) | general | ~122/wk
-https://feeds.npr.org/1001/rss.xml                                       # NPR (News) | general | ~125/wk
-https://abcnews.go.com/abcnews/topstories                                # ABC News (Top Stories) | general | ~163/wk
-https://www.cbsnews.com/latest/rss/main                                  # CBS News (Latest) | general | ~593/wk
-https://feeds.nbcnews.com/nbcnews/public/news                            # NBC News (Top Stories) | general | ~256/wk
-https://moxie.foxnews.com/google-publisher/politics.xml                  # Fox News (Politics) | general | ~162/wk
-https://www.politico.com/rss/politicopicks.xml                           # Politico (Top Stories) | general | ~129/wk
-https://thehill.com/news/feed/                                           # The Hill (Just In) | general | ~582/wk
-https://api.axios.com/feed/                                              # Axios | general | ~95/wk
-https://feeds.bloomberg.com/politics/news.rss                            # Bloomberg (Politics) | general | ~411/wk
-https://www.latimes.com/world-nation/rss2.0.xml                          # Los Angeles Times (World & Nation) | general | ~21/wk
-https://www.pbs.org/newshour/feeds/rss/headlines                         # PBS NewsHour (Latest) | general | ~191/wk
-https://time.com/feed/                                                   # TIME | general | ~84/wk
-https://www.semafor.com/rss.xml                                          # Semafor | general | ~171/wk
-http://rss.csmonitor.com/feeds/world                                     # Christian Science Monitor (World) | general | ~16/wk
+https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml                # New York Times (Top Stories) | w=5 | general | ~342/wk
+https://feeds.content.dowjones.io/public/rss/RSSWorldNews                # Wall Street Journal (World News) | w=5 | general | ~115/wk
+https://www.washingtonpost.com/arcio/rss/category/politics/              # Washington Post (Politics) | w=5 | general | ~122/wk
+https://feeds.npr.org/1001/rss.xml                                       # NPR (News) | w=4 | general | ~125/wk
+https://abcnews.go.com/abcnews/topstories                                # ABC News (Top Stories) | w=4 | general | ~163/wk
+https://www.cbsnews.com/latest/rss/main                                  # CBS News (Latest) | w=4 | general | ~593/wk
+https://feeds.nbcnews.com/nbcnews/public/news                            # NBC News (Top Stories) | w=4 | general | ~256/wk
+https://moxie.foxnews.com/google-publisher/politics.xml                  # Fox News (Politics) | w=3 | general | ~162/wk
+https://www.politico.com/rss/politicopicks.xml                           # Politico (Top Stories) | w=4 | general | ~129/wk
+https://thehill.com/news/feed/                                           # The Hill (Just In) | w=3 | general | ~582/wk
+https://api.axios.com/feed/                                              # Axios | w=4 | general | ~95/wk
+https://feeds.bloomberg.com/politics/news.rss                            # Bloomberg (Politics) | w=5 | general | ~411/wk
+https://www.latimes.com/world-nation/rss2.0.xml                          # Los Angeles Times (World & Nation) | w=4 | general | ~21/wk
+https://www.pbs.org/newshour/feeds/rss/headlines                         # PBS NewsHour (Latest) | w=4 | general | ~191/wk
+https://time.com/feed/                                                   # TIME | w=3 | general | ~84/wk
+https://www.semafor.com/rss.xml                                          # Semafor | w=3 | general | ~171/wk
+http://rss.csmonitor.com/feeds/world                                     # Christian Science Monitor (World) | w=3 | general | ~16/wk
 
 # --- International publications ---
-https://feeds.bbci.co.uk/news/world/rss.xml                              # BBC News (World) | general | ~198/wk
-https://www.theguardian.com/world/rss                                    # The Guardian (World) | general | ~507/wk
-https://www.ft.com/world?format=rss                                      # Financial Times (World) | general | ~386/wk
-https://feeds.skynews.com/feeds/rss/world.xml                            # Sky News (World) | general | ~50/wk
-http://www.independent.co.uk/news/world/rss                              # The Independent (World) | general | ~423/wk
-https://www.cbc.ca/webfeed/rss/rss-world                                 # CBC News (World) | general | ~85/wk
-https://www.aljazeera.com/xml/rss/all.xml                                # Al Jazeera English | general | ~631/wk
-https://rss.dw.com/rdf/rss-en-all                                        # Deutsche Welle (English) | general | ~213/wk
-https://www.france24.com/en/rss                                          # France 24 (English) | general | ~366/wk
-https://www.euronews.com/rss                                             # Euronews | general | ~446/wk
-https://www.rfi.fr/en/rss                                                # RFI (English) | general | ~54/wk
-http://www.japantimes.co.jp/feed/                                        # The Japan Times | general | ~288/wk
-http://www.scmp.com/rss/91/feed                                          # South China Morning Post (News) | general | ~484/wk
+https://feeds.bbci.co.uk/news/world/rss.xml                              # BBC News (World) | w=5 | general | ~198/wk
+https://www.theguardian.com/world/rss                                    # The Guardian (World) | w=4 | general | ~507/wk
+https://www.ft.com/world?format=rss                                      # Financial Times (World) | w=5 | general | ~386/wk
+https://feeds.skynews.com/feeds/rss/world.xml                            # Sky News (World) | w=3 | general | ~50/wk
+http://www.independent.co.uk/news/world/rss                              # The Independent (World) | w=3 | general | ~423/wk
+https://www.cbc.ca/webfeed/rss/rss-world                                 # CBC News (World) | w=4 | general | ~85/wk
+https://www.aljazeera.com/xml/rss/all.xml                                # Al Jazeera English | w=4 | general | ~631/wk
+https://rss.dw.com/rdf/rss-en-all                                        # Deutsche Welle (English) | w=4 | general | ~213/wk
+https://www.france24.com/en/rss                                          # France 24 (English) | w=3 | general | ~366/wk
+https://www.euronews.com/rss                                             # Euronews | w=3 | general | ~446/wk
+https://www.rfi.fr/en/rss                                                # RFI (English) | w=3 | general | ~54/wk
+http://www.japantimes.co.jp/feed/                                        # The Japan Times | w=3 | general | ~288/wk
+http://www.scmp.com/rss/91/feed                                          # South China Morning Post (News) | w=3 | general | ~484/wk

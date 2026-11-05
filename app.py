@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -47,7 +48,7 @@ VERTICALS = [
 ]
 VERTICALS_BY_KEY = {v.key: v for v in VERTICALS}
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS feeds (
     id           INTEGER PRIMARY KEY,
@@ -58,7 +59,8 @@ CREATE TABLE IF NOT EXISTS feeds (
     last_error   TEXT,
     item_count   INTEGER NOT NULL DEFAULT 0,
     via          TEXT,         -- 'direct' or 'feedly' (how the last successful fetch got its items)
-    name         TEXT          -- display name from the seed file; falls back to the feed's own title
+    name         TEXT,         -- display name from the seed file; falls back to the feed's own title
+    weight       REAL          -- outlet prestige 1..5 (seed file "w=N", editable in the UI); NULL = default
 );
 CREATE TABLE IF NOT EXISTS items (
     id         INTEGER PRIMARY KEY,
@@ -74,15 +76,24 @@ CREATE INDEX IF NOT EXISTS items_published ON items(published);
 """
 
 
-def read_feed_list(path: Path) -> dict[str, str | None]:
-    """{url: display name} from a seed file. One URL per line; '#' starts a comment, and the
-    comment's text up to the first '|' is the feed's display name ("https://... # IGN | ...")."""
+@dataclass
+class SeedFeed:
+    name: str | None = None
+    weight: float | None = None
+
+
+def read_feed_list(path: Path) -> dict[str, SeedFeed]:
+    """{url: SeedFeed} from a seed file: one URL per line, then an optional comment
+    "# Display name | w=4 | free-form notes". The first field is the name; "w=N" is the weight."""
     feeds_ = {}
     for line in path.read_text().splitlines():
         url, _, comment = line.partition("#")
         url = url.strip()
-        if url.lower().startswith(("http://", "https://")):
-            feeds_[url] = comment.split("|", 1)[0].strip() or None
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        fields = [f.strip() for f in comment.split("|")]
+        weight = next((float(f[2:]) for f in fields[1:] if re.fullmatch(r"w=\d+(\.\d+)?", f)), None)
+        feeds_[url] = SeedFeed(fields[0] or None, weight)
     return feeds_
 
 
@@ -94,9 +105,9 @@ class Store:
         with self._conn() as c:
             c.executescript(SCHEMA)
             cols = {r["name"] for r in c.execute("PRAGMA table_info(feeds)")}
-            for col in ("via", "name"):  # added in schema v2 / v3
+            for col, typ in (("via", "TEXT"), ("name", "TEXT"), ("weight", "REAL")):  # added in v2 / v3 / v4
                 if col not in cols:
-                    c.execute(f"ALTER TABLE feeds ADD COLUMN {col} TEXT")
+                    c.execute(f"ALTER TABLE feeds ADD COLUMN {col} {typ}")
             c.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _conn(self) -> sqlite3.Connection:
@@ -115,25 +126,33 @@ class Store:
             r = c.execute("SELECT * FROM feeds WHERE id = ?", (feed_id,)).fetchone()
             return dict(r) if r else None
 
-    def add_feed(self, url: str, name: str | None = None) -> int:
+    def add_feed(self, url: str, name: str | None = None, weight: float | None = None) -> int:
         with self._lock, self._conn() as c:
-            return c.execute("INSERT INTO feeds (url, added_at, name) VALUES (?, ?, ?)",
-                             (url, time.time(), name)).lastrowid
+            return c.execute("INSERT INTO feeds (url, added_at, name, weight) VALUES (?, ?, ?, ?)",
+                             (url, time.time(), name, weight)).lastrowid
 
-    def add_feeds(self, feeds_: dict[str, str | None]) -> int:
+    def add_feeds(self, feeds_: dict[str, SeedFeed]) -> int:
         added = 0
-        for url, name in feeds_.items():
+        for url, seed in feeds_.items():
             try:
-                self.add_feed(url, name)
+                self.add_feed(url, seed.name, seed.weight)
                 added += 1
             except sqlite3.IntegrityError:
                 pass
         return added
 
-    def sync_names(self, feeds_: dict[str, str | None]) -> None:
-        """Apply display names from the seed file to feeds that are already in the database."""
+    def sync_seed(self, feeds_: dict[str, SeedFeed]) -> None:
+        """Apply seed-file names to existing feeds, and seed-file weights where none is set yet
+        (a weight changed in the UI is kept)."""
         with self._lock, self._conn() as c:
-            c.executemany("UPDATE feeds SET name = ? WHERE url = ?", [(n, u) for u, n in feeds_.items() if n])
+            c.executemany("UPDATE feeds SET name = ? WHERE url = ?",
+                          [(s.name, u) for u, s in feeds_.items() if s.name])
+            c.executemany("UPDATE feeds SET weight = ? WHERE url = ? AND weight IS NULL",
+                          [(s.weight, u) for u, s in feeds_.items() if s.weight is not None])
+
+    def set_weight(self, feed_id: int, weight: float) -> bool:
+        with self._lock, self._conn() as c:
+            return c.execute("UPDATE feeds SET weight = ? WHERE id = ?", (weight, feed_id)).rowcount > 0
 
     def delete_feed(self, feed_id: int) -> bool:
         with self._lock, self._conn() as c:
@@ -164,10 +183,11 @@ class Store:
         with self._conn() as c:
             rows = c.execute(
                 """SELECT i.id, i.feed_id, i.title, i.link, i.published,
-                          COALESCE(f.name, NULLIF(f.title, ''), f.url) AS feed_title
+                          COALESCE(f.name, NULLIF(f.title, ''), f.url) AS feed_title,
+                          COALESCE(f.weight, ?) AS weight
                    FROM items i JOIN feeds f ON f.id = i.feed_id
                    WHERE i.published >= ?""",
-                (since,),
+                (matching.DEFAULT_WEIGHT, since),
             ).fetchall()
         return [matching.Item(**dict(r)) for r in rows]
 
@@ -259,25 +279,31 @@ def backfill(stores: dict[str, Store], days: float) -> None:
             print(line)
 
 
-def build_stories(store: Store, min_feeds: int, hours: float, threshold: float) -> dict:
+def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, min_score: float = 0) -> dict:
     items = store.items_since(time.time() - hours * 3600)
-    stories = [s for s in matching.cluster(items, threshold=threshold) if s.coverage >= min_feeds]
-    stories.sort(key=lambda s: (-s.coverage, -s.latest))
+    stories = [s for s in matching.cluster(items, threshold=threshold)
+               if s.coverage >= min_feeds and s.score >= min_score]
+    stories.sort(key=lambda s: (-s.score, -s.coverage, -s.latest))
     out = []
     for s in stories:
         # One entry per feed (a feed may have several near-duplicate items; keep the newest).
         per_feed: dict[int, matching.Item] = {}
         for it in sorted(s.items, key=lambda i: i.published):
             per_feed[it.feed_id] = it
+        lead = matching.lead_item(s)
+        per_feed[lead.feed_id] = lead  # show the lead outlet's lead headline, not its newest item
         out.append(
             {
-                "title": matching.representative_title(s),
+                "title": lead.title,
+                "lead": {"feed": lead.feed_title, "link": lead.link, "weight": lead.weight},
                 "coverage": s.coverage,
+                "score": s.score,
                 "first_seen": s.earliest,
                 "latest": s.latest,
                 "sources": [
-                    {"feed": it.feed_title, "title": it.title, "link": it.link, "published": it.published}
-                    for it in sorted(per_feed.values(), key=lambda i: i.published)
+                    {"feed": it.feed_title, "title": it.title, "link": it.link, "published": it.published,
+                     "weight": it.weight}
+                    for it in sorted(per_feed.values(), key=lambda i: (-i.weight, i.published))
                 ],
             }
         )
@@ -332,6 +358,7 @@ def make_handler(stores: dict[str, Store], fetcher: Fetcher):
                     "verticals": [{"key": v.key, "label": v.label, "default_min_feeds": v.default_min_feeds}
                                   for v in VERTICALS if v.key in stores],
                     "default_threshold": matching.DEFAULT_THRESHOLD,
+                    "default_weight": matching.DEFAULT_WEIGHT,
                 })
             elif store and rest == ["feeds"]:
                 self._json({"feeds": store.list_feeds(), "refreshing": fetcher.running, "last_run": fetcher.last_run})
@@ -340,9 +367,10 @@ def make_handler(stores: dict[str, Store], fetcher: Fetcher):
                     min_feeds = max(1, int(q.get("min_feeds", 2)))
                     hours = min(24 * RETENTION_DAYS, max(1.0, float(q.get("hours", 48))))
                     threshold = min(1.0, max(0.02, float(q.get("threshold", matching.DEFAULT_THRESHOLD))))
+                    min_score = max(0.0, float(q.get("min_score", 0) or 0))
                 except ValueError:
                     return self._json({"error": "Invalid parameters"}, 400)
-                self._json(build_stories(store, min_feeds, hours, threshold))
+                self._json(build_stories(store, min_feeds, hours, threshold, min_score))
             else:
                 self._json({"error": "Not found"}, 404)
 
@@ -369,6 +397,19 @@ def make_handler(stores: dict[str, Store], fetcher: Fetcher):
             else:
                 self._json({"error": "Not found"}, 404)
 
+        def do_PATCH(self):
+            rest, _, store = self._route()
+            if store and len(rest) == 2 and rest[0] == "feeds" and rest[1].isdigit():
+                try:
+                    weight = float(self._body().get("weight"))
+                except (TypeError, ValueError):
+                    return self._json({"error": "weight must be a number"}, 400)
+                if not 0 < weight <= 10:
+                    return self._json({"error": "weight must be between 0 and 10"}, 400)
+                if store.set_weight(int(rest[1]), weight):
+                    return self._json({"feed": store.get_feed(int(rest[1]))})
+            self._json({"error": "Not found"}, 404)
+
         def do_DELETE(self):
             rest, _, store = self._route()
             if store and len(rest) == 2 and rest[0] == "feeds" and rest[1].isdigit():
@@ -390,7 +431,7 @@ def open_stores(data_dir: Path, seed: bool = True) -> dict[str, Store]:
             if not store.list_feeds():
                 n = store.add_feeds(seed_feeds)
                 print(f"Seeded {v.label}: {n} feeds from {seed_file.relative_to(ROOT)}")
-            store.sync_names(seed_feeds)
+            store.sync_seed(seed_feeds)
         stores[v.key] = store
     return stores
 

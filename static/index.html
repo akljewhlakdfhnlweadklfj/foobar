@@ -64,6 +64,11 @@
   .story-head { display: flex; gap: 12px; align-items: flex-start; }
   .badge { flex: none; min-width: 44px; text-align: center; padding: 4px 8px; border-radius: 6px;
            background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13px; }
+  .badge .score { display: block; margin-top: 3px; padding-top: 3px; border-top: 1px solid currentColor; font-size: 11px; opacity: .85; }
+  .lead { font-size: 13px; color: var(--accent); font-weight: 600; margin-top: 2px; }
+  .w { display: inline-block; min-width: 18px; padding: 0 4px; border-radius: 4px; font-size: 11px; text-align: center;
+       background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+  select.weight { width: auto; padding: 2px 4px; font-size: 12px; }
   .badge small { display: block; font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
   .story h3 { margin: 0; font-size: 17px; line-height: 1.35; }
   .story .when { font-size: 12px; color: var(--muted); margin-top: 2px; }
@@ -105,6 +110,10 @@
             <option value="168">7 days</option>
           </select>
         </label>
+        <label class="full">Minimum prestige score
+          <input type="number" id="min_score" min="0" step="1" value="0">
+          <span style="font-size:11px">Sum of the outlets' weights (1–5 each). 0 = no minimum. Stories are ranked by this score.</span>
+        </label>
         <label class="full">Title match strictness: <output id="threshold_out"></output>
           <input type="range" id="threshold" min="0.05" max="0.5" step="0.01" value="0.15">
           <span style="font-size:11px">Lower = groups loosely-related headlines; higher = near-identical only.</span>
@@ -144,12 +153,13 @@ function ago(ts) {
 }
 
 // Verticals (tabs) and per-vertical filter settings.
-const SETTINGS = ["min_feeds", "hours", "threshold"];
-let VERTICALS = [], V = null, DEFAULT_THRESHOLD = 0.15;
+const SETTINGS = ["min_feeds", "hours", "threshold", "min_score"];
+let VERTICALS = [], V = null, DEFAULT_THRESHOLD = 0.15, DEFAULT_WEIGHT = 2;
+const fmt = (n) => Number(n).toFixed(1).replace(/\.0$/, "");
 const settingsKey = (v) => "news-settings-v2-" + v;
 function loadSettings() {
   const vert = VERTICALS.find((x) => x.key === V);
-  const defaults = { min_feeds: vert.default_min_feeds, hours: 48, threshold: DEFAULT_THRESHOLD };
+  const defaults = { min_feeds: vert.default_min_feeds, hours: 48, threshold: DEFAULT_THRESHOLD, min_score: 0 };
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(settingsKey(V)) || "{}"); } catch {}
   SETTINGS.forEach((k) => { $(k).value = saved[k] ?? defaults[k]; });
@@ -197,6 +207,9 @@ async function loadFeeds() {
       <span class="dot ${state}"></span>
       <div class="info"><div class="name">${esc(f.name || f.title || f.url)}</div>
         <div class="sub">${esc(f.url)}</div>${sub}</div>
+      <select class="weight" title="Prestige weight (1 = small blog, 5 = paper of record)" data-weight="${f.id}">
+        ${[1, 2, 3, 4, 5].map((w) => `<option value="${w}" ${Number(f.weight ?? DEFAULT_WEIGHT) === w ? "selected" : ""}>★${w}</option>`).join("")}
+      </select>
       <button class="ghost" title="Remove feed" data-del="${f.id}">×</button>
     </li>`;
   }).join("") || `<li class="sub">No feeds yet — add a few RSS/Atom URLs above.</li>`;
@@ -224,16 +237,17 @@ async function loadStories() {
   $("stories").innerHTML = data.stories.map((s) => `
     <article class="story">
       <div class="story-head">
-        <div class="badge">${s.coverage}<small>feeds</small></div>
+        <div class="badge" title="${s.coverage} outlets, prestige score ${fmt(s.score)}">${s.coverage}<small>feeds</small><span class="score">★ ${fmt(s.score)}</span></div>
         <div>
           <h3>${esc(s.title)}</h3>
+          <div class="lead">${esc(s.lead.feed)}</div>
           <div class="when">First seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</div>
         </div>
       </div>
       <details>
         <summary>${s.sources.slice(0, 6).map((x) => esc(x.feed)).join(" · ")}${s.sources.length > 6 ? ` · +${s.sources.length - 6} more` : ""}</summary>
         <ul class="sources">${s.sources.map((x) => `
-          <li><div class="src">${esc(x.feed)} · ${ago(x.published)}</div>
+          <li><div class="src"><span class="w" title="prestige weight">${fmt(x.weight)}</span> ${esc(x.feed)} · ${ago(x.published)}</div>
             <a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener noreferrer">${esc(x.title)}</a></li>`).join("")}
         </ul>
       </details>
@@ -263,6 +277,13 @@ $("feeds").addEventListener("click", async (e) => {
   await loadFeeds(); await loadStories();
 });
 
+$("feeds").addEventListener("change", async (e) => {
+  const id = e.target.dataset.weight;
+  if (!id) return;
+  await api(`/api/${V}/feeds/` + id, { method: "PATCH", body: JSON.stringify({ weight: Number(e.target.value) }) });
+  await loadStories();
+});
+
 $("refresh").addEventListener("click", async () => {
   await api("/api/refresh", { method: "POST" });
   wasRefreshing = true; $("refresh").disabled = true; $("status").textContent = "Refreshing…";
@@ -272,7 +293,7 @@ let debounce;
 SETTINGS.forEach((k) => $(k).addEventListener("input", () => { clearTimeout(debounce); debounce = setTimeout(loadStories, 200); }));
 
 api("/api/verticals").then((d) => {
-  VERTICALS = d.verticals; DEFAULT_THRESHOLD = d.default_threshold;
+  VERTICALS = d.verticals; DEFAULT_THRESHOLD = d.default_threshold; DEFAULT_WEIGHT = d.default_weight;
   $("tabs").innerHTML = VERTICALS.map((v) => `<a href="#${v.key}" data-v="${v.key}">${esc(v.label)}</a>`).join("");
   selectVertical(location.hash.slice(1));
 });
