@@ -74,21 +74,39 @@
   .cloud button:hover, .cloud button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
   .cloud .empty-cloud { color: var(--muted); font-size: 13px; }
   .viewbar .clear { color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: 0; padding: 0; font: inherit; }
-  .story { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
-  .story.watched { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+  /* Simple list of titles; details open per story. */
+  .stories { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .stories:empty { display: none; }
+  .story { padding: 10px 16px; border-top: 1px solid var(--border); }
+  .story:first-child { border-top: 0; }
+  .story.watched { box-shadow: inset 3px 0 0 var(--accent); }
+  .story .row { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; }
+  .story .expand { flex: none; background: none; border: 0; color: var(--muted); font-size: 14px; padding: 4px 6px;
+                   border-radius: 4px; transition: transform .15s; margin-top: 2px; }
+  .story.open .expand { transform: rotate(180deg); }
+  .story .expand:hover { background: var(--accent-soft); color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { .story .expand { transition: none; } }
+  .story .more { padding: 8px 0 4px; }
+  .more-head { display: flex; gap: 12px; align-items: flex-start; }
+  .meta strong { color: var(--text); }
   .story-head { display: flex; gap: 12px; align-items: flex-start; }
   .badge { flex: none; min-width: 44px; text-align: center; padding: 4px 8px; border-radius: 6px;
            background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13px; }
   .badge small { display: block; font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
   .badge .score { display: block; margin-top: 3px; padding-top: 3px; border-top: 1px solid currentColor; font-size: 11px; opacity: .85; }
-  .story h3 { margin: 0; font-size: 17px; line-height: 1.35; }
+  .story h3 { margin: 0; font-size: 16px; line-height: 1.35; font-weight: 600; }
   .story-text { flex: 1; min-width: 0; }
+  .kws { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 0 0 3px; }
+  .kws button { background: none; border: 0; padding: 0; font-weight: 700; color: var(--muted); cursor: pointer;
+                letter-spacing: -0.01em; white-space: nowrap; }
+  .kws button:first-child { color: var(--accent); }
+  .kws button:hover, .kws button[aria-pressed="true"] { color: var(--accent); text-decoration: underline; }
   .thumb { flex: none; width: 168px; height: 104px; border-radius: 8px; overflow: hidden; background: var(--bg);
            border: 1px solid var(--border); display: block; }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   @media (max-width: 600px) { .thumb { width: 88px; height: 66px; border-radius: 6px; } }
   .story h3 a { text-decoration: none; } .story h3 a:hover { text-decoration: underline; }
-  .meta { font-size: 13px; color: var(--muted); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .meta { font-size: 13px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .meta .lead { color: var(--accent); font-weight: 600; }
   .vtag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px;
           border-radius: 4px; border: 1px solid var(--border); color: var(--muted); }
@@ -109,7 +127,7 @@
   .sources li.nc .src::after { content: " · doesn't count"; color: var(--muted); font-weight: 500; }
   .w { display: inline-block; min-width: 18px; padding: 0 4px; border-radius: 4px; font-size: 11px; text-align: center;
        background: var(--accent-soft); color: var(--accent); font-weight: 700; }
-  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+  .empty { text-align: center; color: var(--muted); padding: 48px 16px; background: var(--panel); }
 
   /* ---- Settings view ---- */
   .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
@@ -408,7 +426,8 @@ function hl(text, re) {
 const storyKey = (s) => s.vertical + "|" + (s.lead.link || s.title);
 
 // ---------- Word cloud of prominent terms ----------
-let activeTerm = null, lastTerms = [], lastStories = [];
+let activeTerm = null, lastTerms = [], lastStories = [], shownStories = [];   // activeTerm: {term, forms}
+const openStories = new Set();   // keys of expanded stories (kept across refreshes)
 function mergeTerms(results) {
   const by = new Map();
   for (const r of results) for (const t of r.terms || []) {
@@ -436,7 +455,7 @@ function renderCloud(terms) {
   el.innerHTML = ordered.map((t) => {
     const r = Math.sqrt(t.weight / max), size = Math.round(12 + 22 * r);
     const tier = r > 0.6 ? "hot" : r > 0.32 ? "mid" : "low";
-    const on = activeTerm && activeTerm.toLowerCase() === t.term.toLowerCase();
+    const on = !!activeTerm && activeTerm.term.toLowerCase() === t.term.toLowerCase();
     return `<button type="button" class="${tier}" style="font-size:${size}px" data-term="${esc(t.term)}" aria-pressed="${on}"
       title="${t.stories} stor${t.stories === 1 ? "y" : "ies"} · click to show only these">${esc(t.term)}</button>`;
   }).join("");
@@ -444,8 +463,34 @@ function renderCloud(terms) {
 $("cloud").addEventListener("click", (e) => {
   const term = e.target.closest("button")?.dataset.term;
   if (!term) return;
-  activeTerm = activeTerm && activeTerm.toLowerCase() === term.toLowerCase() ? null : term;
+  toggleTerm(lastTerms.find((t) => t.term === term));
+});
+function toggleTerm(t) {
+  if (!t) return;
+  activeTerm = activeTerm && activeTerm.term.toLowerCase() === t.term.toLowerCase() ? null : { term: t.term, forms: t.forms || [] };
   renderCloud(lastTerms); renderStoryList(lastStories, route.sub, true);
+  if (activeTerm) $("view_stories").scrollIntoView({ block: "start", behavior: "smooth" });
+}
+function setOpen(article, open) {
+  const key = article.dataset.key;
+  open ? openStories.add(key) : openStories.delete(key);
+  article.classList.toggle("open", open);
+  article.querySelector(".more").hidden = !open;
+  const btn = article.querySelector(".expand");
+  btn.setAttribute("aria-expanded", open); btn.setAttribute("aria-label", `${open ? "Hide" : "Show"} details`);
+  const img = article.querySelector("img[data-src]");      // images load only when a story is opened
+  if (open && img) { img.src = img.dataset.src; img.removeAttribute("data-src"); }
+}
+$("stories").addEventListener("click", (e) => {
+  const article = e.target.closest("article.story");
+  if (!article) return;
+  if (e.target.closest(".expand") || (!e.target.closest("a, button, .more") && e.target.closest(".row"))) {
+    return setOpen(article, !openStories.has(article.dataset.key));
+  }
+  const b = e.target.closest("button[data-kw]");
+  if (!b) return;
+  const s = shownStories[Number(b.closest("article").dataset.idx)];
+  toggleTerm(s?.keywords?.[Number(b.dataset.kw)]);
 });
 
 async function fetchStories(key) {
@@ -477,7 +522,7 @@ async function loadStories(force = false) {
   if (!force && json === lastStoriesJson) return;
   lastStoriesJson = json;
   const terms = sub === "all" ? mergeTerms(results) : (results[0].terms || []);
-  if (activeTerm && !terms.some((t) => t.term.toLowerCase() === activeTerm.toLowerCase())) activeTerm = null;
+  // (a story keyword can be active even if it isn't in the top cloud, so keep it)
   renderCloud(terms);
   renderStoryList(stories, sub, force);
 }
@@ -487,10 +532,9 @@ function renderStoryList(allStories, sub, force) {
   lastStories = allStories;
   let stories = allStories;
   if (activeTerm) {
-    const t = lastTerms.find((x) => x.term.toLowerCase() === activeTerm.toLowerCase());
-    const re = t ? termRe(t) : null;
-    stories = re ? allStories.filter((s) => mentions(s, re)) : allStories;
-    $("summary").innerHTML = `${stories.length} of ${allStories.length} stories mention “${esc(activeTerm)}” · <button type="button" class="clear" id="clear_term">Show all</button>`;
+    const re = termRe(activeTerm);
+    stories = allStories.filter((s) => mentions(s, re));
+    $("summary").innerHTML = `${stories.length} of ${allStories.length} stories mention “${esc(activeTerm.term)}” · <button type="button" class="clear" id="clear_term">Show all</button>`;
     $("clear_term").addEventListener("click", () => { activeTerm = null; renderCloud(lastTerms); renderStoryList(lastStories, route.sub, true); });
   } else {
     $("summary").textContent = summaryBase;
@@ -500,33 +544,41 @@ function renderStoryList(allStories, sub, force) {
       <a href="#settings/${sub === "all" ? META.verticals[0].key : sub}">Adjust them in Settings</a>, or refresh the feeds.</div>`;
     return;
   }
-  const open = new Set([...document.querySelectorAll("#stories details[open]")].map((d) => d.dataset.key));
-  $("stories").innerHTML = stories.map((s) => {
+  shownStories = stories;
+  $("stories").innerHTML = stories.map((s, idx) => {
     const re = phraseRe(s.watched.map((w) => w.phrase));
-    const titleHit = re && new RegExp(re.source, "iu").test(s.title);
-    const key = storyKey(s);
+    const key = storyKey(s), isOpen = openStories.has(key);
+    const pressed = (t) => !!activeTerm && activeTerm.term.toLowerCase() === t.toLowerCase();
     return `
-    <article class="story${s.watched.length ? " watched" : ""}">
-      <div class="story-head">
-        <div class="badge" title="${s.coverage} counted outlet${s.coverage === 1 ? "" : "s"}${s.outlets > s.coverage ? ` (of ${s.outlets})` : ""} · prestige ${fmt(s.base_score)}${s.bonus ? ` + ${fmt(s.bonus)} watched bonus` : ""}">${s.coverage}<small>outlets</small><span class="score">★ ${fmt(s.score)}</span></div>
+    <article class="story${s.watched.length ? " watched" : ""}${isOpen ? " open" : ""}" data-idx="${idx}" data-key="${esc(key)}">
+      <div class="row">
         <div class="story-text">
+          ${(s.keywords || []).length ? `<div class="kws" aria-label="Key terms">${s.keywords.map((k, i) =>
+            `<button type="button" data-kw="${i}" style="font-size:${(11 + 5 * k.weight).toFixed(1)}px;opacity:${(0.6 + 0.4 * k.weight).toFixed(2)}"
+               aria-pressed="${pressed(k.term)}" title="Show stories mentioning ${esc(k.term)}">${esc(k.term)}</button>`).join("")}</div>` : ""}
           <h3>${s.lead.link ? `<a href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer">${hl(s.title, re)}</a>` : hl(s.title, re)}</h3>
-          <div class="meta">${sub === "all" ? `<span class="vtag">${esc(label(s.vertical))}</span>` : ""}
-            <span class="lead">${esc(s.lead.feed)}</span><span>first seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</span></div>
-          ${s.lead.description ? `<p class="desc">${hl(s.lead.description, re)}</p>` : ""}
-          ${s.watched.length ? `<div class="chips">${s.watched.map((w) => `<span class="chip">Watched: ${esc(w.phrase)} +${fmt(w.bonus)}</span>`).join("")}</div>` : ""}
         </div>
-        ${s.lead.image && safeUrl(s.lead.image) !== "#" ? `<a class="thumb" href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer" tabindex="-1" aria-hidden="true">
-          <img src="${esc(s.lead.image)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>` : ""}
+        <button type="button" class="expand" aria-expanded="${isOpen}" aria-label="${isOpen ? "Hide" : "Show"} details">▾</button>
       </div>
-      <details data-key="${esc(key)}" ${open.has(key) || (s.watched.length && !titleHit) ? "open" : ""}>
-        <summary>${s.sources.slice(0, 6).map((x) => esc(x.feed)).join(" · ")}${s.sources.length > 6 ? ` · +${s.sources.length - 6} more` : ""}</summary>
+      <div class="more" ${isOpen ? "" : "hidden"}>
+        <div class="more-head">
+          <div class="story-text">
+            <div class="meta">${route.sub === "all" ? `<span class="vtag">${esc(label(s.vertical))}</span>` : ""}
+              <span title="${s.coverage} counted outlet${s.coverage === 1 ? "" : "s"}${s.outlets > s.coverage ? ` (of ${s.outlets})` : ""}"><strong>${s.coverage}</strong> outlets</span>
+              <span title="prestige ${fmt(s.base_score)}${s.bonus ? ` + ${fmt(s.bonus)} watched bonus` : ""}">★ ${fmt(s.score)}</span>
+              <span class="lead">${esc(s.lead.feed)}</span><span>first seen ${ago(s.first_seen)} · latest ${ago(s.latest)}</span></div>
+            ${s.lead.description ? `<p class="desc">${hl(s.lead.description, re)}</p>` : ""}
+            ${s.watched.length ? `<div class="chips">${s.watched.map((w) => `<span class="chip">Watched: ${esc(w.phrase)} +${fmt(w.bonus)}</span>`).join("")}</div>` : ""}
+          </div>
+          ${s.lead.image && safeUrl(s.lead.image) !== "#" ? `<a class="thumb" href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer" tabindex="-1" aria-hidden="true">
+            <img ${isOpen ? "src" : "data-src"}="${esc(s.lead.image)}" alt="" decoding="async" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>` : ""}
+        </div>
         <ul class="sources">${s.sources.map((x) => `
           <li class="${x.watched ? "hit" : ""}${x.counted === false ? " nc" : ""}"><div class="src"><span class="w" title="prestige weight">${fmt(x.weight)}</span> ${esc(x.feed)} · ${ago(x.published)}</div>
             <a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener noreferrer">${hl(x.title, re)}</a>
             ${x.snippet ? `<div class="snippet">${hl(x.snippet, re)}</div>` : ""}</li>`).join("")}
         </ul>
-      </details>
+      </div>
     </article>`;
   }).join("");
 }

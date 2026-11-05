@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
+import math
 import os
 import re
 import sqlite3
@@ -156,6 +157,10 @@ def _clusters(store: Store, hours: float, threshold: float) -> tuple[list[matchi
 
 
 MIN_HEADLINE_WORDS = 4
+# Headlines labelled as a format rather than the news itself.
+_LABELLED = re.compile(r"^\s*(opinion|op-ed|watch|video|videos|listen|podcast|live|live updates|analysis|editorial|"
+                       r"explainer|review|reviews|preview|quiz|letters?|photos?|in pictures|the latest|perspective|"
+                       r"column|commentary|interview|recap)\b\s*[:|\-–—]", re.I)
 
 
 def headline_item(story: matching.Story, min_weight: float = 0) -> matching.Item:
@@ -164,7 +169,8 @@ def headline_item(story: matching.Story, min_weight: float = 0) -> matching.Item
     headline exists; ties go to the higher-weighted outlet."""
     pool = [i for i in story.items if i.weight >= min_weight] or story.items
     full = [i for i in pool if len(i.title.split()) >= MIN_HEADLINE_WORDS] or pool
-    return min(full, key=lambda i: (len(i.title), -i.weight, i.published))
+    plain = [i for i in full if not _LABELLED.match(i.title)] or full  # skip "Opinion | ...", "WATCH: ..."
+    return min(plain, key=lambda i: (len(i.title), -i.weight, i.published))
 
 
 def build_stories(store: Store, min_feeds: int, hours: float, threshold: float, min_score: float = 0,
@@ -262,6 +268,7 @@ GENERIC_TERMS = frozenset("""
     against during off long short high low good great bad better worse every many much more most
 """.split())
 MIN_SHARE = 0.4
+STORY_KEYWORDS = 6
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’+\-]*")
 
 
@@ -284,11 +291,15 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
     prestigious stories are biggest. Word variants
     ("layoff"/"layoffs") are merged; a phrase ("Elder Scrolls") replaces its words when they mostly
     occur together. Returns [{"term", "weight", "stories", "forms"}], heaviest first.
+
+    Also sets each story's "keywords": up to STORY_KEYWORDS of its own defining terms, most
+    prominent first, ranked by share of its headlines x how distinctive the term is in this list.
     """
     uni_w, uni_n, bi_w, bi_n = defaultdict(float), defaultdict(int), defaultdict(float), defaultdict(int)
     forms: dict = defaultdict(Counter)            # key -> surface forms seen
     proper: dict = defaultdict(int)               # key -> times capitalised inside a sentence-case headline
     plain: dict = defaultdict(int)                # key -> times lowercase inside a sentence-case headline
+    per_story = []                                # (story, {key: share}, {(a, b): share})
     for s in stories:
         titles = {x["title"] for x in s["sources"]} | {s["title"]}
         cnt_u, cnt_b = Counter(), Counter()
@@ -317,12 +328,13 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
             cnt_u.update(seen_u)
             cnt_b.update(seen_b)
         need = max(1, MIN_SHARE * len(titles))
-        for k, c in cnt_u.items():
-            if c >= need:
-                uni_w[k] += s["score"] * c / len(titles); uni_n[k] += 1
-        for k, c in cnt_b.items():
-            if c >= need:
-                bi_w[k] += s["score"] * c / len(titles); bi_n[k] += 1
+        own_u = {k: c / len(titles) for k, c in cnt_u.items() if c >= need}
+        own_b = {k: c / len(titles) for k, c in cnt_b.items() if c >= need}
+        for k, share in own_u.items():
+            uni_w[k] += s["score"] * share; uni_n[k] += 1
+        for k, share in own_b.items():
+            bi_w[k] += s["score"] * share; bi_n[k] += 1
+        per_story.append((s, own_u, own_b))
 
     def display(k: str) -> str:
         """Names, acronyms and model names keep their capitals; ordinary words are lowercased.
@@ -348,6 +360,26 @@ def story_terms(stories: list[dict], limit: int = 40) -> list[dict]:
     for k, n in uni_n.items():
         if n >= 2 and n > 1.25 * absorbed.get(k, 0):
             terms[k] = {"term": display(k), "weight": uni_w[k], "stories": n, "forms": sorted(forms[k])[:6]}
+    # Per-story keywords. A phrase replaces its words when it covers (nearly) all their uses here.
+    n_stories = max(1, len(stories))
+    for s, own_u, own_b in per_story:
+        cands = []
+        used = set()
+        for (a, b), share in sorted(own_b.items(), key=lambda kv: -kv[1]):
+            if a in used or b in used:
+                continue
+            if share >= 0.8 * max(own_u.get(a, 0), own_u.get(b, 0)):
+                df = max(1, bi_n[(a, b)])
+                cands.append((share * math.log(1 + n_stories / df), f"{display(a)} {display(b)}",
+                              sorted(set(forms[a]) | set(forms[b]))[:6]))
+                used.update((a, b))
+        for k, share in own_u.items():
+            if k not in used:
+                cands.append((share * math.log(1 + n_stories / max(1, uni_n[k])), display(k), sorted(forms[k])[:6]))
+        cands.sort(key=lambda c: -c[0])
+        top = cands[:STORY_KEYWORDS]
+        s["keywords"] = [{"term": t, "weight": round(w / top[0][0], 3), "forms": f} for w, t, f in top] if top else []
+
     out = sorted(terms.values(), key=lambda t: -t["weight"])[:limit]
     for t in out:
         t.pop("parts", None)

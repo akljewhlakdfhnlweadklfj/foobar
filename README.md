@@ -56,10 +56,13 @@ each story) or a single vertical, and sort by **Top** (score) or **Latest**.
   a term counts for a story when it's in at least 40% of that story's headlines, and is sized by the
   scores of the stories using it. Generic headline words (trailer, review, season…) are left out.
   Click a term to show only stories mentioning it; click again (or "Show all") to clear.
-- Each story shows how many outlets reported it, its score, a headline, a description and, when the
-  feeds provide one, an image on the right. The headline is the **shortest** one among the story's
-  outlets (ignoring fragments under 4 words); the description and image fall back to the
-  highest-weighted outlet that has them. Expand a story to see every outlet's headline.
+- The list is compact: each story shows only its **key terms** (a small word cloud of up to 6 terms,
+  most prominent first, left to right: share of its headlines x how distinctive the term is) and its
+  **headline**, the shortest one among its outlets (4+ words; labelled pieces like "Opinion |" or
+  "WATCH:" are skipped when possible). Click a key term to filter by it.
+- Click a story (or its arrow) to expand it: outlets and score, outlet and times, description,
+  image (when the feeds have one; loaded only when expanded), watched-phrase chips, and every outlet's
+  headline. Description and image fall back to the highest-weighted outlet that has them.
   Watched phrases are highlighted.
 
 **Settings**: one sub-tab per vertical, plus **Scraping**.

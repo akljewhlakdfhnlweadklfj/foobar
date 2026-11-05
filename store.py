@@ -128,6 +128,9 @@ class Store:
                 for col, typ in cols:
                     if col not in have:
                         c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+            # Earlier versions stored placeholder descriptions some feeds send literally.
+            c.execute("UPDATE items SET description = '' "
+                      "WHERE lower(trim(description)) IN ('null', 'none', 'undefined', 'nan')")
             c.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager

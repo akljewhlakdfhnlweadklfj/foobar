@@ -583,6 +583,9 @@ class HeadlineAndImageTests(unittest.TestCase):
         ])
         self.assertEqual(app.headline_item(story).id, 4)
         self.assertEqual(app.headline_item(story, min_weight=2).id, 3)               # outlet 4 doesn't count
+        labelled = matching.Story(items=[Item(id=1, feed_id=1, title="Opinion | The end of aid to Israel?"),
+                                         Item(id=2, feed_id=2, title="US will stop $4B in aid to Israel, Trump says")])
+        self.assertEqual(app.headline_item(labelled).id, 2)
 
     def test_images_from_rss_atom_and_feedly(self):
         rss = b"""<rss xmlns:media="http://search.yahoo.com/mrss/"><channel>
@@ -611,6 +614,25 @@ class HeadlineAndImageTests(unittest.TestCase):
         self.assertEqual((s["lead"]["description"], s["lead"]["image"]), ("Long text.", "https://i/1.jpg"))
 
 
+class KeywordTests(unittest.TestCase):
+    def test_story_keywords_ordered_by_prominence(self):
+        def story(title_list, score=10):
+            return {"title": title_list[0], "score": score, "sources": [{"title": t} for t in title_list]}
+        stories = [
+            story(["Bethesda reveals Elder Scrolls 6 is called Sentinel", "Elder Scrolls 6 gets its name: Sentinel",
+                   "The Elder Scrolls VI: Sentinel officially revealed"]),
+            story(["Valve announces Steam Machine", "Steam Machine announced by Valve", "Valve's new Steam Machine"]),
+            story(["Elder Scrolls Online gets an update", "Elder Scrolls Online patch notes"]),
+        ]
+        app.story_terms(stories)
+        kw = [k["term"] for k in stories[0]["keywords"]]
+        self.assertEqual(kw[0], "Sentinel")          # in every headline and only in this story
+        self.assertIn("Elder Scrolls", kw)           # phrase replaces its words
+        self.assertNotIn("Elder", kw)
+        self.assertEqual(stories[0]["keywords"][0]["weight"], 1.0)
+        self.assertTrue(all(a["weight"] >= b["weight"] for a, b in zip(stories[0]["keywords"], stories[0]["keywords"][1:])))
+
+
 class ParserAndPagingTests(unittest.TestCase):
     def test_parser_details(self):
         future = time.time() + 30 * 86400
@@ -626,6 +648,18 @@ class ParserAndPagingTests(unittest.TestCase):
         self.assertEqual(e.guid, "g&sect=9")
         self.assertLessEqual(e.published, time.time())
         self.assertEqual(e.description, "Short summary.")
+
+    def test_placeholder_descriptions_dropped(self):
+        self.assertEqual(feeds.clean_description("null"), "")
+        self.assertEqual(feeds.clean_description(" None "), "")
+        self.assertEqual(feeds.clean_description("Nullified contract"), "Nullified contract")
+        db = Path(tempfile.mkdtemp()) / "n.db"
+        st = app.Store(db)
+        fid = st.add_feed("https://a.example/rss")
+        with st._conn() as c:
+            c.execute("INSERT INTO items (feed_id, guid, title, published, fetched_at, description) "
+                      "VALUES (?, 'g', 'T', ?, ?, 'null')", (fid, time.time(), time.time()))
+        self.assertEqual(app.Store(db).items_since(0)[0].description, "")   # cleaned on open
 
     def test_google_news_suffix_removed(self):
         rss = b"""<rss><channel><item><title>Democrats win the Senate - Reuters</title><link>https://x/1</link></item>

@@ -148,6 +148,8 @@ def _text(el: ET.Element | None) -> str:
 def clean_description(raw: str) -> str:
     """Plain-text description: tags/entities removed, boilerplate footers cut, trimmed on a word."""
     text = clean_text(raw)
+    if text.lower() in ("null", "none", "undefined", "nan"):  # some feeds/APIs send these literally
+        return ""
     for _ in range(2):
         text = _DESC_BOILERPLATE.sub("", text).strip()
     if len(text) > DESCRIPTION_CHARS:
