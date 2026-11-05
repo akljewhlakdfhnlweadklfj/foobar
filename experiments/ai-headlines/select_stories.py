@@ -19,11 +19,11 @@ stores = app.open_stores(Path(sys.argv[1]), seed=False)
 digests = app.make_digests(stores)
 out = []
 for v, n in QUOTA.items():
-    d = json.loads(digests.get(v, 48)["json"])
-    w = {o["id"]: (o["weight"] if o["enabled"] else 0) for o in d["outlets"]}
+    d = digests.data(v, 48)[1]
+    w = {f["id"]: (f["weight"] or 0 if f["enabled"] else 0) for f in stores[v].list_feeds()}
     for s in sorted(d["stories"], key=lambda s: -sum(w[x["f"]] for x in s["s"]))[:n]:
         titles = list(dict.fromkeys(x["t"] for x in s["s"]))
-        short = min((t for t in titles if len(t.split()) >= 4), key=len, default=min(titles, key=len))
+        short = min((t for t in titles if len(t.split()) >= 4), key=len, default=min(titles, key=len))   # the rule as of the test
         out.append({"n": len(out) + 1, "vertical": v, "id": s["id"], "outlets": len(s["s"]),
                     "current": short, "headlines": titles})
 json.dump(out, open(HERE / "stories.json", "w"), ensure_ascii=False, indent=1)

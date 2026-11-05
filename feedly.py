@@ -47,12 +47,6 @@ _lock = threading.Lock()
 _next_slot = 0.0        # earliest time the next request may start (pacing)
 _blocked_until = 0.0    # cooldown after a 429
 _cooldown = 0.0         # current cooldown length (doubles on consecutive 429s)
-on_rate_limit = None    # optional callback(pause_seconds), e.g. to print progress during a backfill
-
-
-def cooling_down() -> float:
-    """Seconds left in the current 429 cooldown (0 if none)."""
-    return max(0.0, _blocked_until - time.monotonic())
 
 
 def _reserve_slot(wait: bool, deadline: float) -> None:
@@ -108,20 +102,8 @@ def _get(path: str, params: dict, timeout: float = 30, wait: bool = True) -> dic
                 _cooldown = min(COOLDOWN_MAX, max(COOLDOWN_START, _cooldown * 2))
                 pause = _retry_after(e) or _cooldown
                 _blocked_until = max(_blocked_until, time.monotonic() + pause)
-            if on_rate_limit:
-                on_rate_limit(pause)
             if not wait:
                 raise RateLimited(pause) from e
-
-
-def feed_info(feed_url: str) -> dict | None:
-    """Feedly's metadata for a feed (subscribers, lastUpdated...), or None if unknown to Feedly."""
-    res = _get("search/feeds", {"query": feed_url, "count": 5}).get("results", [])
-    want = "feed/" + feed_url
-    for r in res:
-        if r.get("feedId", "").rstrip("/") == want.rstrip("/"):
-            return r
-    return None
 
 
 def history(feed_url: str, since: float = 0, until: float | None = None, max_pages: int = 500) -> Iterator[dict]:

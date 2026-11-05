@@ -389,7 +389,7 @@ The app has no user accounts. To make it safe to run on a laptop or in a Codespa
 
 ## API
 
-Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `news`, `anime`, `manga`).
+Per-vertical endpoints are under `/api/<vertical>/`, one per key in `app.VERTICALS` (`games`, `movies`, `books`, `news`, `tech`, `anime`, `manga`).
 
 | Method | Path | |
 |---|---|---|
@@ -399,6 +399,7 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 | PATCH | `/api/groups/{id}` (any of those fields, plus `position`; outlets: `{"games": {"12": {"on": false, "req": true, "w": 4}}}`, `null` = catalog default) | change a group |
 | DELETE | `/api/groups/{id}` | delete a group (one must remain) |
 | GET | `/api/groups/{id}/stories` | the group's stories (gzip, ETag, 30 s cache); what the UI uses |
+| GET | `/api/groups/{id}/extras` | the group's stories that miss its minimums (for watched phrases shown below them) |
 | GET | `/api/<v>/digest?hours=N` | the vertical's grouped stories covering N hours (gzip, ETag, 60 s cache) |
 | GET | `/api/<v>/feeds` | the vertical's outlets and their fetch status |
 | POST | `/api/<v>/feeds` `{"url": ...}` | add a feed (validated first) |

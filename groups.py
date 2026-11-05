@@ -19,9 +19,12 @@ View (GET /api/groups/<id>/stories), keys kept short:
  "stories": [{"id", "v": vertical, "t": headline, "a": AI headline (when on and written), "l": link,
               "f": lead outlet, "d": description, "i": image, "k": [{"t", "w", "f"}] key terms,
               "sc": score, "cov": outlets that count, "n": outlets, "p": first, "u": latest,
-              "x": 1 when it misses the group's minimums (shown only for a watched phrase, if the viewer asks),
               "h": [item keys, for "last seen"],
-              "s": [{"o": outlet, "t", "l", "p", "w", "d", "c": counts}]}]}
+              "mv": {"t", "l", "o", "i", "p", "v": views if known} - the most popular YouTube video, if any,
+              "s": [{"o": outlet, "t", "l", "p", "w", "d", "c": counts, "y": 1 for a video}]}],
+ "extras_count": N}
+Stories that miss the group's minimums ("x": 1) are served separately at /api/groups/<id>/extras
+({"stories": [...]}, same shape), for viewers who show watched stories below the minimums.
 """
 
 from __future__ import annotations
@@ -39,8 +42,8 @@ from typing import Callable, Iterator
 
 import digest as digest_mod
 import matching
+from store import MAX_WEIGHT
 
-MAX_WEIGHT = 10.0
 DEFAULT_SETTINGS = {"hours": 48.0, "min_feeds_mode": "count", "min_feeds": 3, "min_feeds_percent": 10.0,
                     "min_weight": 0.0, "min_score": 0.0, "require_all": False}
 SETTING_SPECS = {   # name: (type, min, max)
@@ -264,12 +267,14 @@ class GroupStore:
         with self._conn() as c:
             c.execute("INSERT OR IGNORE INTO seeded (vertical) VALUES (?)", (vertical,))
 
-    def is_empty(self) -> bool:
-        with self._conn() as c:
-            return c.execute("SELECT COUNT(*) FROM groups").fetchone()[0] == 0
-
-
 # --- views -----------------------------------------------------------------------------------
+
+def _view_source(x: dict, name: str, w: float, min_weight: float) -> dict:
+    out = {"o": name, "t": x["t"], "l": x["l"], "p": x["p"], "w": w, "d": x["d"], "c": w >= min_weight}
+    if x.get("y"):
+        out["y"] = 1
+    return out
+
 
 def _top_video(srcs: list[dict], weight, outlets: dict) -> dict | None:
     """The story's most popular YouTube video: most views (when known), then the higher-weighted
@@ -341,8 +346,7 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], catalog_fo
                    "i": lead["i"] or next((x["i"] for x in best if x["i"]), ""),
                    "k": st.get("k", [])[:1], "sc": round(score, 2), "cov": len(counted), "n": len(srcs),
                    "p": min(x["p"] for x in srcs), "u": max(x["p"] for x in srcs), "h": keys,
-                   "s": [{"o": outlets[x["f"]]["name"], "t": x["t"], "l": x["l"], "p": x["p"], "w": weight(x), "y": x.get("y", 0),
-                          "d": x["d"], "c": weight(x) >= cfg["min_weight"]} for x in ordered]}
+                   "s": [_view_source(x, outlets[x["f"]]["name"], weight(x), cfg["min_weight"]) for x in ordered]}
             top = _top_video(srcs, weight, outlets)
             if top:
                 out["mv"] = top                    # shown in the story's details

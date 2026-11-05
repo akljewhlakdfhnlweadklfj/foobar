@@ -37,7 +37,7 @@ import matching
 from store import Store
 
 WINDOWS = (48, 168, 720)          # hours: 2 days, 7 days, 30 days. Browsers pick the smallest that covers theirs.
-DESCRIPTION_CHARS = 240
+DIGEST_DESCRIPTION_CHARS = 240   # a digest keeps this much of each description (stored: 600)
 MIN_OUTLETS = 2
 
 
@@ -55,7 +55,7 @@ def _per_outlet(items: list[matching.Item]) -> list[matching.Item]:
 
 
 def _source(i: matching.Item) -> dict:
-    s = {"f": i.feed_id, "t": i.title, "l": i.link, "p": round(i.published), "d": i.description[:DESCRIPTION_CHARS], "i": i.image}
+    s = {"f": i.feed_id, "t": i.title, "l": i.link, "p": round(i.published), "d": i.description[:DIGEST_DESCRIPTION_CHARS], "i": i.image}
     if i.kind == "youtube":
         s["y"] = 1                         # a YouTube video
         if i.views is not None:
@@ -148,8 +148,7 @@ class Digests:
         with self._lock:
             self._cache[(key, window)] = entry
         if self.out_dir:  # also written to disk: survives restarts, and can be served by a CDN as static files
-            for suffix, data in ((".json.gz", gz),):
-                path = self.out_dir / f"{key}-{window}{suffix}"
+            for data, path in ((gz, self.out_dir / f"{key}-{window}.json.gz"),):
                 fd, tmp = tempfile.mkstemp(dir=self.out_dir, prefix=path.name + ".", suffix=".tmp")
                 try:
                     with os.fdopen(fd, "wb") as f:

@@ -66,12 +66,6 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL            -- JSON
 );
-CREATE TABLE IF NOT EXISTS phrases (
-    id       INTEGER PRIMARY KEY,
-    phrase   TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    bonus    REAL NOT NULL DEFAULT 5,
-    added_at REAL NOT NULL
-);
 """
 
 # Columns added after v1, for upgrading older files in place.
@@ -137,9 +131,9 @@ class Store:
                 for col, typ in cols:
                     if col not in have:
                         c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
-            # Earlier versions stored placeholder descriptions some feeds send literally.
-            c.execute("UPDATE items SET description = '' "
-                      "WHERE lower(trim(description)) IN ('null', 'none', 'undefined', 'nan')")
+            if 0 < prior < 12:  # earlier versions stored placeholder descriptions some feeds send literally
+                c.execute("UPDATE items SET description = '' "
+                          "WHERE lower(trim(description)) IN ('null', 'none', 'undefined', 'nan')")
             if 0 < prior < 11:  # v11 dropped the subreddit feeds (throttled, mostly discussion)
                 c.execute("DELETE FROM items WHERE feed_id IN (SELECT id FROM feeds WHERE url LIKE '%reddit.com/%')")
                 c.execute("DELETE FROM feeds WHERE url LIKE '%reddit.com/%'")
@@ -228,10 +222,6 @@ class Store:
             self.items_version += 1        # a keyword filter changes which headlines are grouped
         with self._catalog_write() as c:
             return c.execute(f"UPDATE feeds SET {', '.join(sets)} WHERE id = ?", (*args, feed_id)).rowcount > 0
-
-    def set_all_enabled(self, enabled: bool) -> int:
-        with self._catalog_write() as c:
-            return c.execute("UPDATE feeds SET enabled = ?", (int(enabled),)).rowcount
 
     def delete_feed(self, feed_id: int) -> bool:
         self.items_version += 1

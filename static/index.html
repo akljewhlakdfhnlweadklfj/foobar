@@ -11,12 +11,18 @@
     --btn: #b4441f; --btn-text: #ffffff; --mark: #fde58a;
     color-scheme: light dark;
   }
+  /* Dark: follows the system unless data-theme on <html> forces light or dark. */
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg: #141416; --panel: #1d1d20; --text: #ececee; --muted: #9a9aa2; --border: #2e2e33;
       --accent: #ee7a50; --accent-soft: #3a241c; --ok: #6cc290; --err: #f2867d; --warn: #e0b04a;
-      --btn: #ee7a50; --btn-text: #1a0d07; --mark: #6b5310;
+      --btn: #ee7a50; --btn-text: #1a0d07; --mark: #6b5310; color-scheme: dark;
     }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141416; --panel: #1d1d20; --text: #ececee; --muted: #9a9aa2; --border: #2e2e33;
+    --accent: #ee7a50; --accent-soft: #3a241c; --ok: #6cc290; --err: #f2867d; --warn: #e0b04a;
+    --btn: #ee7a50; --btn-text: #1a0d07; --mark: #6b5310; color-scheme: dark;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -390,6 +396,9 @@ GET  /api/scrape/status</pre>
 // phrases (highlight, bonus, filters) and "last seen" (a story stays visible for an hour after it was
 // first shown here, then is hidden unless "Show seen" is on).
 const $ = (id) => document.getElementById(id);
+// A read-only snapshot (tools/build_snapshot.py) embeds its data and answers the API itself.
+const SNAPSHOT = !!document.getElementById("snapshot-data");
+if (SNAPSHOT) document.querySelector('#top_tabs a[data-top="settings"]').setAttribute("href", "#settings/phrases");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : "#";
 const fmt = (n) => Number(n).toFixed(1).replace(/\.0$/, "");
@@ -504,7 +513,7 @@ function personalize(view) {
       lead: { feed: st.f, link: st.l, description: st.d, image: st.i },
       coverage: st.cov, outlets: st.n, base_score: st.sc, bonus, score: st.sc + bonus,
       watched: hits.map((p) => ({ phrase: p.phrase, bonus: p.bonus })), first_published: st.p, latest: st.u,
-      keywords: (st.k || []).map((k) => ({ term: k.t, weight: k.w, forms: k.f })), video: st.mv || null,
+      keywords: (st.k || []).map((k) => ({ term: k.t, weight: k.w, forms: k.f })), video: st.mv ? { title: st.mv.t, link: st.mv.l, outlet: st.mv.o, image: st.mv.i, published: st.mv.p, views: st.mv.v } : null,
       sources: st.s.map((x) => ({ feed: x.o, title: x.t, link: x.l, published: x.p, weight: x.w, counted: x.c, isVideo: !!x.y,
                                   watched: watchedSrc.has(x), snippet: snippets.get(x) || "" })),
     });
@@ -517,6 +526,7 @@ let route = { top: "stories", sub: null };
 function parseHash() {
   const [top, sub, extra] = location.hash.replace(/^#/, "").split("/");
   if (top === "settings") {
+    if (SNAPSHOT) return { top, sub: "phrases" };            // the only settings page in a read-only snapshot
     if (sub === "groups") return { top, sub, gid: Number(extra) || GROUPS[0]?.id || null };
     if (sub === "phrases" || sub === "scraping" || META.verticals.some((v) => v.key === sub)) return { top, sub };
     return { top, sub: "groups", gid: GROUPS[0]?.id || null };
@@ -533,6 +543,7 @@ function render() {
   });
   document.querySelector('#top_tabs a[data-top="stories"]').setAttribute("href", "#stories/" + (route.top === "stories" ? route.sub : GROUPS[0]?.id ?? ""));
   const subs = route.top === "stories" ? GROUPS.map((g) => [String(g.id), g.name])
+    : SNAPSHOT ? [["phrases", "Watched phrases"]]
     : [["groups", "Groups"], ["phrases", "Watched phrases"], ...META.verticals.map((v) => [v.key, v.label]), ["scraping", "Scraping"]];
   $("sub_tabs").innerHTML = subs.map(([k, l]) => `<a href="#${route.top}/${k}" ${k === String(route.sub) ? 'class="active" aria-current="page"' : ""}>${esc(l)}</a>`).join("");
   const show = route.top === "stories" ? "view_stories" : { groups: "view_groups", phrases: "view_phrases", scraping: "view_scraping" }[route.sub] || "view_vertical";
@@ -688,10 +699,10 @@ function moreHtml(s) {
           ${s.lead.image && safeUrl(s.lead.image) !== "#" ? `<a class="thumb" href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer" tabindex="-1" aria-hidden="true">
             <img src="${esc(s.lead.image)}" alt="" decoding="async" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>` : ""}
         </div>
-        ${s.video ? `<a class="topvideo" href="${esc(safeUrl(s.video.l))}" target="_blank" rel="noopener noreferrer">
-          ${s.video.i && safeUrl(s.video.i) !== "#" ? `<span class="vthumb"><img src="${esc(s.video.i)}" alt="" decoding="async" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"><span class="play" aria-hidden="true">▶</span></span>` : ""}
-          <span class="vinfo"><span class="vlabel">Most popular video</span><span class="vtitle">${hl(s.video.t, re)}</span>
-            <span class="vmeta">${esc(s.video.o)}${s.video.v != null ? ` · ${views(s.video.v)} views` : ""} · ${ago(s.video.p)}</span></span></a>` : ""}
+        ${s.video ? `<a class="topvideo" href="${esc(safeUrl(s.video.link))}" target="_blank" rel="noopener noreferrer">
+          ${s.video.image && safeUrl(s.video.image) !== "#" ? `<span class="vthumb"><img src="${esc(s.video.image)}" alt="" decoding="async" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"><span class="play" aria-hidden="true">▶</span></span>` : ""}
+          <span class="vinfo"><span class="vlabel">Most popular video</span><span class="vtitle">${hl(s.video.title, re)}</span>
+            <span class="vmeta">${esc(s.video.outlet)}${s.video.views != null ? ` · ${views(s.video.views)} views` : ""} · ${ago(s.video.published)}</span></span></a>` : ""}
         <ul class="sources">${s.sources.map((x) => `
           <li class="${x.watched ? "hit" : ""}${x.counted === false ? " nc" : ""}"><div class="src"><span class="w" title="prestige weight">${fmt(x.weight)}</span> ${x.isVideo ? `<span class="yt" title="YouTube video">▶</span> ` : ""}${esc(x.feed)} · ${ago(x.published)}</div>
             <a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener noreferrer">${hl(x.title, re)}</a>
@@ -1068,7 +1079,8 @@ function renderScrape(st) {
   if (busy) $("status").textContent = st.state === "stopping" ? "Stopping…" : !run.total ? "Starting…"
     : `${run.kind === "backfill" ? "Backfilling" : "Refreshing"} ${run.done}/${run.total}…`;
   else if (st.resumable) $("status").textContent = `Stopped at ${run.done}/${run.total}`;
-  else $("status").textContent = st.last_run?.finished_at ? "Updated " + ago(st.last_run.finished_at) : "";
+  else $("status").textContent = (SNAPSHOT ? "Read-only snapshot · " : "")
+    + (st.last_run?.finished_at ? (SNAPSHOT ? "taken " : "Updated ") + ago(st.last_run.finished_at) : "");
   const rows = [["State", busy ? (st.state === "stopping" ? "Stopping…" : "Running") : st.resumable ? "Stopped (can resume)" : "Idle"]];
   if (run && (busy || st.resumable)) {
     rows.push(["Run", `${esc(run.kind)}${run.days ? ` (${fmt(run.days)} days)` : ""} · ${run.done}/${run.total} feeds${run.failed ? ` · ${run.failed} failed` : ""} · started ${ago(run.started_at)}`]);

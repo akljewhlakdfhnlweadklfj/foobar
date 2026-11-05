@@ -713,7 +713,13 @@ Here is everything.</media:description>
         self.assertEqual(s["n"], 4)
         self.assertEqual(s["t"], "Nintendo reveals Switch 3 hardware and price")        # shortest *article* headline
         self.assertEqual((s["mv"]["o"], s["mv"]["v"]), ("Chan 2", 90000))               # most-viewed video
-        self.assertEqual(sorted(x["y"] for x in s["s"]), [0, 0, 1, 1])
+        self.assertEqual(sorted(x.get("y", 0) for x in s["s"]), [0, 0, 1, 1])
+        # The contract the page reads (groups.py docstring): keys of a story, a source and the top video.
+        self.assertLessEqual(set(s), {"id", "v", "t", "a", "l", "f", "d", "i", "k", "sc", "cov", "n", "p", "u", "x", "h", "mv", "s"})
+        self.assertTrue({"id", "v", "t", "l", "f", "d", "i", "k", "sc", "cov", "n", "p", "u", "h", "s"} <= set(s))
+        for x in s["s"]:
+            self.assertLessEqual(set(x), {"o", "t", "l", "p", "w", "d", "c", "y"})
+        self.assertLessEqual(set(s["mv"]), {"t", "l", "o", "i", "p", "v"})
 
 
 class HttpTestCase(unittest.TestCase):
@@ -1096,7 +1102,8 @@ class ParserAndPagingTests(unittest.TestCase):
         with st._conn() as c:
             c.execute("INSERT INTO items (feed_id, guid, title, published, fetched_at, description) "
                       "VALUES (?, 'g', 'T', ?, ?, 'null')", (fid, time.time(), time.time()))
-        self.assertEqual(app.Store(db).items_since(0)[0].description, "")   # cleaned on open
+            c.execute("PRAGMA user_version = 11")                            # a file from before the cleanup
+        self.assertEqual(app.Store(db).items_since(0)[0].description, "")   # cleaned when upgraded
 
     def test_v11_drops_subreddit_feeds(self):
         db = Path(tempfile.mkdtemp()) / "r.db"

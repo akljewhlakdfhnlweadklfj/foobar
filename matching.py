@@ -4,8 +4,9 @@ Different outlets word the same story differently ("Fed raises rates by 0.25%"
 vs "Federal Reserve hikes interest rates a quarter point"), so exact matching
 is useless. Instead:
 
-1. Normalise each title into a set of content tokens (lower-case, strip
-   punctuation, drop stopwords, crude stemming).
+1. Normalise each item's text (its title plus the first sentence of its description, see
+   item_text) into a set of content tokens (lower-case, strip punctuation, drop stopwords,
+   crude stemming).
 2. Weight tokens by IDF over the current window, so rare words ("Zelensky",
    "Boeing") count for much more than common ones ("says", "new").
 3. Similarity = cosine of the IDF-weighted token sets, for pairs from *different* feeds that

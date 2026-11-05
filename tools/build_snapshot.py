@@ -12,7 +12,6 @@ It's written for publishing as a claude.ai Artifact, whose wrapper supplies <htm
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 import re
 import sys
@@ -51,11 +50,10 @@ SHIM = r"""
 """
 
 HIDE_CSS = """
-  /* Snapshot: stories and watched phrases only. */
-  .scrape button, #sub_tabs a[href^="#settings/"]:not([href="#settings/phrases"]) { display: none !important; }
+  /* Snapshot: no scraping controls. */
+  .scrape button { display: none !important; }
   /* Artifact pages can't load images from other sites. */
   .thumb, .vthumb { display: none !important; }
-  .snapnote { font-size: 12px; color: var(--muted); }
 """
 
 
@@ -97,23 +95,7 @@ def build(data_dir: Path, out: Path) -> dict:
     html = html.replace("</head>\n<body>\n", "").replace("</body>\n</html>\n", "")
     html = html.replace("<title>Consensus News</title>",
                         '<title>Consensus News</title>\n<meta name="claude:viewport-fit-sides" content="cover">', 1)
-    # Theme: explicit data-theme blocks, as the Artifact viewer can force light/dark.
-    m = re.search(r"  @media \(prefers-color-scheme: dark\) \{\n    :root \{(.*?)\}\n  \}\n", html, re.S)
-    if m:
-        dark = m.group(1)
-        html = html.replace(m.group(0),
-                            "  @media (prefers-color-scheme: dark) {\n    :root:not([data-theme=\"light\"]) {" + dark
-                            + " color-scheme: dark; }\n  }\n  :root[data-theme=\"dark\"] {" + dark + " color-scheme: dark; }\n")
-    html = html.replace("</style>", HIDE_CSS + "</style>", 1)
-    taken = dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime("%b %-d, %Y %H:%M UTC")
-    html = _swap(html, '<span id="status" aria-live="polite"></span>',
-                 f'<span class="snapnote">Read-only snapshot · {taken}</span><span id="status" hidden></span>')
-    # Settings open on Watched phrases (the only settings page in a snapshot).
-    html = _swap(html, '<a href="#settings/groups" data-top="settings">', '<a href="#settings/phrases" data-top="settings">')
-    html = _swap(html, 'return { top, sub: "groups", gid: GROUPS[0]?.id || null };', 'return { top, sub: "phrases" };')
-    html = _swap(html, 'if (sub === "groups") return', 'if (sub === "groups" && false) return')
-    html = _swap(html, 'if (sub === "phrases" || sub === "scraping" || META.verticals.some((v) => v.key === sub)) return',
-                 'if (sub === "phrases") return')
+    html = html.replace("</style>", HIDE_CSS + "</style>", 1)   # (the page itself adapts to being a snapshot)
     data = json.dumps(snap, separators=(",", ":")).replace("</", "<\\/")
     html = _swap(html, "\n<script>\n", f'\n<script type="application/json" id="snapshot-data">{data}</script>\n{SHIM}\n<script>\n')
     out.write_text(html)
