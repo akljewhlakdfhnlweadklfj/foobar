@@ -661,6 +661,24 @@ class KeywordTests(unittest.TestCase):
         self.assertIn("No More Heroes", [k["term"] for k in suda["keywords"]])
         self.assertEqual(mieville["keywords"][0]["term"], "China Miéville")
 
+    def test_recurring_names_are_not_demoted(self):
+        def story(titles, score=12):
+            return {"title": titles[0], "score": score, "sources": [{"title": t} for t in titles]}
+        stewart = story(["Patrick Stewart, ‘Star Trek’ Captain and Professor X on ‘X-Men,’ Dies at 86",
+                         "Patrick Stewart, Shakespearean actor turned 'Star Trek' captain and 'X-Men' star, dies at 86",
+                         "Star Trek actor Patrick Stewart dead at 86",
+                         "Sir Patrick Stewart, Beloved For Star Trek, X-Men And More, Dies Aged 86",
+                         "A look back at Patrick Stewart's extraordinary life"], 23)
+        tributes = [story(["Jonathan Frakes pays tribute to Patrick Stewart", "Patrick Stewart tributes from Jonathan Frakes"]),
+                    story(["Hugh Jackman remembers Patrick Stewart", "Patrick Stewart remembered by Hugh Jackman"]),
+                    story(["Patrick Stewart's best roles, ranked", "The best Patrick Stewart performances"])]
+        app.story_terms([stewart] + tributes)
+        terms = [k["term"] for k in stewart["keywords"]]
+        self.assertEqual(terms[0], "Patrick Stewart")
+        self.assertIn("Star Trek", terms)                 # quoted title in Title Case headlines
+        self.assertNotIn("Trek", terms)
+        self.assertEqual(app._name_candidates("Sir Patrick Stewart, Beloved For Star Trek, X-Men And More, Dies Aged 86"), {})
+
     def test_description_mentions_break_ties(self):
         def story(titles):
             return {"title": titles[0], "score": 10, "sources": [{"title": t} for t in titles]}
@@ -713,6 +731,7 @@ class ParserAndPagingTests(unittest.TestCase):
         self.assertEqual(feeds.clean_description("null"), "")
         self.assertEqual(feeds.clean_description(" None "), "")
         self.assertEqual(feeds.clean_description("Nullified contract"), "Nullified contract")
+        self.assertEqual(feeds.clean_description("Big news here. submitted by /u/someone [link] [comments]"), "Big news here.")
         db = Path(tempfile.mkdtemp()) / "n.db"
         st = app.Store(db)
         fid = st.add_feed("https://a.example/rss")

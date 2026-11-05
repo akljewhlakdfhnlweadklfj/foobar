@@ -37,3 +37,9 @@ https://www.euronews.com/rss                                             # Euron
 https://www.rfi.fr/en/rss                                                # RFI (English) | w=3 | general | ~54/wk
 http://www.japantimes.co.jp/feed/                                        # The Japan Times | w=3 | general | ~288/wk
 http://www.scmp.com/rss/91/feed                                          # South China Morning Post (News) | w=3 | general | ~484/wk
+
+# --- Reddit (community signal; weight 1, so they help group headlines but barely move scores).
+# Reddit throttles feed readers and Feedly rarely has fresh copies, so these depend on direct fetches.
+http://www.reddit.com/r/worldnews/.rss                # Reddit r/worldnews | w=1 | reddit
+https://www.reddit.com/r/news.rss                     # Reddit r/news | w=1 | reddit
+https://www.reddit.com/r/politics/.rss                # Reddit r/politics | w=1 | reddit

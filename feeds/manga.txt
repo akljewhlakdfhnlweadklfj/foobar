@@ -14,3 +14,7 @@ http://www.theouterhaven.net/feed/                                       # The O
 # --- General publications ---
 http://www.publishersweekly.com/pw/feeds/section/book-news/comics/index.xml # Publishers Weekly (Comics) | w=4 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | general | ~4/wk
 https://comicbook.com/category/anime/feed/                               # ComicBook.com (Anime) | w=2 | only=manga, manhwa, manhua, webtoon, light novel, mangaka, shonen jump, shōnen jump, jump+, shueisha, kodansha, shogakukan, viz media, yen press, serializ | general | ~81/wk
+
+# --- Reddit (community signal; weight 1, so they help group headlines but barely move scores).
+# Reddit throttles feed readers and Feedly rarely has fresh copies, so these depend on direct fetches.
+https://www.reddit.com/r/manga/.rss                   # Reddit r/manga | w=1 | only=news, licens, adaptation, announce, announced, announces, ends, ending, hiatus, anime | reddit

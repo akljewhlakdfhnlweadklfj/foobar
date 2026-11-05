@@ -15,13 +15,15 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
 
 USER_AGENT = "Mozilla/5.0 (compatible; NewsAggregator/1.0)"
+REDDIT_USER_AGENT = "python:consensus-news:1.0 (personal RSS reader)"
 MAX_BYTES = 10 * 1024 * 1024
 _TAG_RE = re.compile(r"<(/?[a-zA-Z][a-zA-Z0-9:-]*(\s[^<>]*)?/?|!--.*?--)>", re.S)
 DESCRIPTION_CHARS = 600
 # WordPress/Blogger footers and "read more" links that carry no information about the story.
 _DESC_BOILERPLATE = re.compile(
     r"(The post .{1,300}? appeared first on .{1,120}?\.?\s*$)|(\[?(…|\.\.\.)\]?\s*$)|"
-    r"((Continue|Keep) reading.{0,80}$)|(Read (more|the full (article|story)).{0,80}$)", re.I | re.S)
+    r"((Continue|Keep) reading.{0,80}$)|(Read (more|the full (article|story)).{0,80}$)|"
+    r"(submitted by\s+/?u/\S+.{0,40}$)", re.I | re.S)  # Reddit's "submitted by /u/x [link] [comments]"
 # Google News titles end with " - <Publisher>".
 _GOOGLE_NEWS_SUFFIX = re.compile(r"\s+[-–—]\s+[^-–—]{2,60}$")
 _WS_RE = re.compile(r"\s+")
@@ -91,7 +93,8 @@ def fetch(url: str, timeout: float = 20.0) -> bytes:
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": USER_AGENT,
+            # Reddit throttles generic clients and asks feed readers to identify themselves.
+            "User-Agent": REDDIT_USER_AGENT if "reddit.com" in (urlsplit(url).hostname or "") else USER_AGENT,
             "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
         },
     )

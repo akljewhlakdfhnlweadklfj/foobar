@@ -108,6 +108,12 @@ The header always shows scraping status, with a quick Refresh / Stop.
   - **Removed URLs** stay until you remove them in the UI. Deleting every feed in a tab doesn't bring
     the seeds back.
   - **Weights** only fill feeds that have none, so change an existing feed's weight in the UI.
+- **Reddit**: each vertical has a few news-focused subreddits (r/Games, r/movies, r/worldnews, r/anime…)
+  at weight 1, as a community signal: they help group headlines and count toward "reported by N",
+  but barely move scores (use "Only count outlets weighted at least 2" to leave them out of the count).
+  Feed URLs are `https://www.reddit.com/r/<name>/.rss`. Reddit throttles feed readers and Feedly rarely
+  has fresh copies, so they depend on direct fetches; requests to reddit.com send a descriptive user
+  agent. Discussion-heavy subreddits (r/anime, r/manga, r/NintendoSwitch, r/PS5) carry keyword filters.
 - **One feed per publisher** in each vertical. Two feeds from the same newsroom (e.g. NYT Movies and
   NYT Television) often carry identical headlines and would count one story twice toward N.
 - **Cached history** (`seed_cache/<vertical>.jsonl.gz`, currently Anime and Manga): 14 days of

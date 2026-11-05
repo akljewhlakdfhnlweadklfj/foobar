@@ -77,3 +77,10 @@ http://www.heypoorplayer.com/feed/                                       # Hey P
 https://report.wand.com/feed                                             # The Wand Report | w=1 | 11 | ~8/wk
 https://www.crossplay.news/feed                                          # Crossplay | w=1 | - | ~2/wk
 https://somanygames.co.uk/feed/                                          # So Many Games | w=1 | 1 | ~5/wk
+
+# --- Reddit (community signal; weight 1, so they help group headlines but barely move scores).
+# Reddit throttles feed readers and Feedly rarely has fresh copies, so these depend on direct fetches.
+https://www.reddit.com/r/Games/.rss                   # Reddit r/Games | w=1 | reddit
+https://www.reddit.com/r/pcgaming/.rss                # Reddit r/pcgaming | w=1 | reddit
+https://www.reddit.com/r/NintendoSwitch/.rss          # Reddit r/NintendoSwitch | w=1 | only=announce, announced, announces, direct, release, delayed, nintendo | reddit
+https://www.reddit.com/r/PS5/.rss                     # Reddit r/PS5 | w=1 | only=announce, announced, announces, release, delayed, sony, playstation | reddit

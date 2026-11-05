@@ -17,3 +17,7 @@ https://www.cbr.com/feed/category/anime-news/                            # CBR (
 https://comicbook.com/category/anime/feed/                               # ComicBook.com (Anime) | w=2 | general | ~81/wk
 https://screenrant.com/feed/anime-news/                                  # Screen Rant (Anime News) | w=2 | general | ~10/wk
 https://gamerant.com/feed/anime/                                         # Game Rant (Anime) | w=1 | general | ~98/wk
+
+# --- Reddit (community signal; weight 1, so they help group headlines but barely move scores).
+# Reddit throttles feed readers and Feedly rarely has fresh copies, so these depend on direct fetches.
+https://www.reddit.com/r/anime/.rss                   # Reddit r/anime | w=1 | only=announce, announced, announces, adaptation, delayed, premiere, trailer, visual, cast, film, movie, season | reddit
