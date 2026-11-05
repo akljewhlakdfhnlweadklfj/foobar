@@ -11,14 +11,19 @@ Then open http://localhost:8000
 from __future__ import annotations
 
 import argparse
+import gzip
+import hashlib
 import hmac
 import json
+import multiprocessing
 import os
 import sqlite3
 import sys
 import tempfile
 import threading
 from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -125,12 +130,26 @@ class Security:
         return hmac.compare_digest(header[7:].strip().encode(), self.api_token.encode())
 
 
-def make_digests(stores: dict[str, Store], out_dir: Path | None = None, log=None) -> digests_mod.Digests:
-    """Shared digests for every vertical (see digest.py)."""
+def make_digests(stores: dict[str, Store], out_dir: Path | None = None, log=None, workers: int = 0) -> digests_mod.Digests:
+    """Shared digests for every vertical (see digest.py). With workers > 0, grouping runs in that many
+    worker processes, so the server keeps answering at full speed while it runs."""
+    pool = ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn")) if workers else None
+    broken: list[bool] = []
+
     def builder(key: str, window: int) -> dict:
         store = stores[key]
-        return digests_mod.build_digest(key, VERTICALS_BY_KEY[key].label, store, window, threshold(store))
-    return digests_mod.Digests(out_dir, builder, list(stores), log=log)
+        args = (store.path, key, VERTICALS_BY_KEY[key].label, window, threshold(store))
+        if pool is not None and not broken:
+            try:
+                return pool.submit(digests_mod.build_from_file, *args).result()
+            except BrokenProcessPool:
+                broken.append(True)               # workers can't start here: build in this process instead
+                (log or print)("digest workers unavailable; building in the server process")
+        return digests_mod.build_from_file(*args)
+
+    def stamp(key: str):
+        return stores[key].version, threshold(stores[key])
+    return digests_mod.Digests(out_dir, builder, list(stores), log=log, stamp=stamp)
 
 
 def seed_groups(group_store: groups_mod.GroupStore, stores: dict[str, Store]) -> int:
@@ -157,6 +176,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
     summarizer = summarizer or ai_mod.Summarizer(None, enabled=False)
     views = groups_mod.Views(group_store, digests, stores, summarizer)
     seen_hosts: set[str] = set()
+    page_cache: dict = {}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "NewsAggregator/3.0"
@@ -226,7 +246,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 self.end_headers()
                 return
             gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
-            body = entry["gz"] if gz else entry["json"]
+            body = entry["gz"] if gz else entry.get("json") or gzip.decompress(entry["gz"])
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             if gz:
@@ -234,6 +254,32 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             self.send_header("Vary", "Accept-Encoding")
             self.send_header("ETag", entry["etag"])
             self.send_header("Cache-Control", f"public, max-age={max_age}")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_page(self):
+            """The page, gzipped and cached until the file changes."""
+            f = STATIC_DIR / "index.html"
+            mtime = f.stat().st_mtime
+            if page_cache.get("mtime") != mtime:
+                body = f.read_bytes()
+                page_cache.update(mtime=mtime, json=body, gz=gzip.compress(body, 9),
+                                  etag='"%s"' % hashlib.sha1(body).hexdigest()[:16])
+            if self.headers.get("If-None-Match") == page_cache["etag"]:
+                self.send_response(304)
+                self.send_header("ETag", page_cache["etag"])
+                self.end_headers()
+                return
+            gz = "gzip" in (self.headers.get("Accept-Encoding") or "")
+            body = page_cache["gz"] if gz else page_cache["json"]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            if gz:
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+            self.send_header("ETag", page_cache["etag"])
+            self.send_header("Cache-Control", "no-cache")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -282,12 +328,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             rest, q, store = self._route()
             path = urlparse(self.path).path
             if path in ("/", "/index.html"):
-                body = (STATIC_DIR / "index.html").read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_page()
             elif path == "/api/verticals":
                 self._json({
                     "verticals": [{"key": v.key, "label": v.label} for v in VERTICALS if v.key in stores],
@@ -301,6 +342,11 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 if entry is None:
                     raise HTTPError(404, "No such group")
                 self._send_digest(entry, max_age=30)
+            elif len(rest) == 4 and rest[:2] == ["api", "groups"] and rest[2].isdigit() and rest[3] == "extras":
+                entry = views.get(int(rest[2]))           # stories below the group's minimums (watched phrases)
+                if entry is None:
+                    raise HTTPError(404, "No such group")
+                self._send_digest(entry["extras"], max_age=30)
             elif path == "/api/scrape/status":
                 self._json(scraper.status())
             elif store and rest == ["digest"]:
@@ -312,7 +358,10 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             elif store and rest == ["feeds"]:
                 self._json({"feeds": store.list_feeds()})
             elif store and rest == ["settings"]:
-                self._json({"threshold": threshold(store)})
+                key = self._vertical_key()
+                self._json({"threshold": threshold(store), "rebuilding": digests.rebuilding(key),
+                            "grouped_at": digests.data(key, digests_mod.WINDOWS[0])[1]["generated_at"],
+                            "grouped_threshold": digests.data(key, digests_mod.WINDOWS[0])[1]["threshold"]})
             else:
                 raise HTTPError(404, "Not found")
 
@@ -403,7 +452,7 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
                 else:
                     raise HTTPError(400, 'send {"threshold": number} or {"reset": true}')
                 digests.request_rebuild([self._vertical_key()])             # stories are grouped differently
-                return self._json({"threshold": threshold(store)})
+                return self._json({"threshold": threshold(store), "rebuilding": True})
             if store and len(rest) == 2 and rest[0] == "feeds" and rest[1].isdigit():
                 enabled, only = body.get("enabled"), body.get("only")
                 if only is not None and (not isinstance(only, str) or len(only) > 500):
@@ -438,6 +487,11 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
             raise HTTPError(404, "Not found")
 
     return Handler
+
+
+class Server(ThreadingHTTPServer):
+    request_queue_size = 1024     # the default (5) drops connections when many viewers poll at once
+    daemon_threads = True
 
 
 # --- setup -----------------------------------------------------------------------------------
@@ -518,7 +572,7 @@ def main():
         n = stores[args.vertical].add_feeds(read_feed_list(Path(args.import_file)))
         print(f"Imported {n} new feed(s) into {args.vertical}")
 
-    digests = make_digests(stores, data_dir / "digests", log=print)
+    digests = make_digests(stores, data_dir / "digests", log=print, workers=max(1, min(3, (os.cpu_count() or 2) - 1)))
     scraper = Scraper(stores, data_dir / "scrape_state.json", interval_minutes=args.interval,
                       auto=not args.no_auto and args.interval > 0, log=print, on_finish=digests.request_rebuild)
     if args.backfill:
@@ -538,7 +592,7 @@ def main():
     summarizer = ai_mod.Summarizer(data_dir / "ai.db", model=args.ai_model, log=print, enabled=not args.no_ai)
     st_ai = summarizer.status()
     print(f"AI headlines: {'available (' + st_ai['model'] + ')' if st_ai['available'] else 'off: ' + st_ai['reason']}")
-    srv = ThreadingHTTPServer((args.host, args.port), make_handler(stores, scraper, security, digests, group_store, summarizer))
+    srv = Server((args.host, args.port), make_handler(stores, scraper, security, digests, group_store, summarizer))
     print(f"News aggregator running at http://{args.host}:{args.port}  (data: {args.data})")
     st = scraper.status()
     print(f"Scraping: {'every %g min' % st['interval_minutes'] if st['auto'] else 'manual (POST /api/scrape/start)'}"

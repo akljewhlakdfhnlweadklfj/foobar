@@ -21,6 +21,7 @@ Tuned with eval_matching.py against Overworld's human-curated story groups.
 from __future__ import annotations
 
 import bisect
+import functools
 import heapq
 import math
 import re
@@ -74,6 +75,7 @@ SYNONYMS = {
 }
 
 
+@functools.lru_cache(maxsize=200_000)
 def _stem(tok: str) -> str:
     """Very small suffix stripper: enough to merge plurals / simple tenses."""
     if tok.isdigit() or len(tok) <= 3:

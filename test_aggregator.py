@@ -335,14 +335,14 @@ class DigestTests(unittest.TestCase):
         self.digests = app.make_digests({"games": self.store}, self.tmp / "digests")
 
     def test_digest_has_every_outlet_and_multi_outlet_stories_only(self):
-        d = json.loads(self.digests.get("games", 48)["json"])
+        d = self.digests.data("games", 48)[1]
         self.assertEqual(d["window_hours"], 48)
         self.assertNotIn("outlets", d)                               # outlet details come from the catalog
         self.assertEqual(len(d["stories"]), 1)                       # the old story is outside 48h; solos dropped
         st = d["stories"][0]
         self.assertEqual(sorted(x["f"] for x in st["s"]), [1, 2, 3])   # switched-off outlets included: viewers choose
         self.assertTrue(st["k"] and st["k"][0]["t"])
-        d30 = json.loads(self.digests.get("games", 300)["json"])     # 300h -> 30-day window
+        d30 = self.digests.data("games", 300)[1]     # 300h -> 30-day window
         self.assertEqual((d30["window_hours"], len(d30["stories"])), (720, 2))
 
     def test_written_to_disk_and_reloaded_with_same_etag(self):
@@ -757,8 +757,9 @@ class SettingsApiTests(HttpTestCase):
         store = app.Store(Path(tempfile.mkdtemp()) / "t.db")
         store.set_settings({"min_feeds": 7})                     # saved by an earlier version: ignored now
         self.start_server({"games": store})
-        self.assertEqual(self.call("GET", "/api/games/settings")[1], {"threshold": matching.DEFAULT_THRESHOLD})
-        self.assertEqual(self.call("PATCH", "/api/games/settings", {"threshold": 0.2})[1], {"threshold": 0.2})
+        got = self.call("GET", "/api/games/settings")[1]
+        self.assertEqual((got["threshold"], got["grouped_threshold"]), (matching.DEFAULT_THRESHOLD, matching.DEFAULT_THRESHOLD))
+        self.assertEqual(self.call("PATCH", "/api/games/settings", {"threshold": 0.2})[1], {"threshold": 0.2, "rebuilding": True})
         for bad in ({"threshold": 2}, {"threshold": "0.2"}, {"min_feeds": 3}, {}):
             self.assertEqual(self.call("PATCH", "/api/games/settings", bad)[0], 400, bad)
         self.assertEqual(self.call("PATCH", "/api/games/settings", {"reset": True})[1]["threshold"], matching.DEFAULT_THRESHOLD)

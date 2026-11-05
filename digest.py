@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
@@ -78,13 +79,26 @@ def build_digest(key: str, label: str, store: Store, hours: int, threshold: floa
             "threshold": threshold, "stories": entries}
 
 
+def build_from_file(db_path: str, key: str, label: str, hours: int, threshold: float) -> dict:
+    """build_digest for a vertical's database file: what a worker process runs."""
+    return build_digest(key, label, Store(Path(db_path)), hours, threshold)
+
+
+REBUILD_AT_LEAST_EVERY = 3600   # seconds: even with no new headlines (old ones leave the window)
+
+
 class Digests:
-    """Builds digests in the background after scrapes or catalog changes, and serves the latest."""
+    """Builds digests in the background after scrapes or catalog changes, and serves the latest.
+    builder(key, window) does the work (app.make_digests can run it in worker processes, so serving
+    isn't slowed by it); stamp(key) changes whenever a vertical's data does, so a rebuild with nothing
+    new is skipped (at most REBUILD_AT_LEAST_EVERY apart)."""
 
     def __init__(self, out_dir: Path | None, builder: Callable[[str, int], dict], verticals: list[str],
-                 log: Callable[[str], None] | None = None):
+                 log: Callable[[str], None] | None = None, stamp: Callable[[str], object] | None = None):
         self.out_dir = out_dir
         self.builder = builder
+        self.stamp = stamp
+        self._built: dict[str, tuple[object, float]] = {}   # key -> (stamp, time) of the last full build
         self.verticals = verticals
         self.log = log or (lambda m: None)
         self._lock = threading.Lock()
@@ -104,13 +118,14 @@ class Digests:
                 try:
                     gz = path.read_bytes()
                     body = gzip.decompress(gz)
-                    json.loads(body)
+                    data = json.loads(body)
                 except (OSError, EOFError, ValueError):   # damaged (e.g. a crash mid-write): rebuild it instead
                     self.log(f"digest {path.name} is damaged; it will be rebuilt")
                     path.unlink(missing_ok=True)
                     continue
                 self._cache[(m.group(1), int(m.group(2)))] = {
-                    "gz": gz, "json": body, "etag": self._etag(body), "at": path.stat().st_mtime}
+                    "gz": gz, "etag": self._etag(body), "at": path.stat().st_mtime, "data": data}
+                path.with_suffix("").with_suffix(".json").unlink(missing_ok=True)   # plain copies of earlier versions
 
     @staticmethod
     def _etag(body: bytes) -> str:
@@ -119,11 +134,12 @@ class Digests:
     def _store(self, key: str, window: int, digest: dict) -> None:
         body = json.dumps(digest, separators=(",", ":"), ensure_ascii=False).encode()
         gz = gzip.compress(body, 6)
-        entry = {"json": body, "gz": gz, "etag": self._etag(body), "at": time.time()}
+        # Kept: the gzipped bytes (served) and the dict (read by filter groups), not the plain JSON.
+        entry = {"gz": gz, "etag": self._etag(body), "at": time.time(), "data": digest}
         with self._lock:
             self._cache[(key, window)] = entry
         if self.out_dir:  # also written to disk: survives restarts, and can be served by a CDN as static files
-            for suffix, data in ((".json", body), (".json.gz", gz)):
+            for suffix, data in ((".json.gz", gz),):
                 path = self.out_dir / f"{key}-{window}{suffix}"
                 fd, tmp = tempfile.mkstemp(dir=self.out_dir, prefix=path.name + ".", suffix=".tmp")
                 try:
@@ -138,9 +154,15 @@ class Digests:
         with self._lock:
             return self._build_locks.setdefault(key, threading.Lock())
 
-    def build_now(self, key: str, windows: tuple[int, ...] = WINDOWS) -> None:
+    def build_now(self, key: str, windows: tuple[int, ...] = WINDOWS, force: bool = True) -> None:
         with self._key_lock(key):              # one build per vertical at a time (background or on demand)
+            stamp = self.stamp(key) if self.stamp else None
+            last = self._built.get(key)
+            if not force and stamp is not None and last and last[0] == stamp and time.time() - last[1] < REBUILD_AT_LEAST_EVERY:
+                return                          # nothing new since the last build
             self._build(key, windows)
+            if windows == WINDOWS:
+                self._built[key] = (stamp, time.time())
 
     def _build(self, key: str, windows: tuple[int, ...]) -> None:
         for w in windows:
@@ -167,9 +189,14 @@ class Digests:
     def data(self, key: str, hours: float) -> tuple[str, dict]:
         """(etag, parsed digest) covering `hours`; the parsed copy is kept with the cached bytes."""
         entry = self.get(key, hours)
-        if "data" not in entry:
-            entry["data"] = json.loads(entry["json"])
         return entry["etag"], entry["data"]
+
+    def rebuilding(self, key: str) -> bool:
+        """A rebuild of this vertical is queued or running."""
+        with self._lock:
+            pending = key in self._pending
+        lock = self._build_locks.get(key)
+        return pending or bool(lock and lock.locked())
 
     def request_rebuild(self, verticals: list[str] | None = None) -> None:
         """Queue a background rebuild (coalesced: many requests -> one rebuild)."""
@@ -187,8 +214,10 @@ class Digests:
             time.sleep(1)  # let bursts of changes (several outlets edited) settle into one rebuild
             with self._lock:
                 todo, self._pending = sorted(self._pending), set()
-            for key in todo:
+            def one(key: str) -> None:
                 try:
-                    self.build_now(key)
+                    self.build_now(key, force=False)
                 except Exception:  # noqa: BLE001 - keep serving the previous digest
                     self.log(f"digest {key} failed:\n" + traceback.format_exc())
+            with ThreadPoolExecutor(max_workers=max(1, min(len(todo), 3))) as pool:   # verticals in parallel
+                list(pool.map(one, todo))

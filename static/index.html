@@ -442,8 +442,16 @@ async function getView(gid, force = false) {
   if (hit && !force && Date.now() - hit.at < 25000) return hit.data;
   const res = await fetch(`/api/groups/${gid}/stories`, force ? { cache: "no-cache" } : {});
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  const etag = res.headers.get("ETag");
+  const wantExtras = !!(PREFS.watched_any && PREFS.phrases.length);
+  if (hit && etag && hit.etag === etag && hit.extrasFor === wantExtras) { hit.at = Date.now(); return hit.data; }   // unchanged: no re-parse
   const data = await res.json();
-  VIEWS.set(gid, { data, at: Date.now() });
+  data.extras = [];
+  if (data.extras_count && wantExtras) {                                    // below-minimum stories, only if needed
+    const x = await fetch(`/api/groups/${gid}/extras`).then((r) => r.ok ? r.json() : { stories: [] }).catch(() => ({ stories: [] }));
+    data.extras = x.stories;
+  }
+  VIEWS.set(gid, { data, at: Date.now(), etag, extrasFor: wantExtras });
   return data;
 }
 
@@ -461,7 +469,7 @@ function personalize(view) {
   const phrases = PREFS.phrases.map((p) => ({ ...p, re: wordRe(phraseSource(p.phrase)) }));
   const useAi = view.ai && view.ai.on;
   const out = [];
-  for (const st of view.stories) {
+  for (const st of [...view.stories, ...(view.extras || [])]) {
     const hits = [], snippets = new Map(), watchedSrc = new Set();
     for (const p of phrases) {
       let found = false;
@@ -518,7 +526,7 @@ function render() {
     : "Settings · " + ({ groups: "Groups", phrases: "Watched phrases", scraping: "Scraping" }[route.sub] || label(route.sub))) + " · Consensus News";
   V = null;
   if (route.top === "stories") {
-    lastStoriesJson = ""; activeTerm = null; $("stories").innerHTML = ""; $("summary").textContent = "Loading…"; loadStories(true);
+    lastStoriesJson = ""; activeTerm = null; renderLimit = RENDER_STEP; $("stories").innerHTML = ""; $("summary").textContent = "Loading…"; loadStories(true);
   } else if (route.sub === "groups") openGroup(route.gid);
   else if (route.sub === "phrases") renderPhrases();
   else if (route.sub === "scraping") loadScrape();
@@ -553,6 +561,7 @@ const mentions = (s, re) => re.test(s.title) || re.test(s.lead.description || ""
 function toggleTerm(t) {
   if (!t) return;
   activeTerm = activeTerm && activeTerm.term.toLowerCase() === t.term.toLowerCase() ? null : { term: t.term, forms: t.forms || [] };
+  renderLimit = RENDER_STEP;
   renderStoryList(lastStories, true);
   if (activeTerm) $("view_stories").scrollIntoView({ block: "start", behavior: "smooth" });
 }
@@ -622,7 +631,8 @@ function renderStoryList(allStories, force, hidden = 0) {
     return;
   }
   shownStories = stories;
-  $("stories").innerHTML = stories.map((s, idx) => {
+  const shown = stories.slice(0, renderLimit);     // long lists render in steps ("Show more")
+  $("stories").innerHTML = shown.map((s, idx) => {
     const re = phraseRe(s.watched.map((w) => w.phrase));
     const key = storyKey(s), isOpen = openStories.has(key);
     const pressed = (t) => !!activeTerm && activeTerm.term.toLowerCase() === t.toLowerCase();
@@ -637,7 +647,18 @@ function renderStoryList(allStories, force, hidden = 0) {
         </div>
         <button type="button" class="expand" aria-expanded="${isOpen}" aria-label="${isOpen ? "Hide" : "Show"} details">▾</button>
       </div>
-      <div class="more" ${isOpen ? "" : "hidden"}>
+      <div class="more" ${isOpen ? "" : "hidden"}>${isOpen ? moreHtml(s) : ""}</div>
+    </article>`;
+  }).join("") + (stories.length > shown.length
+    ? `<div class="empty more-row"><button type="button" class="ghost" id="show_more">Show ${Math.min(RENDER_STEP, stories.length - shown.length)} more of ${stories.length - shown.length}</button></div>` : "");
+  $("show_more")?.addEventListener("click", () => { renderLimit += RENDER_STEP; renderStoryList(lastStories, true, hidden); });
+}
+const RENDER_STEP = 300;
+let renderLimit = RENDER_STEP;
+// A story's details, built only when it's opened (big lists stay light).
+function moreHtml(s) {
+  const re = phraseRe(s.watched.map((w) => w.phrase));
+  return `
         <div class="more-head">
           <div class="story-text">
             <div class="meta">${multiVertical ? `<span class="vtag">${esc(label(s.vertical))}</span>` : ""}
@@ -649,26 +670,22 @@ function renderStoryList(allStories, force, hidden = 0) {
             ${s.watched.length ? `<div class="chips">${s.watched.map((w) => `<span class="chip">Watched: ${esc(w.phrase)} +${fmt(w.bonus)}</span>`).join("")}</div>` : ""}
           </div>
           ${s.lead.image && safeUrl(s.lead.image) !== "#" ? `<a class="thumb" href="${esc(safeUrl(s.lead.link))}" target="_blank" rel="noopener noreferrer" tabindex="-1" aria-hidden="true">
-            <img ${isOpen ? "src" : "data-src"}="${esc(s.lead.image)}" alt="" decoding="async" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>` : ""}
+            <img src="${esc(s.lead.image)}" alt="" decoding="async" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>` : ""}
         </div>
         <ul class="sources">${s.sources.map((x) => `
           <li class="${x.watched ? "hit" : ""}${x.counted === false ? " nc" : ""}"><div class="src"><span class="w" title="prestige weight">${fmt(x.weight)}</span> ${esc(x.feed)} · ${ago(x.published)}</div>
             <a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener noreferrer">${hl(x.title, re)}</a>
             ${x.snippet ? `<div class="snippet">${hl(x.snippet, re)}</div>` : ""}</li>`).join("")}
-        </ul>
-      </div>
-    </article>`;
-  }).join("");
+        </ul>`;
 }
 function setOpen(article, open) {
-  const key = article.dataset.key;
+  const key = article.dataset.key, more = article.querySelector(".more");
   open ? openStories.add(key) : openStories.delete(key);
+  if (open && !more.firstElementChild) more.innerHTML = moreHtml(shownStories[Number(article.dataset.idx)]);
   article.classList.toggle("open", open);
-  article.querySelector(".more").hidden = !open;
+  more.hidden = !open;
   const btn = article.querySelector(".expand");
   btn.setAttribute("aria-expanded", open); btn.setAttribute("aria-label", `${open ? "Hide" : "Show"} details`);
-  const img = article.querySelector("img[data-src]");      // images load only when a story is opened
-  if (open && img) { img.src = img.dataset.src; img.removeAttribute("data-src"); }
 }
 $("stories").addEventListener("click", (e) => {
   const article = e.target.closest("article.story");
@@ -902,10 +919,11 @@ $("p_watched_any").addEventListener("change", (e) => { PREFS.watched_any = e.tar
 
 // ---------- Settings › <vertical>: the shared catalog ----------
 let V = null, VDIGEST = null, vSeq = 0;
-async function latestDigest(v, force = false) {
-  const res = await fetch(`/api/${v}/digest?hours=48`, force ? { cache: "no-cache" } : {});
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-  return res.json();
+// The vertical's grouping state: when stories were last grouped, with which strictness, whether a
+// re-grouping is under way, and the saved strictness.
+async function latestDigest(v) {
+  const d = await api(`/api/${v}/settings`);
+  return { generated_at: d.grouped_at, threshold: d.grouped_threshold, saved: d.threshold, rebuilding: d.rebuilding };
 }
 async function openVertical(key) {
   V = key; VDIGEST = null; const my = ++vSeq;
@@ -920,8 +938,8 @@ async function openVertical(key) {
 }
 function showThreshold() {
   if (!VDIGEST) return;
-  $("regrouping").hidden = !REGROUPING.has(V);
-  const th = PENDING_THRESHOLD.get(V) ?? VDIGEST.threshold;   // a just-saved value wins until the rebuild lands
+  $("regrouping").hidden = !(REGROUPING.has(V) || VDIGEST.rebuilding);
+  const th = PENDING_THRESHOLD.get(V) ?? VDIGEST.saved;       // a just-saved value wins until it's confirmed
   $("threshold_out").textContent = Number(th).toFixed(2);
   if (document.activeElement !== $("a_threshold")) $("a_threshold").value = th;
 }
@@ -989,8 +1007,8 @@ async function catalogChange(call, what, okText, ready = () => true) {
     while (Date.now() - t0 < 300000) {
       await new Promise((r) => setTimeout(r, 2000));
       if (my !== regroupSeq.get(v)) return;
-      const d = await latestDigest(v, true).catch(() => null);
-      if (d && d.generated_at > before && ready(d)) {
+      const d = await latestDigest(v).catch(() => null);
+      if (d && !d.rebuilding && d.generated_at > before && ready(d)) {
         PENDING_THRESHOLD.delete(v); setRegrouping(v, false); VIEWS.clear();
         if (v === V) { VDIGEST = d; showThreshold(); $("admin_msg").className = "msg ok"; $("admin_msg").textContent = "Stories re-grouped for everyone."; }
         return;

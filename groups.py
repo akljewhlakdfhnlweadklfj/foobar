@@ -164,6 +164,7 @@ class GroupStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self.version = 0
+        self._mem: tuple[int, list[dict]] | None = None
         with self._conn() as c:
             c.execute("CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY, config TEXT NOT NULL, "
                       "updated_at REAL NOT NULL)")
@@ -178,15 +179,19 @@ class GroupStore:
             c.close()
 
     def list(self) -> list[dict]:
-        with self._conn() as c:
-            rows = c.execute("SELECT id, config, updated_at FROM groups").fetchall()
-        out = [{**json.loads(cfg), "id": gid, "updated_at": at} for gid, cfg, at in rows]
-        return sorted(out, key=lambda g: (g["position"], g["id"]))
+        """All groups in tab order. Kept in memory between changes: treat the dicts as read-only."""
+        with self._lock:
+            if self._mem is not None and self._mem[0] == self.version:
+                return self._mem[1]
+            with self._conn() as c:
+                rows = c.execute("SELECT id, config, updated_at FROM groups").fetchall()
+            out = sorted(({**json.loads(cfg), "id": gid, "updated_at": at} for gid, cfg, at in rows),
+                         key=lambda g: (g["position"], g["id"]))
+            self._mem = (self.version, out)
+            return out
 
     def get(self, gid: int) -> dict | None:
-        with self._conn() as c:
-            row = c.execute("SELECT id, config, updated_at FROM groups WHERE id = ?", (gid,)).fetchone()
-        return {**json.loads(row[1]), "id": row[0], "updated_at": row[2]} if row else None
+        return next((g for g in self.list() if g["id"] == gid), None)
 
     def create(self, cfg: dict) -> int:
         """Add a group (at the end unless cfg sets a position)."""
@@ -225,6 +230,7 @@ class GroupStore:
         with self._lock:
             for g in self.list():
                 if str(feed_id) in g.get("outlets", {}).get(vertical, {}):
+                    g = json.loads(json.dumps(g))          # the cached copy is shared: change a copy
                     g["outlets"][vertical].pop(str(feed_id))
                     if not g["outlets"][vertical]:
                         g["outlets"].pop(vertical)
@@ -267,7 +273,7 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], catalog_fo
     now = now or time.time()
     cfg = {**DEFAULT_SETTINGS, **group.get("settings", {})}
     cut = now - cfg["hours"] * 3600
-    stories, min_out, countable, built = [], {}, {}, 0
+    stories, min_out, countable, built, expires = [], {}, {}, 0, math.inf
     ai_on = bool(group.get("ai_summary"))
     for v in group["verticals"]:
         d = digest_for(v, cfg["hours"])
@@ -286,6 +292,7 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], catalog_fo
             srcs = [x for x in st["s"] if x["p"] >= cut and outlets.get(x["f"], {}).get("on")]
             if not srcs:
                 continue
+            expires = min(expires, min(x["p"] for x in srcs) + cfg["hours"] * 3600)   # first one to leave the window
             if required:
                 have = {x["f"] for x in srcs} & required
                 if not have or (cfg["require_all"] and len(have) < len(required)):
@@ -303,7 +310,7 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], catalog_fo
             out = {"id": st["id"], "v": v, "t": lead["t"], "l": lead["l"], "f": outlets[lead["f"]]["name"],
                    "d": lead["d"] or next((x["d"] for x in best if x["d"]), ""),
                    "i": lead["i"] or next((x["i"] for x in best if x["i"]), ""),
-                   "k": st.get("k", []), "sc": round(score, 2), "cov": len(counted), "n": len(srcs),
+                   "k": st.get("k", [])[:1], "sc": round(score, 2), "cov": len(counted), "n": len(srcs),
                    "p": min(x["p"] for x in srcs), "u": max(x["p"] for x in srcs), "h": keys,
                    "s": [{"o": outlets[x["f"]]["name"], "t": x["t"], "l": x["l"], "p": x["p"], "w": weight(x),
                           "d": x["d"], "c": weight(x) >= cfg["min_weight"]} for x in ordered]}
@@ -324,18 +331,27 @@ def build_view(group: dict, digest_for: Callable[[str, float], dict], catalog_fo
                   pending=sum(1 for s in stories if "x" not in s and "a" not in s))
     public = {k: v for k, v in group.items() if k != "updated_at"}
     # generated_at is the digests' (not now), so an unchanged result has unchanged bytes and ETag.
-    return {"group": public, "generated_at": built, "min_outlets": min_out, "countable": countable,
+    return {"_expires": expires, "group": public, "generated_at": built, "min_outlets": min_out, "countable": countable,
             "ai": ai, "stories": stories}
 
 
+def _payload(obj) -> dict:
+    body = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode()
+    return {"json": body, "gz": gzip.compress(body, 6), "etag": '"%s"' % hashlib.sha1(body).hexdigest()[:16]}
+
+
 class Views:
-    """Each group's view as ready-to-send bytes, rebuilt only when its inputs change: the group, the
-    digests of its verticals or the AI summaries (so every viewer gets the same cached file)."""
+    """Each group's view as ready-to-send bytes (gzip + ETag), the same for every viewer. Rebuilt only
+    when an input changes (the group, its verticals' digests and catalogs, its AI headlines) or a
+    story's oldest headline leaves the time window; one request rebuilds while others get the
+    previous copy. Stories that miss the group's minimums (shown only for a viewer's watched phrases)
+    are a separate payload, so most viewers don't download them."""
 
     def __init__(self, groups: GroupStore, digests: digest_mod.Digests, stores: dict, summarizer=None):
         self.groups, self.digests, self.stores, self.summarizer = groups, digests, stores, summarizer
         self._catalogs: dict[str, tuple[int, list[dict]]] = {}
-        self._cache: dict[int, tuple[tuple, dict]] = {}
+        self._cache: dict[int, tuple[tuple, float, dict]] = {}     # gid -> (key, expires, entry)
+        self._building: dict[int, threading.Lock] = {}
         self._lock = threading.Lock()
 
     def _digest(self, v: str, hours: float) -> tuple[str, dict]:
@@ -354,25 +370,47 @@ class Views:
         self._catalogs[v] = (version, outlets)
         return outlets
 
-    def get(self, gid: int) -> dict | None:
-        group = self.groups.get(gid)
-        if group is None:
-            return None
+    def _key(self, group: dict) -> tuple:
         hours = {**DEFAULT_SETTINGS, **group.get("settings", {})}["hours"]
         tags = tuple((self._digest(v, hours)[0], self.stores[v].catalog_version) for v in group["verticals"])
-        # Time moves the window's cut-off too: rebuild at least once a minute.
         ai_version = getattr(self.summarizer, "version", 0) if group.get("ai_summary") else 0
-        key = (group["updated_at"], tags, ai_version, int(time.time() // 60))
+        return (group["updated_at"], tags, ai_version)
+
+    def _fresh(self, gid: int, key: tuple) -> dict | None:
         with self._lock:
             hit = self._cache.get(gid)
-            if hit and hit[0] == key:
-                return hit[1]
-        view = build_view(group, lambda v, h: self._digest(v, h)[1], self._catalog, self.summarizer)
-        body = json.dumps(view, separators=(",", ":"), ensure_ascii=False).encode()
-        entry = {"json": body, "gz": gzip.compress(body, 6),
-                 "etag": '"%s"' % hashlib.sha1(body).hexdigest()[:16], "view": view}
+        return hit[2] if hit and hit[0] == key and time.time() < hit[1] else None
+
+    def get(self, gid: int) -> dict | None:
+        """{"json", "gz", "etag", "view", "extras": {"json", "gz", "etag"}} or None for no such group."""
+        group = self.groups.get(gid)
+        if group is None:
+            with self._lock:
+                self._cache.pop(gid, None)
+            return None
+        key = self._key(group)
+        entry = self._fresh(gid, key)
+        if entry:
+            return entry
         with self._lock:
-            self._cache[gid] = (key, entry)
+            building = self._building.setdefault(gid, threading.Lock())
+            previous = self._cache.get(gid)
+        if not building.acquire(blocking=previous is None):
+            return previous[2]                     # someone is rebuilding it: the previous copy meanwhile
+        try:
+            entry = self._fresh(gid, key)
+            if entry:
+                return entry
+            view = build_view(group, lambda v, h: self._digest(v, h)[1], self._catalog, self.summarizer)
+            expires = view.pop("_expires")
+            extras = [st for st in view["stories"] if "x" in st]
+            view["stories"] = [st for st in view["stories"] if "x" not in st]
+            view["extras_count"] = len(extras)
+            entry = {**_payload(view), "view": view, "extras": _payload({"stories": extras})}
+            with self._lock:
+                self._cache[gid] = (key, expires, entry)
+        finally:
+            building.release()
         if self.summarizer is not None and group.get("ai_summary"):
             self.summarizer.kick()
         return entry

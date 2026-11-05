@@ -103,21 +103,24 @@ The header always shows scraping status, with a quick Refresh / Stop.
 ## Architecture: many viewers, little server work
 
 1. **Grouping** headlines into stories is the expensive step, so it runs once per vertical after each
-   scrape (and after a catalog change), for three windows (2, 7 and 30 days). The result is a
-   **digest**: `data/digests/<vertical>-<hours>.json` (plus `.json.gz`), kept in memory too.
-2. **Filter groups** are applied on the server to those digests (`groups.py`): one result per group,
-   rebuilt only when its digests, its settings or its AI headlines change (and at most once a minute
-   for the moving time window), served at `GET /api/groups/<id>/stories` as the same bytes for
-   everyone, with gzip, an `ETag` (unchanged = 304) and `Cache-Control: public, max-age=30`. Serving
-   many viewers costs about as much as serving a static file, and it can sit behind a CDN.
-3. **The browser** only does what's personal: watched phrases (highlight, bonus, re-sort, "only
-   watched", "show watched below the minimums", for which the group result also lists the stories
-   that miss its minimums, flagged) and "last seen". Both live in `localStorage`; the server keeps
-   no per-viewer state.
+   scrape (and after a feed is added or removed, a keyword filter or match strictness changes), for
+   three windows (2, 7 and 30 days), in worker processes so serving isn't slowed, and is skipped for
+   a vertical with nothing new (at least hourly). Only headlines within 24 hours of each other are
+   ever compared, so a 30-day window costs about as much per day as a 2-day one. The result is a
+   **digest**: `data/digests/<vertical>-<hours>.json.gz`, kept in memory too.
+2. **Filter groups** are applied on the server to those digests and the catalog (`groups.py`): one
+   result per group, rebuilt only when its inputs change or a story's oldest headline leaves the
+   window (one request rebuilds; others get the previous copy meanwhile), served at
+   `GET /api/groups/<id>/stories` as the same bytes for everyone with gzip, an `ETag` (unchanged =
+   304) and `Cache-Control: public, max-age=30`. Stories that miss a group's minimums are a separate
+   file (`/extras`), downloaded only by viewers who show watched stories below the minimums.
+3. **The browser** only does what's personal: watched phrases (highlight, bonus, re-sort, filters)
+   and "last seen". Both live in `localStorage`; the server keeps no per-viewer state. Long lists
+   render 300 stories at a time, and a story's details are built when it's opened.
 
 Stories reported by a single outlet aren't in digests (smaller files), so the lowest useful "reported
-by" is 2. Rough sizes with 2 days of data: General News ~700 stories, digests ~480 KB gzipped, built
-in ~8 s; a group's result is 130–380 KB gzipped.
+by" is 2. Rough figures with 2 days of data: General News ~3,800 headlines grouped in ~2.5 s; a group's
+result is 60–190 KB gzipped. One server process serves ~1,300 group requests a second.
 
 ## AI summary
 

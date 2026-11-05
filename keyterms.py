@@ -9,6 +9,7 @@ story_terms(stories, bodies=...) takes [{"title", "score", "sources": [{"title"}
 
 from __future__ import annotations
 
+import functools
 import re
 from collections import Counter, defaultdict
 
@@ -83,6 +84,7 @@ def _noun_like(key: tuple, display: str, proper_evidence: bool) -> bool:
 _WORD_RE = re.compile(r"[^\W_][\w'’+\-]*")   # Unicode letters/digits: "Miéville", "Pokémon"
 
 
+@functools.lru_cache(maxsize=200_000)
 def _term_key(word: str) -> str | None:
     w = word.lower().replace("’", "'")
     if w.endswith("'s"):
@@ -195,9 +197,14 @@ def _contains(longer: tuple, shorter: tuple) -> bool:
     return any(longer[i:i + n] == shorter for i in range(len(longer) - n + 1))
 
 
+@functools.lru_cache(maxsize=50_000)
+def _whole_word(word: str) -> re.Pattern:
+    return re.compile(r"(?<!\w)" + re.escape(word) + r"(?!\w)")
+
+
 def _word_at(lowered_title: str, word: str) -> int:
     """Index of `word` as a whole word in a lowercased headline ("no" must not match "now")."""
-    m = re.search(r"(?<!\w)" + re.escape(word.lower()) + r"(?!\w)", lowered_title)
+    m = _whole_word(word.lower()).search(lowered_title)
     return m.start() if m else 0
 
 
