@@ -14,6 +14,12 @@
   Before building, refresh the data (a backfill into a scratch data dir works when sites are blocked).
 - For a live app the user runs it themselves (`python3 app.py --backfill 3`) or uses Codespaces.
 
+## Seed caches
+
+`seed_cache/anime.jsonl.gz` and `seed_cache/manga.jsonl.gz` hold 14 days of pre-fetched items (built
+2026-11-05) so those verticals start full without a slow backfill. They go stale after ~14 days:
+rebuild with a 14-day backfill into a scratch data dir, then `python3 tools/build_seed_cache.py <dir> anime manga`.
+
 ## Conventions
 
 - Commit as `news-aggregator <noreply@example.com>` (set in the repo's git config). Never commit

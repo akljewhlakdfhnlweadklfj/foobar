@@ -543,6 +543,36 @@ class SettingsApiTests(HttpTestCase):
         self.assertEqual(self.store.get_settings(), {})
 
 
+class SeedCacheTests(unittest.TestCase):
+    def test_export_load_roundtrip_only_into_empty_vertical(self):
+        import seedcache
+        tmp = Path(tempfile.mkdtemp())
+        src = app.Store(tmp / "src.db")
+        fid = src.add_feed("https://a.example/rss", "A")
+        old, now = time.time() - 30 * 86400, time.time()
+        src.save_fetch(fid, feeds.ParsedFeed("", [feeds.ParsedEntry("g1", "Fresh story", "https://a/1", now - 3600, "desc"),
+                                                   feeds.ParsedEntry("g2", "Recent story", "https://a/2", now - 5 * 86400)]), None)
+        cache = tmp / "a.jsonl.gz"
+        self.assertEqual(seedcache.export(src, "games", cache), 2)
+        dst = app.Store(tmp / "dst.db")
+        dst.add_feed("https://a.example/rss", "A")
+        dst.add_feed("https://unrelated.example/rss", "B")
+        self.assertTrue(seedcache.store_is_empty(dst))
+        self.assertEqual(seedcache.load(dst, cache), (2, 1))
+        items = {i.title: i for i in dst.items_since(0)}
+        self.assertEqual(items["Fresh story"].description, "desc")
+        self.assertFalse(seedcache.store_is_empty(dst))
+        self.assertIsNotNone(dst.list_feeds()[0]["backfilled_since"])   # backfill won't refetch this
+        self.assertIsNotNone(old)
+
+    def test_shipped_caches_load_for_their_seed_feeds(self):
+        import seedcache
+        stores = app.open_stores(Path(tempfile.mkdtemp()))
+        for key in ("anime", "manga"):
+            if seedcache.cache_path(key).exists():
+                self.assertFalse(seedcache.store_is_empty(stores[key]), key)
+
+
 class ParserAndPagingTests(unittest.TestCase):
     def test_parser_details(self):
         future = time.time() + 30 * 86400

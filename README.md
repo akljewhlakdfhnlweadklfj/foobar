@@ -95,6 +95,14 @@ The header always shows scraping status, with a quick Refresh / Stop.
   - **Weights** only fill feeds that have none, so change an existing feed's weight in the UI.
 - **One feed per publisher** in each vertical. Two feeds from the same newsroom (e.g. NYT Movies and
   NYT Television) often carry identical headlines and would count one story twice toward N.
+- **Cached history** (`seed_cache/<vertical>.jsonl.gz`, currently Anime and Manga): 14 days of
+  pre-fetched items, loaded in about a second the first time a vertical has feeds but no headlines,
+  instead of a slow Feedly backfill. Items older than 14 days are skipped on load, so rebuild the cache
+  now and then:
+  ```bash
+  python3 app.py --data /tmp/seed --backfill 14 --no-serve
+  python3 tools/build_seed_cache.py /tmp/seed anime manga
+  ```
 - **Keyword filters** (`only=`, or "Keyword filter" under an outlet in Settings): the outlet only
   contributes items whose headline or description mentions one of the keywords (matched at word
   starts, so "manga" also matches "mangaka"). Applied when stories are built, so changing it is
@@ -306,6 +314,7 @@ Per-tab endpoints are under `/api/<vertical>/` (`games`, `movies`, `books`, `new
 | `feedly.py` | Feedly API: history paging, pacing, rate-limit handling |
 | `matching.py` | tokenizer, similarity, clustering, lead headline |
 | `eval_matching.py`, `eval_realistic.py` | matching evaluations |
+| `seedcache.py`, `tools/build_seed_cache.py` | cached history for new verticals (load / build) |
 | `tools/build_snapshot.py` | static read-only snapshot of the UI (for sharing as a page) |
 | `static/index.html` | the UI |
 

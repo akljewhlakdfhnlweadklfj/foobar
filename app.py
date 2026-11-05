@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlparse
 
 import feeds
 import matching
+import seedcache
 from scraper import Scraper, _from_feedly, fetch_with_fallback  # noqa: F401 (re-exported)
 from store import (DEFAULT_BONUS, MAX_BONUS, MAX_WEIGHT, RETENTION_DAYS, SCHEMA_VERSION,  # noqa: F401
                    SeedFeed, Store, read_feed_list)
@@ -540,7 +541,8 @@ def make_handler(stores: dict[str, Store], scraper: Scraper, security: Security 
 
 def open_stores(data_dir: Path, seed: bool = True) -> dict[str, Store]:
     """One Store per vertical. A brand-new database is seeded from feeds/<key>.txt; after that,
-    seed files only update display names (and weights of feeds that have none)."""
+    seed files only update display names (and weights of feeds that have none). A vertical with no
+    headlines yet loads seed_cache/<key>.jsonl.gz if there is one (see seedcache.py)."""
     stores = {}
     for v in VERTICALS:
         store = Store(data_dir / f"{v.key}.db")
@@ -551,6 +553,10 @@ def open_stores(data_dir: Path, seed: bool = True) -> dict[str, Store]:
                 n = store.add_feeds(seed_feeds)
                 print(f"Seeded {v.label}: {n} feeds from {seed_file.relative_to(ROOT)}")
             store.sync_seed(seed_feeds)
+            cache = seedcache.cache_path(v.key)
+            if cache.exists() and seedcache.store_is_empty(store):
+                n, touched = seedcache.load(store, cache)
+                print(f"Loaded {v.label}: {n} cached headlines for {touched} feeds from {cache.relative_to(ROOT)}")
         stores[v.key] = store
     return stores
 
